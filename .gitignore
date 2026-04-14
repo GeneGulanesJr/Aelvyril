@@ -33,3 +33,12 @@ coverage/
 # Misc
 *.tgz
 .cache/
+
+# ONNX model files (large, downloaded on first launch)
+*.onnx
+*.onnx_data
+models/
+
+# Pi agent config
+.pi/
+.agents/

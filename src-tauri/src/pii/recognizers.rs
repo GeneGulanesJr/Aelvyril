@@ -56,11 +56,8 @@ pub struct Recognizer {
 
 // ── Compiled regex patterns ─────────────────────────────────────────────────
 
-static EMAIL_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r"(?i)\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
-    ).unwrap()
-});
+static EMAIL_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap());
 
 static PHONE_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
@@ -70,33 +67,20 @@ static PHONE_RE: Lazy<Regex> = Lazy::new(|| {
 
 static IP_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"\b(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b"
-    ).unwrap()
+        r"\b(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b",
+    )
+    .unwrap()
 });
 
-static CREDIT_CARD_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r"\b(?:\d[ -]*?){13,19}\b"
-    ).unwrap()
-});
+static CREDIT_CARD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(?:\d[ -]*?){13,19}\b").unwrap());
 
-static SSN_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r"\b\d{3}[- ]?\d{2}[- ]?\d{4}\b"
-    ).unwrap()
-});
+static SSN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b\d{3}[- ]?\d{2}[- ]?\d{4}\b").unwrap());
 
-static IBAN_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}[A-Z0-9]{0,30}\b"
-    ).unwrap()
-});
+static IBAN_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}[A-Z0-9]{0,30}\b").unwrap());
 
-static API_KEY_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r#"(?i)\b(?:sk|sk-proj|sk-ant|sk-)[A-Za-z0-9_\-]{20,}\b"#
-    ).unwrap()
-});
+static API_KEY_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?i)\b(?:sk|sk-proj|sk-ant|sk-)[A-Za-z0-9_\-]{20,}\b"#).unwrap());
 
 /// Domain regex — matches common domains but avoids IP addresses and code constructs
 static DOMAIN_RE: Lazy<Regex> = Lazy::new(|| {
@@ -111,11 +95,7 @@ static DATE_RE: Lazy<Regex> = Lazy::new(|| {
     ).unwrap()
 });
 
-static ZIP_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r"\b\d{5}(?:[-\s]\d{4})?\b"
-    ).unwrap()
-});
+static ZIP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b\d{5}(?:[-\s]\d{4})?\b").unwrap());
 
 /// Luhn algorithm validator for credit cards
 fn luhn_check(number: &str) -> bool {
@@ -136,14 +116,18 @@ fn luhn_check(number: &str) -> bool {
         .map(|(i, &d)| {
             if i % 2 == 1 {
                 let doubled = d * 2;
-                if doubled > 9 { doubled - 9 } else { doubled }
+                if doubled > 9 {
+                    doubled - 9
+                } else {
+                    doubled
+                }
             } else {
                 d
             }
         })
         .sum();
 
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 /// IBAN checksum validator
@@ -255,7 +239,10 @@ mod tests {
     #[test]
     fn test_detect_email() {
         let recognizers = all_recognizers();
-        let r = recognizers.iter().find(|r| r.pii_type == PiiType::Email).unwrap();
+        let r = recognizers
+            .iter()
+            .find(|r| r.pii_type == PiiType::Email)
+            .unwrap();
         let text = "Contact john.doe@example.com for details";
         let m = r.regex.find(text);
         assert!(m.is_some());
@@ -265,7 +252,10 @@ mod tests {
     #[test]
     fn test_detect_api_key() {
         let recognizers = all_recognizers();
-        let r = recognizers.iter().find(|r| r.pii_type == PiiType::ApiKey).unwrap();
+        let r = recognizers
+            .iter()
+            .find(|r| r.pii_type == PiiType::ApiKey)
+            .unwrap();
         let text = "sk-proj-abc123def456ghi789jkl012mno345pqr678";
         let m = r.regex.find(text);
         assert!(m.is_some());
@@ -274,7 +264,10 @@ mod tests {
     #[test]
     fn test_detect_ssn() {
         let recognizers = all_recognizers();
-        let r = recognizers.iter().find(|r| r.pii_type == PiiType::Ssn).unwrap();
+        let r = recognizers
+            .iter()
+            .find(|r| r.pii_type == PiiType::Ssn)
+            .unwrap();
         let text = "SSN: 123-45-6789";
         let m = r.regex.find(text);
         assert!(m.is_some());
@@ -284,7 +277,10 @@ mod tests {
     #[test]
     fn test_detect_ip() {
         let recognizers = all_recognizers();
-        let r = recognizers.iter().find(|r| r.pii_type == PiiType::IpAddress).unwrap();
+        let r = recognizers
+            .iter()
+            .find(|r| r.pii_type == PiiType::IpAddress)
+            .unwrap();
         let text = "Server at 192.168.1.100 responded";
         let m = r.regex.find(text);
         assert!(m.is_some());
@@ -304,7 +300,10 @@ mod tests {
     #[test]
     fn test_detect_phone() {
         let recognizers = all_recognizers();
-        let r = recognizers.iter().find(|r| r.pii_type == PiiType::PhoneNumber).unwrap();
+        let r = recognizers
+            .iter()
+            .find(|r| r.pii_type == PiiType::PhoneNumber)
+            .unwrap();
         let text = "Call me at (555) 123-4567";
         let m = r.regex.find(text);
         assert!(m.is_some());

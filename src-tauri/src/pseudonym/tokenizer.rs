@@ -8,6 +8,12 @@ pub struct Pseudonymizer {
     counters: HashMap<String, usize>,
 }
 
+impl Default for Pseudonymizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Pseudonymizer {
     pub fn new() -> Self {
         Self {
@@ -21,7 +27,11 @@ impl Pseudonymizer {
     /// Example:
     ///   Input:  "Email john@acme.com and IP 192.168.1.1"
     ///   Output: "Email [Email_1] and IP [IP_Address_1]"
-    pub fn pseudonymize(&mut self, text: &str, matches: &[PiiMatch]) -> (String, Vec<TokenMapping>) {
+    pub fn pseudonymize(
+        &mut self,
+        text: &str,
+        matches: &[PiiMatch],
+    ) -> (String, Vec<TokenMapping>) {
         if matches.is_empty() {
             return (text.to_string(), Vec::new());
         }
@@ -91,9 +101,7 @@ mod tests {
     #[test]
     fn test_basic_pseudonymization() {
         let mut p = Pseudonymizer::new();
-        let matches = vec![
-            make_match(PiiType::Email, "john@acme.com", 6, 0.9),
-        ];
+        let matches = vec![make_match(PiiType::Email, "john@acme.com", 6, 0.9)];
         let (result, mappings) = p.pseudonymize("Email john@acme.com here", &matches);
         assert_eq!(result, "Email [Email_1] here");
         assert_eq!(mappings.len(), 1);

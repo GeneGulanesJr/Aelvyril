@@ -3,7 +3,7 @@
 }
 
 .header {
-  margin-bottom: 28px;
+  margin-bottom: 24px;
 }
 
 .title {
@@ -18,6 +18,45 @@
   margin-top: 4px;
 }
 
+/* Tab bar */
+.tabBar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.tab:hover {
+  background: var(--state-hover-overlay);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
+}
+
+.activeTab {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border-color: transparent;
+}
+
+/* Section */
 .section {
   background: var(--bg-secondary);
   border: 1px solid var(--border-subtle);
@@ -45,7 +84,11 @@
   line-height: 1.5;
 }
 
+/* Add provider form */
 .addButton {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   background: var(--accent-subtle);
   color: var(--accent);
   border: 1px solid transparent;
@@ -59,7 +102,7 @@
 
 .addButton:hover {
   background: var(--accent);
-  color: white;
+  color: rgba(10, 22, 40, 0.95);
 }
 
 .addForm {
@@ -92,7 +135,7 @@
 }
 
 .input {
-  background: var(--bg-primary);
+  background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 8px 12px;
@@ -100,11 +143,12 @@
   color: var(--text-primary);
   font-family: var(--font-mono);
   outline: none;
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .input:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(245, 200, 66, 0.14);
 }
 
 .input::placeholder {
@@ -113,7 +157,7 @@
 
 .saveButton {
   background: var(--accent);
-  color: white;
+  color: rgba(10, 22, 40, 0.95);
   border: none;
   border-radius: var(--radius-sm);
   padding: 8px 20px;
@@ -127,6 +171,12 @@
   background: var(--accent-hover);
 }
 
+.error {
+  color: var(--danger);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
 .empty {
   text-align: center;
   padding: 24px;
@@ -134,6 +184,7 @@
   font-size: 13px;
 }
 
+/* Provider cards */
 .providerCard {
   display: flex;
   align-items: center;
@@ -160,6 +211,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .providerUrl {
@@ -178,18 +230,10 @@
   color: var(--text-secondary);
 }
 
-.providerActions {
+.removeButton {
   display: flex;
   align-items: center;
-  gap: 12px;
-}
-
-.keyStatus {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.removeButton {
+  gap: 4px;
   background: transparent;
   color: var(--danger);
   border: 1px solid var(--danger-subtle);
@@ -204,35 +248,323 @@
   background: var(--danger-subtle);
 }
 
-.gatewayKeyRow {
+/* Gateway key */
+.keyDisplay {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
   margin-top: 12px;
 }
 
-.gatewayKey {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 8px 14px;
-  font-size: 14px;
+.keyValue {
+  flex: 1;
   font-family: var(--font-mono);
-  color: var(--text-secondary);
+  font-size: 14px;
+  color: var(--accent);
+  word-break: break-all;
 }
 
-.copyButton {
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
+.copyBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border: none;
   border-radius: var(--radius-sm);
-  padding: 8px 14px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.copyBtn:hover {
+  background: var(--accent);
+  color: white;
+}
+
+.noKey {
+  margin-top: 12px;
+  text-align: center;
+  padding: 24px;
+  color: var(--text-muted);
+}
+
+.noKey p {
+  margin-bottom: 12px;
+}
+
+.keyWarning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: var(--warning-subtle);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--warning);
+}
+
+/* Sub sections */
+.subSection {
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.subSection:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.subTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.subCount {
+  background: var(--bg-elevated);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.subDesc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+/* Rule management */
+.addRuleRow {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.addRuleRow .input {
+  flex: 1;
+}
+
+.smallBtn {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.smallBtn:hover {
+  background: var(--accent);
+  color: white;
+}
+
+.ruleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  transition: opacity 0.15s ease;
+}
+
+.ruleRow.disabled {
+  opacity: 0.5;
+}
+
+.checkbox {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.ruleInfo {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rulePattern {
+  font-family: var(--font-mono);
   font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ruleLabel {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.removeSmallBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.removeSmallBtn:hover {
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+/* Recognizer grid */
+.recognizerGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.recognizerBtn {
+  padding: 6px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-transform: capitalize;
+}
+
+.recognizerBtn.active {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.recognizerBtn:hover {
+  border-color: var(--accent);
+}
+
+/* Toggle switches */
+.toggleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.toggleRow:last-child {
+  border-bottom: none;
+}
+
+.toggleLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.toggleDesc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.toggleSwitch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.toggleSwitch.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.toggleKnob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s ease;
+}
+
+.toggleSwitch.on .toggleKnob {
+  transform: translateX(20px);
+}
+
+/* Timeout options */
+.timeoutRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.timeoutOptions {
+  display: flex;
+  gap: 4px;
+}
+
+.timeoutBtn {
+  padding: 4px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
-.copyButton:hover {
+.timeoutBtn.active {
+  background: var(--accent-subtle);
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.timeoutBtn:hover {
+  border-color: var(--accent);
 }

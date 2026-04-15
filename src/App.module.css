@@ -9,5 +9,5 @@
   flex: 1;
   overflow-y: auto;
   padding: 32px;
-  background: var(--bg-primary);
+  background: transparent;
 }

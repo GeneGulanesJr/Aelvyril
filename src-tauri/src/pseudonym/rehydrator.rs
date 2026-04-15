@@ -41,11 +41,15 @@ impl Rehydrator {
                 match serde_json::from_str::<serde_json::Value>(data) {
                     Ok(mut json) => {
                         Self::rehydrate_json_value(&mut json, mapping_table);
-                        result.push_str(&format!("data: {}\n", serde_json::to_string(&json).unwrap_or_else(|_| data.to_string())));
+                        result.push_str(&format!(
+                            "data: {}\n",
+                            serde_json::to_string(&json).unwrap_or_else(|_| data.to_string())
+                        ));
                     }
                     Err(_) => {
                         // Not valid JSON — just rehydrate the raw text
-                        result.push_str(&format!("data: {}\n", Self::rehydrate(data, mapping_table)));
+                        result
+                            .push_str(&format!("data: {}\n", Self::rehydrate(data, mapping_table)));
                     }
                 }
             } else if !line.is_empty() {
@@ -126,8 +130,14 @@ mod tests {
     fn test_rehydration_token_dropped_by_upstream() {
         let mut table = make_table();
         // If the upstream model drops or modifies a token, it just stays as-is
-        let result = Rehydrator::rehydrate("The email [Email_1] and some token [NonExistent_1]", &mut table);
-        assert_eq!(result, "The email john@acme.com and some token [NonExistent_1]");
+        let result = Rehydrator::rehydrate(
+            "The email [Email_1] and some token [NonExistent_1]",
+            &mut table,
+        );
+        assert_eq!(
+            result,
+            "The email john@acme.com and some token [NonExistent_1]"
+        );
     }
 
     #[test]

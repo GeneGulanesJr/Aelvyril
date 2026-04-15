@@ -27,6 +27,9 @@ importers:
         specifier: ^7.1.0
         version: 7.14.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
     devDependencies:
+      '@eslint/js':
+        specifier: ^9.39.4
+        version: 9.39.4
       '@tauri-apps/cli':
         specifier: ^2
         version: 2.10.1
@@ -63,6 +66,9 @@ importers:
       typescript:
         specifier: ~5.7.0
         version: 5.7.3
+      typescript-eslint:
+        specifier: ^8.0.0
+        version: 8.58.2(eslint@9.39.4)(typescript@5.7.3)
       vite:
         specifier: ^6.0.0
         version: 6.4.2(@types/node@25.6.0)
@@ -1145,6 +1151,13 @@ packages:
     resolution: {integrity: sha512-XleUoc9uwGXqjWwXaUTZAmzMcFZ5858QA2vvx1Ur5xIcixXIP+8LnFDgRplU30us6teqdlskFfu+ae4K79Ooew==}
     engines: {node: '>= 0.8.0'}
 
+  typescript-eslint@8.58.2:
+    resolution: {integrity: sha512-V8iSng9mRbdZjl54VJ9NKr6ZB+dW0J3TzRXRGcSbLIej9jV86ZRtlYeTKDR/QLxXykocJ5icNzbsl2+5TzIvcQ==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
+      eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
+      typescript: '>=4.8.4 <6.1.0'
+
   typescript@5.7.3:
     resolution: {integrity: sha512-84MVSjMEHP+FQRPy3pX9sTVV/INIex71s9TL2Gm5FG/WG1SqXeKyZ0k7/blY/4FdOzI12CBy1vGc4og/eus0fw==}
     engines: {node: '>=14.17'}
@@ -2188,6 +2201,17 @@ snapshots:
   type-check@0.4.0:
     dependencies:
       prelude-ls: 1.2.1
+
+  typescript-eslint@8.58.2(eslint@9.39.4)(typescript@5.7.3):
+    dependencies:
+      '@typescript-eslint/eslint-plugin': 8.58.2(@typescript-eslint/parser@8.58.2(eslint@9.39.4)(typescript@5.7.3))(eslint@9.39.4)(typescript@5.7.3)
+      '@typescript-eslint/parser': 8.58.2(eslint@9.39.4)(typescript@5.7.3)
+      '@typescript-eslint/typescript-estree': 8.58.2(typescript@5.7.3)
+      '@typescript-eslint/utils': 8.58.2(eslint@9.39.4)(typescript@5.7.3)
+      eslint: 9.39.4
+      typescript: 5.7.3
+    transitivePeerDependencies:
+      - supports-color
 
   typescript@5.7.3: {}
 

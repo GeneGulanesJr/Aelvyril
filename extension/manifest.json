@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "Aelvyril Privacy Shield",
+  "version": "1.0.0",
+  "description": "Protect sensitive data when using web-based AI tools. Connects to the Aelvyril desktop app.",
+  "permissions": ["clipboardRead", "clipboardWrite", "activeTab"],
+  "host_permissions": ["http://localhost:4242/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chat.openai.com/*",
+        "https://chatgpt.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://poe.com/*",
+        "https://character.ai/*",
+        "https://perplexity.ai/*",
+        "https://you.com/*",
+        "https://huggingface.co/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

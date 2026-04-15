@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::pseudonym::mapping::MappingTable;
 use crate::pii::engine::summarize_matches;
 use crate::pii::recognizers::PiiMatch;
+use crate::pseudonym::mapping::MappingTable;
 
 /// A single conversation session
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +39,12 @@ pub struct SessionManager {
     mapping_tables: Arc<DashMap<String, MappingTable>>,
     audit_log: Arc<Mutex<Vec<AuditEntry>>>,
     timeout: Duration,
+}
+
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SessionManager {
@@ -92,7 +98,9 @@ impl SessionManager {
 
     /// Get the mapping table for a session
     pub fn get_mapping_table(&self, session_id: &str) -> Option<MappingTable> {
-        self.mapping_tables.get(session_id).map(|r| r.value().clone())
+        self.mapping_tables
+            .get(session_id)
+            .map(|r| r.value().clone())
     }
 
     /// Update the mapping table for a session
@@ -151,8 +159,10 @@ impl SessionManager {
 
     /// Expire sessions past the timeout
     pub fn expire_sessions(&self) {
-        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(self.timeout).unwrap_or_default();
-        self.sessions.retain(|_, session| session.last_activity > cutoff);
+        let cutoff =
+            chrono::Utc::now() - chrono::Duration::from_std(self.timeout).unwrap_or_default();
+        self.sessions
+            .retain(|_, session| session.last_activity > cutoff);
     }
 
     /// Count active sessions
@@ -208,5 +218,149 @@ impl Clone for MappingTable {
             last_accessed: self.last_accessed.clone(),
             ttl: self.ttl,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pii::recognizers::{PiiMatch, PiiType};
+    use crate::pseudonym::mapping::TokenMapping;
+
+    fn make_match(pii_type: PiiType, text: &str, start: usize) -> PiiMatch {
+        PiiMatch {
+            pii_type,
+            text: text.to_string(),
+            start,
+            end: start + text.len(),
+            confidence: 0.9,
+        }
+    }
+
+    #[test]
+    fn test_create_session() {
+        let mgr = SessionManager::new();
+        let session = mgr.get_or_create_session("session-1", Some("OpenAI"), Some("gpt-4o"));
+        assert_eq!(session.id, "session-1");
+        assert_eq!(session.provider, Some("OpenAI".into()));
+        assert_eq!(session.request_count, 0);
+        assert_eq!(mgr.active_count(), 1);
+    }
+
+    #[test]
+    fn test_get_existing_session_updates_activity() {
+        let mgr = SessionManager::new();
+        let _ = mgr.get_or_create_session("session-1", None, None);
+        let session = mgr.get_or_create_session("session-1", Some("Anthropic"), Some("claude-3"));
+        assert_eq!(session.provider, Some("Anthropic".into()));
+        assert_eq!(mgr.active_count(), 1); // Still just one session
+    }
+
+    #[test]
+    fn test_record_request_increments_counters() {
+        let mgr = SessionManager::new();
+        mgr.get_or_create_session("session-1", Some("OpenAI"), Some("gpt-4o"));
+
+        let matches = vec![
+            make_match(PiiType::Email, "test@test.com", 0),
+            make_match(PiiType::PhoneNumber, "555-1234", 15),
+        ];
+        mgr.record_request("session-1", "OpenAI", "gpt-4o", &matches, false);
+
+        let sessions = mgr.list();
+        assert_eq!(sessions[0]["request_count"], 1);
+        assert_eq!(sessions[0]["entities_detected"], 2);
+    }
+
+    #[test]
+    fn test_clear_session() {
+        let mgr = SessionManager::new();
+        mgr.get_or_create_session("session-1", None, None);
+        assert_eq!(mgr.active_count(), 1);
+
+        mgr.clear("session-1");
+        assert_eq!(mgr.active_count(), 0);
+    }
+
+    #[test]
+    fn test_clear_nonexistent_session() {
+        let mgr = SessionManager::new();
+        mgr.clear("does-not-exist"); // Should not panic
+        assert_eq!(mgr.active_count(), 0);
+    }
+
+    #[test]
+    fn test_mapping_table_lifecycle() {
+        let mgr = SessionManager::new();
+        mgr.get_or_create_session("session-1", None, None);
+
+        // Add mapping
+        mgr.with_mapping_table("session-1", |table| {
+            table.add_mappings(vec![TokenMapping {
+                token: "[Email_1]".into(),
+                original: "test@test.com".into(),
+                pii_type: PiiType::Email,
+                confidence: 0.9,
+            }]);
+        });
+
+        // Verify mapping persists
+        let found =
+            mgr.with_mapping_table("session-1", |table| table.lookup("[Email_1]").is_some());
+        assert_eq!(found, Some(true));
+
+        // Clearing session removes mapping table
+        mgr.clear("session-1");
+        let found_after =
+            mgr.with_mapping_table("session-1", |table| table.lookup("[Email_1]").is_some());
+        assert_eq!(found_after, None);
+    }
+
+    #[test]
+    fn test_audit_log_records_entries() {
+        let mgr = SessionManager::new();
+        mgr.get_or_create_session("session-1", None, None);
+
+        let matches = vec![make_match(PiiType::Email, "a@b.com", 0)];
+        mgr.record_request("session-1", "OpenAI", "gpt-4o", &matches, false);
+
+        let log = mgr.audit_log();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0]["session_id"], "session-1");
+        assert_eq!(log[0]["total_entities"], 1);
+    }
+
+    #[test]
+    fn test_multiple_sessions_independent() {
+        let mgr = SessionManager::new();
+        mgr.get_or_create_session("session-1", Some("OpenAI"), None);
+        mgr.get_or_create_session("session-2", Some("Anthropic"), None);
+
+        assert_eq!(mgr.active_count(), 2);
+
+        mgr.clear("session-1");
+        assert_eq!(mgr.active_count(), 1);
+    }
+
+    #[test]
+    fn test_expire_sessions() {
+        let mgr = SessionManager::new();
+        mgr.get_or_create_session("session-1", None, None);
+
+        // Default timeout is 30 minutes, sessions won't expire immediately
+        mgr.expire_sessions();
+        assert_eq!(mgr.active_count(), 1);
+    }
+
+    #[test]
+    fn test_record_request_updates_last_activity() {
+        let mgr = SessionManager::new();
+        mgr.get_or_create_session("session-1", None, None);
+
+        let matches = vec![];
+        mgr.record_request("session-1", "OpenAI", "gpt-4o", &matches, true);
+
+        let sessions = mgr.list();
+        assert_eq!(sessions[0]["request_count"], 1);
     }
 }

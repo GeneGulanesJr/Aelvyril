@@ -89,3 +89,52 @@ pub fn forward_streaming_request(
         }
     }
 }
+
+/// Forward a streaming SSE request, yielding raw data strings instead of Events.
+/// This allows callers (e.g., server.rs) to rehydrate the data before wrapping
+/// it in an SSE Event.
+pub fn forward_streaming_request_raw(
+    client: Client,
+    url: String,
+    api_key: String,
+    body: serde_json::Value,
+    is_anthropic: bool,
+) -> impl Stream<Item = Result<String, Infallible>> {
+    let mut req = client.post(&url);
+
+    if is_anthropic {
+        req = req
+            .header("x-api-key", &api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json");
+    } else {
+        req = req
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("content-type", "application/json");
+    }
+
+    async_stream::stream! {
+        match reqwest_eventsource::EventSource::new(req.json(&body)) {
+            Ok(mut stream) => {
+                while let Some(event) = stream.next().await {
+                    match event {
+                        Ok(reqwest_eventsource::Event::Open) => continue,
+                        Ok(reqwest_eventsource::Event::Message(message)) => {
+                            yield Ok(message.data);
+                        }
+                        Err(e) => {
+                            tracing::warn!("SSE stream error: {}", e);
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                yield Ok(format!(
+                    "{{\"error\": \"Failed to create EventSource: {}\"}}",
+                    e
+                ));
+            }
+        }
+    }
+}

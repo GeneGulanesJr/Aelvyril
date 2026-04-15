@@ -1,28 +1,58 @@
 :root {
-  --bg-primary: #0a0a0f;
-  --bg-secondary: #12121a;
-  --bg-surface: #1a1a26;
-  --bg-elevated: #222233;
-  --border: #2a2a3d;
-  --border-subtle: #1e1e30;
-  --text-primary: #e8e8f0;
-  --text-secondary: #9898b0;
-  --text-muted: #606078;
-  --accent: #7c6aef;
-  --accent-hover: #9580ff;
-  --accent-subtle: rgba(124, 106, 239, 0.12);
-  --success: #34d399;
-  --success-subtle: rgba(52, 211, 153, 0.12);
-  --warning: #fbbf24;
-  --warning-subtle: rgba(251, 191, 36, 0.12);
-  --danger: #f87171;
-  --danger-subtle: rgba(248, 113, 113, 0.12);
-  --radius-sm: 6px;
-  --radius-md: 10px;
+  /* Aelvyril semantic tokens (design.md) */
+  --color-bg-1: #0a1628;
+  --color-bg-2: #0d2137;
+  --color-surface-1: rgba(240, 244, 248, 0.06);
+  --color-surface-2: rgba(240, 244, 248, 0.1);
+  --color-border-subtle: rgba(240, 244, 248, 0.16);
+  --color-text-primary: #f0f4f8;
+  --color-text-secondary: rgba(240, 244, 248, 0.75);
+  --color-text-muted: rgba(240, 244, 248, 0.56);
+  --color-accent-gold: #f5c842;
+  --color-accent-cyan: #4dd9e0;
+  --color-danger: #e05a6a;
+  --color-success: #4dd9e0;
+  --color-focus-ring: rgba(245, 200, 66, 0.55);
+
+  --state-hover-overlay: rgba(240, 244, 248, 0.08);
+  --state-active-overlay: rgba(240, 244, 248, 0.14);
+  --state-disabled-opacity: 0.45;
+
+  /* Existing app tokens (kept as aliases for component CSS) */
+  --bg-primary: var(--color-bg-1);
+  --bg-secondary: var(--color-surface-1);
+  --bg-surface: var(--color-surface-2);
+  --bg-elevated: rgba(240, 244, 248, 0.14);
+
+  --border-subtle: var(--color-border-subtle);
+  --border: rgba(240, 244, 248, 0.22);
+
+  --text-primary: var(--color-text-primary);
+  --text-secondary: var(--color-text-secondary);
+  --text-muted: var(--color-text-muted);
+
+  --accent: var(--color-accent-gold);
+  --accent-hover: #e8a020;
+  --accent-subtle: rgba(245, 200, 66, 0.12);
+
+  --success: var(--color-success);
+  --success-subtle: rgba(77, 217, 224, 0.12);
+
+  --warning: var(--color-accent-gold);
+  --warning-subtle: rgba(245, 200, 66, 0.12);
+
+  --danger: var(--color-danger);
+  --danger-subtle: rgba(224, 90, 106, 0.14);
+
+  --radius-sm: 10px;
+  --radius-md: 12px;
   --radius-lg: 14px;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+
+  /* Prefer glow over shadows; keep subtle for overlays */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.5);
+
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", monospace;
 }
@@ -41,10 +71,37 @@ html, body, #root {
 
 body {
   font-family: var(--font-sans);
-  background: var(--bg-primary);
+  background: radial-gradient(
+      1200px 800px at 15% 10%,
+      rgba(77, 217, 224, 0.12),
+      transparent 55%
+    ),
+    radial-gradient(
+      900px 700px at 75% 25%,
+      rgba(245, 200, 66, 0.11),
+      transparent 60%
+    ),
+    linear-gradient(180deg, var(--color-bg-1), var(--color-bg-2));
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Accessibility: visible focus ring everywhere */
+:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 ::-webkit-scrollbar {

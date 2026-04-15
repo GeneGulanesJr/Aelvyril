@@ -5,17 +5,22 @@ import {
   FileText,
   Settings,
   Shield,
+  Gauge,
 } from "lucide-react";
+import { useGatewayStatus } from "../hooks/useTauri";
 import styles from "./Sidebar.module.css";
 
 const navItems = [
   { to: "/", icon: Activity, label: "Dashboard" },
   { to: "/sessions", icon: Clock, label: "Sessions" },
   { to: "/audit", icon: FileText, label: "Audit Log" },
+  { to: "/security", icon: Gauge, label: "Security" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ];
 
 export function Sidebar() {
+  const { status } = useGatewayStatus();
+
   return (
     <aside className={styles.sidebar}>
       <div className={styles.logo}>
@@ -39,9 +44,24 @@ export function Sidebar() {
       </nav>
       <div className={styles.footer}>
         <div className={styles.status}>
-          <div className={styles.statusDot} />
-          <span className={styles.statusText}>Gateway Active</span>
+          <div
+            className={`${styles.statusDot} ${status?.active ? styles.live : styles.idle}`}
+          />
+          <span className={styles.statusText}>
+            {status?.active ? "Gateway Active" : "Starting…"}
+          </span>
         </div>
+        {status?.clipboard_monitoring && (
+          <div className={styles.clipboardStatus}>
+            <span className={styles.clipboardDot} />
+            <span className={styles.clipboardText}>Clipboard On</span>
+          </div>
+        )}
+        {status && !status.onboarding_complete && (
+          <div className={styles.setupBadge}>
+            Setup incomplete
+          </div>
+        )}
       </div>
     </aside>
   );

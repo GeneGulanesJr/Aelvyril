@@ -1,5 +1,9 @@
+pub mod auth;
+pub mod forward;
+pub mod pii_handler;
 mod router;
-mod server;
-mod streaming;
+pub(crate) mod server;
+pub mod session_id;
+pub mod streaming;
 
 pub use server::{start_server, GatewayState};

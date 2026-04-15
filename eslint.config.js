@@ -17,6 +17,6 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ["dist/", "src-tauri/"],
+    ignores: ["dist/", "src-tauri/", "extension/", ".agents/"],
   },
 );

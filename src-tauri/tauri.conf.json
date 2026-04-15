@@ -24,18 +24,45 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:* https://127.0.0.1:* https://api.github.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
     }
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["dmg", "msi", "deb", "appimage"],
+    "resources": [
+      "presidio_service.py",
+      "presidio_requirements.txt"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "entitlements": null,
+      "signingIdentity": null,
+      "providerShortName": null
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/GulanesKorp/Aelvyril/releases/latest/download/latest.json"
+      ],
+      "pubkey": ""
+    }
   }
 }

@@ -1,5 +1,50 @@
 use serde::{Deserialize, Serialize};
 
+/// Persistent app settings (saved to disk)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppSettings {
+    /// Launch at system startup
+    pub launch_at_login: bool,
+    /// Minimize to system tray on close
+    pub minimize_to_tray: bool,
+    /// Show notifications for PII detection
+    pub show_notifications: bool,
+    /// Monitor clipboard for PII
+    pub clipboard_monitoring: bool,
+    /// Session timeout in minutes
+    pub session_timeout_minutes: u32,
+    /// Gateway port
+    pub gateway_port: u16,
+    /// Enable individual PII recognizers
+    pub enabled_recognizers: Vec<String>,
+    /// Detection confidence threshold (0.0–1.0)
+    pub confidence_threshold: f64,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            launch_at_login: false,
+            minimize_to_tray: true,
+            show_notifications: true,
+            clipboard_monitoring: false,
+            session_timeout_minutes: 30,
+            gateway_port: 4242,
+            enabled_recognizers: vec![
+                "email".into(),
+                "phone".into(),
+                "ip_address".into(),
+                "api_key".into(),
+                "credit_card".into(),
+                "ssn".into(),
+                "domain".into(),
+                "iban".into(),
+            ],
+            confidence_threshold: 0.5,
+        }
+    }
+}
+
 /// Configuration for an upstream provider
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -50,7 +95,9 @@ pub fn find_provider_for_model<'a>(
     providers: &'a [ProviderConfig],
     model: &str,
 ) -> Option<&'a ProviderConfig> {
-    providers.iter().find(|p| p.models.iter().any(|m| model.starts_with(m)))
+    providers
+        .iter()
+        .find(|p| p.models.iter().any(|m| model.starts_with(m)))
 }
 
 #[cfg(test)]

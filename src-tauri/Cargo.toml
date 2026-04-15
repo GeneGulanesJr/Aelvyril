@@ -14,10 +14,11 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
+tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-axum = { version = "0.8", features = ["macros"] }
+axum = { version = "0.8", features = ["macros", "ws"] }
 axum-extra = { version = "0.10", features = ["typed-header"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
@@ -41,6 +42,17 @@ parking_lot = "0.12"
 dashmap = "6"
 async-stream = "0.3"
 tokio-stream = "0.1"
+tokio-tungstenite = "0.26"
+rusqlite = { version = "0.34", features = ["bundled"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-notification = "2"
+notify-rust = "4"
+dirs = "6"
+ndarray = "0.16"
+rcgen = { version = "0.13", features = ["x509-parser"], optional = true }
+
+[features]
+tls = ["rcgen"]
 
 [profile.release]
 panic = "abort"

@@ -10,8 +10,6 @@ pub enum RouterError {
     NoApiKey(String),
     #[error("Failed to retrieve API key: {0}")]
     KeychainError(#[from] keychain::KeychainError),
-    #[error("Request to upstream failed: {0}")]
-    UpstreamError(String),
 }
 
 /// Route a model name to the correct upstream provider
@@ -25,7 +23,13 @@ pub fn resolve_provider<'a>(
 
 /// Get the API key for a provider from the OS keychain
 pub fn get_provider_api_key(provider_name: &str) -> Result<String, RouterError> {
-    keychain::get_provider_key(provider_name).map_err(Into::into)
+    match keychain::get_provider_key(provider_name) {
+        Ok(k) => Ok(k),
+        Err(keychain::KeychainError::NotFound) => {
+            Err(RouterError::NoApiKey(provider_name.to_string()))
+        }
+        Err(e) => Err(RouterError::KeychainError(e)),
+    }
 }
 
 /// Build the upstream URL for a chat completions request
@@ -39,17 +43,12 @@ pub fn build_upstream_url(provider: &ProviderConfig) -> String {
     }
 }
 
-/// Build the upstream URL for non-chat endpoints (passthrough)
+/// Build the upstream URL for non-chat endpoints (passthrough).
+/// `path` is the remainder after `/v1/` (with or without a leading slash).
 pub fn build_passthrough_url(provider: &ProviderConfig, path: &str) -> String {
     let base = provider.base_url.trim_end_matches('/');
-    format!("{}{}", base, path)
-}
-
-/// Determine the provider name from a model (for logging/routing)
-pub fn provider_name_for_model(providers: &[ProviderConfig], model: &str) -> String {
-    resolve_provider(providers, model)
-        .map(|p| p.name.clone())
-        .unwrap_or_else(|_| "unknown".to_string())
+    let path = path.trim_start_matches('/');
+    format!("{}/{}", base, path)
 }
 
 /// Find the next available provider for failover
@@ -61,10 +60,7 @@ pub fn find_failover_provider<'a>(
     // Try to find another provider that supports this model
     providers
         .iter()
-        .find(|p| {
-            p.name != failed_provider
-                && p.models.iter().any(|m| model.starts_with(m))
-        })
+        .find(|p| p.name != failed_provider && p.models.iter().any(|m| model.starts_with(m)))
 }
 
 #[cfg(test)]
@@ -117,6 +113,24 @@ mod tests {
         assert_eq!(
             build_upstream_url(&provider),
             "https://api.anthropic.com/v1/messages"
+        );
+    }
+
+    #[test]
+    fn test_build_passthrough_url() {
+        let provider = ProviderConfig {
+            id: "test".into(),
+            name: "OpenAI".into(),
+            base_url: "https://api.openai.com/v1/".into(),
+            models: vec![],
+        };
+        assert_eq!(
+            build_passthrough_url(&provider, "embeddings"),
+            "https://api.openai.com/v1/embeddings"
+        );
+        assert_eq!(
+            build_passthrough_url(&provider, "/models"),
+            "https://api.openai.com/v1/models"
         );
     }
 

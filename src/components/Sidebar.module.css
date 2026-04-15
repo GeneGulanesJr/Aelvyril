@@ -1,7 +1,11 @@
 .sidebar {
   width: 220px;
   min-width: 220px;
-  background: var(--bg-secondary);
+  background: linear-gradient(
+      180deg,
+      rgba(240, 244, 248, 0.08),
+      rgba(240, 244, 248, 0.05)
+    );
   border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
@@ -16,13 +20,14 @@
   padding: 4px 12px 20px;
   border-bottom: 1px solid var(--border-subtle);
   margin-bottom: 8px;
-  color: var(--accent);
+  color: var(--text-primary);
 }
 
 .logoText {
   font-size: 18px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .nav {
@@ -42,22 +47,28 @@
   text-decoration: none;
   font-size: 13.5px;
   font-weight: 500;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  border: 1px solid transparent;
 }
 
 .navItem:hover {
-  background: var(--bg-surface);
+  background: var(--state-hover-overlay);
+  border-color: var(--border-subtle);
   color: var(--text-primary);
 }
 
 .navItem.active {
-  background: var(--accent-subtle);
+  background: rgba(245, 200, 66, 0.1);
+  border-color: rgba(245, 200, 66, 0.28);
   color: var(--accent);
 }
 
 .footer {
   border-top: 1px solid var(--border-subtle);
   padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .status {
@@ -71,12 +82,52 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
+}
+
+.live {
   background: var(--success);
-  box-shadow: 0 0 8px rgba(52, 211, 153, 0.4);
+  box-shadow: 0 0 12px rgba(77, 217, 224, 0.35);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.idle {
+  background: var(--text-muted);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 .statusText {
   font-size: 12px;
   color: var(--text-muted);
+  font-weight: 500;
+}
+
+.clipboardStatus {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 12px;
+}
+
+.clipboardDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent-cyan);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.clipboardText {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.setupBadge {
+  font-size: 11px;
+  color: var(--warning);
+  padding: 4px 12px;
   font-weight: 500;
 }

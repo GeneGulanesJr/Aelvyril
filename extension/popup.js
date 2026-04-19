@@ -28,5 +28,29 @@ function updateStatus(connected) {
   }
 }
 
-checkConnection();
-setInterval(checkConnection, 3000);
+const POLL_INTERVAL_MS = 3000;
+let pollIntervalId = null;
+
+function startPolling() {
+  if (pollIntervalId) return;
+  checkConnection();
+  pollIntervalId = setInterval(checkConnection, POLL_INTERVAL_MS);
+}
+
+function stopPolling() {
+  if (pollIntervalId) {
+    clearInterval(pollIntervalId);
+    pollIntervalId = null;
+  }
+}
+
+startPolling();
+
+// Clean up when popup is closed
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    stopPolling();
+  } else {
+    startPolling();
+  }
+});

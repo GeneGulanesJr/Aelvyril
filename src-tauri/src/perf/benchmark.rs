@@ -288,7 +288,7 @@ mod tests {
         let values: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
         let p50 = percentile(&values, 50.0);
         assert!(
-            p50 >= 4.0 && p50 <= 6.0,
+            (4.0..=6.0).contains(&p50),
             "p50 should be around 5.0, got {}",
             p50
         );

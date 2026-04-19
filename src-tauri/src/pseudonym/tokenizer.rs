@@ -21,6 +21,58 @@ impl Pseudonymizer {
         }
     }
 
+    fn next_token(&mut self, pii_type: &crate::pii::recognizers::PiiType) -> String {
+        let type_key = pii_type.to_string();
+        let counter = self.counters.entry(type_key.clone()).or_insert(0);
+        *counter += 1;
+        format!("[{}_{}]", type_key, counter)
+    }
+
+    fn build_replacements_and_mappings(
+        &mut self,
+        matches: &[PiiMatch],
+    ) -> (Vec<(usize, usize, String)>, Vec<TokenMapping>) {
+        // Deduplicate: if the same exact text appears multiple times, reuse the same token.
+        let mut value_to_token: HashMap<String, String> = HashMap::new();
+        let mut mappings: Vec<TokenMapping> = Vec::new();
+        let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+
+        // Process matches in reverse order so position shifts don't affect later replacements.
+        let mut sorted_matches: Vec<&PiiMatch> = matches.iter().collect();
+        sorted_matches.sort_by(|a, b| b.start.cmp(&a.start));
+
+        for m in sorted_matches {
+            if let Some(existing_token) = value_to_token.get(&m.text) {
+                replacements.push((m.start, m.end, existing_token.clone()));
+                continue;
+            }
+
+            let token = self.next_token(&m.pii_type);
+            value_to_token.insert(m.text.clone(), token.clone());
+
+            mappings.push(TokenMapping {
+                token: token.clone(),
+                original: m.text.clone(),
+                pii_type: m.pii_type.clone(),
+                confidence: m.confidence,
+            });
+
+            replacements.push((m.start, m.end, token));
+        }
+
+        (replacements, mappings)
+    }
+
+    fn apply_replacements(text: &str, replacements: Vec<(usize, usize, String)>) -> String {
+        let mut result = text.to_string();
+        for (start, end, token) in replacements {
+            if start <= result.len() && end <= result.len() {
+                result.replace_range(start..end, &token);
+            }
+        }
+        result
+    }
+
     /// Replace all PII matches with tokens, returning the pseudonymized text
     /// and a mapping of tokens to original values.
     ///
@@ -35,50 +87,8 @@ impl Pseudonymizer {
         if matches.is_empty() {
             return (text.to_string(), Vec::new());
         }
-
-        // Deduplicate: if the same exact text appears multiple times,
-        // reuse the same token
-        let mut value_to_token: HashMap<String, String> = HashMap::new();
-        let mut mappings: Vec<TokenMapping> = Vec::new();
-        let mut replacements: Vec<(usize, usize, String)> = Vec::new();
-
-        // Process matches in reverse order so position shifts don't affect later replacements
-        let mut sorted_matches: Vec<&PiiMatch> = matches.iter().collect();
-        sorted_matches.sort_by(|a, b| b.start.cmp(&a.start));
-
-        for m in sorted_matches {
-            // Check if we already created a token for this exact value
-            if let Some(existing_token) = value_to_token.get(&m.text) {
-                replacements.push((m.start, m.end, existing_token.clone()));
-                continue;
-            }
-
-            // Create new token
-            let type_key = m.pii_type.to_string();
-            let counter = self.counters.entry(type_key.clone()).or_insert(0);
-            *counter += 1;
-            let token = format!("[{}_{}]", type_key, counter);
-
-            value_to_token.insert(m.text.clone(), token.clone());
-
-            mappings.push(TokenMapping {
-                token: token.clone(),
-                original: m.text.clone(),
-                pii_type: m.pii_type.clone(),
-                confidence: m.confidence,
-            });
-
-            replacements.push((m.start, m.end, token));
-        }
-
-        // Apply replacements (in reverse order, already sorted)
-        let mut result = text.to_string();
-        for (start, end, token) in replacements {
-            if start <= result.len() && end <= result.len() {
-                result.replace_range(start..end, &token);
-            }
-        }
-
+        let (replacements, mappings) = self.build_replacements_and_mappings(matches);
+        let result = Self::apply_replacements(text, replacements);
         (result, mappings)
     }
 }

@@ -177,8 +177,8 @@ impl ModelService {
         let w = &self.weights;
 
         // Weighted sum of sensitive keyword features
-        for i in 0..w.sensitive_weights.len().min(features.len()) {
-            score += w.sensitive_weights[i] * features[i] as f64;
+        for (i, feature) in features.iter().enumerate().take(w.sensitive_weights.len().min(features.len())) {
+            score += w.sensitive_weights[i] * *feature as f64;
         }
 
         // Weighted sum of benign keyword features (offset by 24)
@@ -268,57 +268,45 @@ fn extract_text_features(text: &str) -> Vec<f32> {
     let char_count = text_lower.len().max(1) as f32;
     let mut features = Vec::with_capacity(128);
 
-    // Sensitive keyword presence (24 features)
-    let sensitive_keywords = [
-        "password",
-        "secret",
-        "confidential",
-        "private",
-        "sensitive",
-        "ssn",
-        "credit card",
-        "bank account",
-        "routing",
-        "passport",
-        "health",
-        "medical",
-        "diagnosis",
-        "insurance",
-        "salary",
-        "income",
-        "license",
-        "dob",
-        "address",
-        "phone",
-        "email",
-        "account number",
-        "social security",
-        "debit",
+    push_keyword_features(&text_lower, &mut features);
+    push_statistical_features(text, &text_lower, char_count, &mut features);
+    push_pii_pattern_features(&text_lower, &mut features);
+
+    features.resize(128, 0.0);
+    features
+}
+
+/// Push sensitive (24) and benign (12) keyword presence features.
+fn push_keyword_features(text_lower: &str, features: &mut Vec<f32>) {
+    const SENSITIVE_KEYWORDS: [&str; 24] = [
+        "password", "secret", "confidential", "private",
+        "sensitive", "ssn", "credit card", "bank account",
+        "routing", "passport", "health", "medical",
+        "diagnosis", "insurance", "salary", "income",
+        "license", "dob", "address", "phone",
+        "email", "account number", "social security", "debit",
     ];
-    for kw in &sensitive_keywords {
+    const BENIGN_KEYWORDS: [&str; 12] = [
+        "example", "test", "sample", "placeholder",
+        "template", "demo", "dummy", "fake",
+        "mock", "public", "documentation", "tutorial",
+    ];
+
+    for kw in &SENSITIVE_KEYWORDS {
         features.push(if text_lower.contains(kw) { 1.0 } else { 0.0 });
     }
-
-    // Benign keyword presence (12 features)
-    let benign_keywords = [
-        "example",
-        "test",
-        "sample",
-        "placeholder",
-        "template",
-        "demo",
-        "dummy",
-        "fake",
-        "mock",
-        "public",
-        "documentation",
-        "tutorial",
-    ];
-    for kw in &benign_keywords {
+    for kw in &BENIGN_KEYWORDS {
         features.push(if text_lower.contains(kw) { 1.0 } else { 0.0 });
     }
+}
 
-    // Statistical features (8 features)
+/// Push 8 statistical features (length, word count, digit/special/uppercase ratios, symbol flags).
+fn push_statistical_features(
+    text: &str,
+    text_lower: &str,
+    char_count: f32,
+    features: &mut Vec<f32>,
+) {
     let digit_count = text_lower.chars().filter(|c| c.is_ascii_digit()).count() as f32;
     let special_count = text_lower
         .chars()
@@ -334,9 +322,11 @@ fn extract_text_features(text: &str) -> Vec<f32> {
     features.push(if text.contains('@') { 1.0 } else { 0.0 });
     features.push(if text.contains('/') { 1.0 } else { 0.0 });
     features.push(if text.contains(':') { 1.0 } else { 0.0 });
+}
 
-    // PII-type pattern presence (10 features)
-    let pii_patterns = [
+/// Push 10 PII regex pattern presence features.
+fn push_pii_pattern_features(text_lower: &str, features: &mut Vec<f32>) {
+    const PII_PATTERNS: [&str; 10] = [
         r"\d{3}-\d{2}-\d{4}",
         r"\d{16}",
         r"\d{3}[-.]?\d{3}[-.]?\d{4}",
@@ -348,18 +338,15 @@ fn extract_text_features(text: &str) -> Vec<f32> {
         r"\b\d{4}[-/]\d{2}[-/]\d{2}\b",
         r"\b[A-Z]{2}\d{2}\s?\d{4}\s?\d{4}\b",
     ];
-    for pattern in &pii_patterns {
+
+    for pattern in &PII_PATTERNS {
         let matches = if let Ok(re) = regex::Regex::new(pattern) {
-            re.find_iter(&text_lower).count()
+            re.find_iter(text_lower).count()
         } else {
             0
         };
         features.push((matches > 0) as u8 as f32);
     }
-
-    // Pad to 128
-    features.resize(128, 0.0);
-    features
 }
 
 // ── Keywords ────────────────────────────────────────────────────────────────

@@ -222,3 +222,79 @@
   font-weight: 500;
   color: var(--text-primary);
 }
+
+/* Token Usage Panel */
+.tokenGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.tokenItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.tokenLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tokenValue {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.tokenValueUnavailable {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.suggestion {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: var(--accent-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.suggestion svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.suggestionWarning {
+  margin-top: 8px;
+  padding: 8px 14px;
+  background: var(--warning-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.suggestionWarning svg {
+  color: var(--warning);
+  flex-shrink: 0;
+}

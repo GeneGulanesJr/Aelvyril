@@ -8,7 +8,7 @@ interface Session {
   last_activity: string;
   request_count: number;
   entities_detected: number;
-  provider?: string;
+  provider?: string | null;
 }
 
 interface SessionCardProps {

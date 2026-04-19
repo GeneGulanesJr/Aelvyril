@@ -1,0 +1,118 @@
+{
+  // ── Architecture Layer Rules ──
+  // Enforces clean dependency direction across Rust modules.
+  // Lower layers must not import higher layers (no upward dependencies).
+  //
+  // Dependency hierarchy (top → bottom):
+  //   commands  →  gateway  →  pii, pseudonym, security, perf
+  //                   ↓
+  //              config, keychain, session, clipboard
+  //                   ↓
+  //              model, audit, lists (pure data/logic)
+  //
+  // Run: jcodemunch_get_layer_violations to check
+  "architecture": {
+    "layers": [
+      {
+        "name": "commands",
+        "paths": ["src-tauri/src/commands/**"],
+        "may_not_import": [
+          "src-tauri/src/gateway/**",
+          "src-tauri/src/pii/**",
+          "src-tauri/src/pseudonym/**",
+          "src-tauri/src/security/**",
+          "src-tauri/src/perf/**",
+          "src-tauri/src/clipboard/**"
+        ],
+        "description": "Tauri command handlers — thin orchestration layer. Must go through state/ and domain services, never import internals directly."
+      },
+      {
+        "name": "gateway",
+        "paths": ["src-tauri/src/gateway/**"],
+        "may_not_import": [
+          "src-tauri/src/commands/**",
+          "src-tauri/src/clipboard/**",
+          "src-tauri/src/session/**"
+        ],
+        "description": "HTTP gateway — the request pipeline. May use pii, pseudonym, security, perf, config, keychain. Must not reach into UI commands or clipboard."
+      },
+      {
+        "name": "pii",
+        "paths": ["src-tauri/src/pii/**"],
+        "may_not_import": [
+          "src-tauri/src/commands/**",
+          "src-tauri/src/gateway/**",
+          "src-tauri/src/pseudonym/**",
+          "src-tauri/src/security/**",
+          "src-tauri/src/clipboard/**",
+          "src-tauri/src/session/**",
+          "src-tauri/src/audit/**",
+          "src-tauri/src/lists/**",
+          "src-tauri/src/config/**"
+        ],
+        "description": "PII detection engine — self-contained. Depends only on its own recognizers and the Presidio client. No knowledge of gateway, pseudonymization, or app config."
+      },
+      {
+        "name": "pseudonym",
+        "paths": ["src-tauri/src/pseudonym/**"],
+        "may_not_import": [
+          "src-tauri/src/commands/**",
+          "src-tauri/src/gateway/**",
+          "src-tauri/src/security/**",
+          "src-tauri/src/clipboard/**",
+          "src-tauri/src/session/**",
+          "src-tauri/src/audit/**",
+          "src-tauri/src/lists/**",
+          "src-tauri/src/config/**"
+        ],
+        "description": "Pseudonymization engine — may use PiiType from pii (shared enum), but must not import gateway or app infrastructure."
+      },
+      {
+        "name": "security",
+        "paths": ["src-tauri/src/security/**"],
+        "may_not_import": [
+          "src-tauri/src/commands/**",
+          "src-tauri/src/gateway/**",
+          "src-tauri/src/pii/**",
+          "src-tauri/src/pseudonym/**",
+          "src-tauri/src/clipboard/**",
+          "src-tauri/src/session/**"
+        ],
+        "description": "Security infrastructure (rate limiting, TLS, key audit) — standalone. Must not know about PII engine or gateway internals."
+      },
+      {
+        "name": "config",
+        "paths": ["src-tauri/src/config/**"],
+        "may_not_import": [
+          "src-tauri/src/commands/**",
+          "src-tauri/src/gateway/**",
+          "src-tauri/src/pii/**",
+          "src-tauri/src/pseudonym/**",
+          "src-tauri/src/security/**",
+          "src-tauri/src/clipboard/**",
+          "src-tauri/src/session/**",
+          "src-tauri/src/perf/**",
+          "src-tauri/src/audit/**",
+          "src-tauri/src/lists/**"
+        ],
+        "description": "Pure configuration types — no behavioral dependencies on any other module."
+      },
+      {
+        "name": "model",
+        "paths": ["src-tauri/src/model/**"],
+        "may_not_import": [
+          "src-tauri/src/commands/**",
+          "src-tauri/src/gateway/**",
+          "src-tauri/src/security/**",
+          "src-tauri/src/clipboard/**",
+          "src-tauri/src/session/**",
+          "src-tauri/src/perf/**",
+          "src-tauri/src/audit/**",
+          "src-tauri/src/lists/**",
+          "src-tauri/src/config/**"
+        ],
+        "description": "ML feature extraction — self-contained. May reference PiiType from pii for type alignment only."
+      }
+    ]
+  }
+}

@@ -8,6 +8,15 @@ use tokio::time;
 use crate::clipboard::{ClipboardAction, ClipboardEvent, ClipboardResponse};
 use crate::pii::PiiEngine;
 
+/// Broadcast channel capacity for clipboard events
+const CLIPBOARD_EVENT_CHANNEL_CAPACITY: usize = 64;
+
+/// Number of consecutive clipboard errors to log before suppressing
+const CLIPBOARD_ERROR_LOG_THRESHOLD: u32 = 3;
+
+/// Number of consecutive errors before exponential backoff kicks in
+const CLIPBOARD_BACKOFF_ERROR_THRESHOLD: u32 = 5;
+
 /// The clipboard monitor tracks clipboard changes and scans for PII.
 pub struct ClipboardMonitor {
     /// Last clipboard content hash to detect changes
@@ -24,7 +33,7 @@ pub struct ClipboardMonitor {
 
 impl ClipboardMonitor {
     pub fn new(pii_engine: PiiEngine) -> Self {
-        let (event_tx, _) = broadcast::channel(64);
+        let (event_tx, _) = broadcast::channel(CLIPBOARD_EVENT_CHANNEL_CAPACITY);
         Self {
             last_hash: Arc::new(Mutex::new(0)),
             pending: Arc::new(Mutex::new(None)),
@@ -95,26 +104,26 @@ impl ClipboardMonitor {
             ClipboardAction::Pending
         };
 
+        // Only broadcast if there's something interesting
+        if matches.is_empty() {
+            return None;
+        }
+
         let event = ClipboardEvent {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: chrono::Utc::now().to_rfc3339(),
             content_length: content.len(),
-            detected_entities: detected_entities.clone(),
+            detected_entities,
             action_taken: action,
         };
 
-        // Only broadcast if there's something interesting
-        if !matches.is_empty() {
-            // Store as pending for user action
-            *self.pending.lock() = Some(event.clone());
+        // Store as pending for user action (moved, not cloned)
+        *self.pending.lock() = Some(event.clone());
 
-            if let Err(e) = self.event_tx.send(event.clone()) {
-                tracing::warn!("Failed to broadcast clipboard PII event: {}", e);
-            }
-            Some(event)
-        } else {
-            None
+        if let Err(e) = self.event_tx.send(event.clone()) {
+            tracing::warn!("Failed to broadcast clipboard PII event: {}", e);
         }
+        Some(event)
     }
 
     /// User responded to a clipboard notification
@@ -128,6 +137,7 @@ impl ClipboardMonitor {
             ClipboardResponse::Block => ClipboardAction::Blocked,
         };
 
+        // Clone only when needed for broadcasting
         if let Err(e) = self.event_tx.send(event.clone()) {
             tracing::warn!("Failed to broadcast clipboard response event: {}", e);
         }
@@ -171,22 +181,27 @@ pub async fn run_clipboard_poll(monitor: Arc<ClipboardMonitor>) {
         match read_clipboard() {
             Ok(content) => {
                 consecutive_errors = 0;
-                // Only process if content changed
-                if last_content.as_ref() != Some(&content) {
+                // Only process if content changed (avoid cloning when possible)
+                let content_ref = if last_content.as_ref() == Some(&content) {
+                    // Content unchanged, use reference
+                    &content
+                } else {
+                    // Content changed, store new value
                     last_content = Some(content.clone());
-                    monitor.scan_content(&content);
-                }
+                    &content
+                };
+                monitor.scan_content(content_ref);
             }
             Err(e) => {
                 consecutive_errors = consecutive_errors.saturating_add(1);
                 // Log the first few errors so the user knows something is wrong,
                 // then suppress to avoid log spam.
-                if consecutive_errors <= 3 {
+                if consecutive_errors <= CLIPBOARD_ERROR_LOG_THRESHOLD {
                     tracing::warn!("Clipboard read failed: {}", e);
                 }
                 // Back off exponentially after repeated failures (max ~32s)
-                if consecutive_errors > 5 {
-                    interval = time::interval(Duration::from_secs(1 << consecutive_errors.min(5)));
+                if consecutive_errors > CLIPBOARD_BACKOFF_ERROR_THRESHOLD {
+                    interval = time::interval(Duration::from_secs(1 << consecutive_errors.min(CLIPBOARD_BACKOFF_ERROR_THRESHOLD)));
                 }
             }
         }
@@ -238,90 +253,104 @@ fn read_clipboard_windows() -> Result<String, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn read_clipboard_linux() -> Result<String, String> {
-    // Detect the best available clipboard tool once and cache the result
-    // so we don't spawn a missing binary on every poll.
-    use std::sync::OnceLock;
+#[derive(Clone, Copy, Debug)]
+enum LinuxClipboardTool {
+    Xclip,
+    WlPaste,
+    Xsel,
+}
 
-    #[derive(Clone, Copy)]
-    enum LinuxClipboardTool {
-        Xclip,
-        WlPaste,
-        Xsel,
+#[cfg(target_os = "linux")]
+fn command_succeeds(cmd: &str, args: &[&str]) -> bool {
+    std::process::Command::new(cmd)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn detect_linux_clipboard_tool() -> Option<LinuxClipboardTool> {
+    let detectors: &[(LinuxClipboardTool, &str, &[&str])] = &[
+        (
+            LinuxClipboardTool::Xclip,
+            "xclip",
+            &["-selection", "clipboard", "-o", "-t", "TIMESTAMP"],
+        ),
+        (LinuxClipboardTool::WlPaste, "wl-paste", &["--version"]),
+        (
+            LinuxClipboardTool::Xsel,
+            "xsel",
+            &["--clipboard", "--output"],
+        ),
+    ];
+
+    for (tool, cmd, args) in detectors {
+        if command_succeeds(cmd, args) {
+            match tool {
+                LinuxClipboardTool::Xclip => {
+                    tracing::info!("Clipboard tool detected: xclip (X11)");
+                }
+                LinuxClipboardTool::WlPaste => {
+                    tracing::info!("Clipboard tool detected: wl-paste (Wayland)");
+                }
+                LinuxClipboardTool::Xsel => {
+                    tracing::info!("Clipboard tool detected: xsel (X11 fallback)");
+                }
+            }
+            return Some(*tool);
+        }
     }
 
-    static DETECTED_TOOL: OnceLock<Option<LinuxClipboardTool>> = OnceLock::new();
+    tracing::warn!("No clipboard tool found. Install xclip (X11), wl-paste (Wayland), or xsel.");
+    None
+}
 
-    let tool = DETECTED_TOOL.get_or_init(|| {
-        // Check for xclip (X11)
-        if std::process::Command::new("xclip")
-            .args(["-selection", "clipboard", "-o", "-t", "TIMESTAMP"])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-        {
-            tracing::info!("Clipboard tool detected: xclip (X11)");
-            return Some(LinuxClipboardTool::Xclip);
-        }
-
-        // Check for wl-paste (Wayland)
-        if std::process::Command::new("wl-paste")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-        {
-            tracing::info!("Clipboard tool detected: wl-paste (Wayland)");
-            return Some(LinuxClipboardTool::WlPaste);
-        }
-
-        // Check for xsel (X11 fallback)
-        if std::process::Command::new("xsel")
-            .args(["--clipboard", "--output"])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-        {
-            tracing::info!("Clipboard tool detected: xsel (X11 fallback)");
-            return Some(LinuxClipboardTool::Xsel);
-        }
-
-        tracing::warn!(
-            "No clipboard tool found. Install xclip (X11), wl-paste (Wayland), or xsel."
-        );
-        None
-    });
-
-    let output = match *tool {
-        Some(LinuxClipboardTool::Xclip) => std::process::Command::new("xclip")
+#[cfg(target_os = "linux")]
+fn run_linux_clipboard_tool(tool: LinuxClipboardTool) -> Result<std::process::Output, String> {
+    match tool {
+        LinuxClipboardTool::Xclip => std::process::Command::new("xclip")
             .args(["-selection", "clipboard", "-o"])
             .output()
-            .map_err(|e| format!("xclip failed: {}", e))?,
-        Some(LinuxClipboardTool::WlPaste) => std::process::Command::new("wl-paste")
+            .map_err(|e| format!("xclip failed: {}", e)),
+        LinuxClipboardTool::WlPaste => std::process::Command::new("wl-paste")
             .arg("--no-newline")
             .output()
-            .map_err(|e| format!("wl-paste failed: {}", e))?,
-        Some(LinuxClipboardTool::Xsel) => std::process::Command::new("xsel")
+            .map_err(|e| format!("wl-paste failed: {}", e)),
+        LinuxClipboardTool::Xsel => std::process::Command::new("xsel")
             .args(["--clipboard", "--output"])
             .output()
-            .map_err(|e| format!("xsel failed: {}", e))?,
-        None => {
-            return Err("No clipboard tool available. Install xclip, wl-paste, or xsel.".into());
-        }
-    };
+            .map_err(|e| format!("xsel failed: {}", e)),
+    }
+}
 
+#[cfg(target_os = "linux")]
+fn decode_clipboard_output(output: std::process::Output) -> Result<String, String> {
     if output.status.success() {
-        String::from_utf8(output.stdout).map_err(|e| format!("Invalid UTF-8 from clipboard: {}", e))
+        String::from_utf8(output.stdout)
+            .map_err(|e| format!("Invalid UTF-8 from clipboard: {}", e))
     } else {
         Err(format!(
             "Clipboard tool exited with error: {}",
             String::from_utf8_lossy(&output.stderr)
         ))
     }
+}
+
+#[cfg(target_os = "linux")]
+fn read_clipboard_linux() -> Result<String, String> {
+    // Detect the best available clipboard tool once and cache the result
+    // so we don't spawn a missing binary on every poll.
+    use std::sync::OnceLock;
+
+    static DETECTED_TOOL: OnceLock<Option<LinuxClipboardTool>> = OnceLock::new();
+
+    let tool = DETECTED_TOOL
+        .get_or_init(detect_linux_clipboard_tool)
+        .ok_or_else(|| "No clipboard tool available. Install xclip, wl-paste, or xsel.".to_string())?;
+
+    let output = run_linux_clipboard_tool(tool)?;
+    decode_clipboard_output(output)
 }

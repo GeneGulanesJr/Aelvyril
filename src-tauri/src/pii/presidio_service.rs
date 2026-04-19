@@ -128,6 +128,8 @@ impl PresidioService {
             .args(&args)
             .env("PRESIDIO_HOST", &self.host)
             .env("PRESIDIO_PORT", &self.port)
+            .env("AELVYRIL_PRESIDIO_HOST", &self.host)
+            .env("AELVYRIL_PRESIDIO_PORT", &self.port)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

@@ -88,9 +88,15 @@ impl PiiEngine {
     /// Run our custom recognizers (the safety layer).
     /// Always runs regardless of Presidio status.
     fn detect_custom(&self, text: &str) -> Vec<PiiMatch> {
-        let mut matches: Vec<PiiMatch> = Vec::new();
+        let mut matches = self.detect_with_recognizers(text);
+        self.detect_with_denylist(text, &mut matches);
+        matches
+    }
 
-        // Run all recognizers
+    /// Run all built-in recognizers against the text.
+    fn detect_with_recognizers(&self, text: &str) -> Vec<PiiMatch> {
+        let mut matches = Vec::new();
+
         for recognizer in RECOGNIZERS.iter() {
             if recognizer.confidence < MIN_CONFIDENCE {
                 continue;
@@ -98,13 +104,9 @@ impl PiiEngine {
 
             for mat in recognizer.regex.find_iter(text) {
                 let matched_text = mat.as_str();
-
-                // Skip if in allowlist
                 if self.is_allowed(matched_text) {
                     continue;
                 }
-
-                // Validate if the recognizer has a validator
                 if let Some(validator) = recognizer.validator {
                     if !validator(matched_text) {
                         continue;
@@ -121,24 +123,23 @@ impl PiiEngine {
             }
         }
 
-        // Check denylist patterns
+        matches
+    }
+
+    /// Check denylist patterns and append any non-duplicate matches.
+    fn detect_with_denylist(&self, text: &str, matches: &mut Vec<PiiMatch>) {
         for pattern in &self.deny_patterns {
             for mat in pattern.find_iter(text) {
                 let matched_text = mat.as_str();
                 if self.is_allowed(matched_text) {
                     continue;
                 }
-
-                // Don't add duplicates
-                if matches
-                    .iter()
-                    .any(|m| m.start == mat.start() && m.end == mat.end())
-                {
+                if matches.iter().any(|m| m.start == mat.start() && m.end == mat.end()) {
                     continue;
                 }
 
                 matches.push(PiiMatch {
-                    pii_type: PiiType::ApiKey, // Default denylist type
+                    pii_type: PiiType::ApiKey,
                     text: matched_text.to_string(),
                     start: mat.start(),
                     end: mat.end(),
@@ -146,8 +147,6 @@ impl PiiEngine {
                 });
             }
         }
-
-        matches
     }
 
     /// Scan text for PII entities and return all matches above the confidence threshold.
@@ -172,7 +171,11 @@ impl PiiEngine {
 
         // Layer 2: Custom recognizers (safety layer — always runs)
         let custom_matches = self.detect_custom(text);
-        matches.extend(custom_matches);
+        for m in custom_matches {
+            if !self.is_allowed(&m.text) {
+                matches.push(m);
+            }
+        }
 
         // Layer 3: Resolve overlapping matches — keep highest confidence
         resolve_overlaps(&mut matches);
@@ -205,7 +208,11 @@ fn resolve_overlaps(matches: &mut Vec<PiiMatch>) {
     matches.sort_by(|a, b| {
         a.start
             .cmp(&b.start)
-            .then_with(|| b.confidence.partial_cmp(&a.confidence).unwrap())
+            .then_with(|| {
+                b.confidence
+                    .partial_cmp(&a.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     });
 
     let mut result = Vec::new();

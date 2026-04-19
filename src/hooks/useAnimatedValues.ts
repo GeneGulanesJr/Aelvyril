@@ -4,17 +4,16 @@ import { useEffect, useState } from "react";
  * Animated counter hook — smoothly interpolates from current to target values
  * using an ease-out cubic easing over the given duration.
  */
-export function useAnimatedValues(
-  targets: Record<string, number>,
+export function useAnimatedValues<T extends Record<string, number>>(
+  targets: T,
   duration = 600,
-) {
-  const [values, setValues] = useState<Record<string, number>>(
-    () =>
-      Object.fromEntries(Object.keys(targets).map((k) => [k, 0])),
-  );
+): T {
+  const [values, setValues] = useState<T>(() => {
+    return Object.fromEntries(Object.keys(targets).map((k) => [k, 0])) as T;
+  });
 
   useEffect(() => {
-    const start = { ...values };
+    const start: Record<string, number> = { ...values };
     const startTime = Date.now();
 
     const animate = () => {
@@ -22,14 +21,14 @@ export function useAnimatedValues(
       const progress = Math.min(elapsed / duration, 1);
       const ease = 1 - Math.pow(1 - progress, 3);
 
-      setValues(
-        Object.fromEntries(
+      setValues(() => {
+        return Object.fromEntries(
           Object.keys(targets).map((k) => [
             k,
-            Math.round(start[k] + (targets[k] - start[k]) * ease),
+            Math.round((start[k] ?? 0) + ((targets[k] ?? 0) - (start[k] ?? 0)) * ease),
           ]),
-        ),
-      );
+        ) as T;
+      });
 
       if (progress < 1) {
         requestAnimationFrame(animate);

@@ -1,11 +1,8 @@
 import { useState } from "react";
-import {
-  FileText,
-  Download,
-  Trash2,
-} from "lucide-react";
 import { useAuditLog } from "../hooks/useTauri";
 import { AuditEntryCard } from "../components/AuditEntryCard";
+import { logger } from "../utils/logger";
+import { AuditLogHeader, AuditLogEmpty, AuditLogLoading } from "./AuditLog.components";
 import styles from "./AuditLog.module.css";
 
 export function AuditLog() {
@@ -27,7 +24,7 @@ export function AuditLog() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      console.error("Export failed:", e);
+      logger.error("Export failed", { component: "AuditLog", error: String(e) });
     } finally {
       setExporting(false);
     }
@@ -38,62 +35,21 @@ export function AuditLog() {
   };
 
   if (loading) {
-    return (
-      <div className={styles.page}>
-        <div className={styles.header}>
-          <h1 className={styles.title}>Audit Log</h1>
-          <p className={styles.subtitle}>Loading entries…</p>
-        </div>
-      </div>
-    );
+    return <AuditLogLoading />;
   }
 
   return (
     <div className={styles.page}>
-      <div className={styles.header}>
-        <div>
-          <h1 className={styles.title}>Audit Log</h1>
-          <p className={styles.subtitle}>
-            Record of all intercepted and sanitized requests —{" "}
-            <strong>no raw PII values are ever stored</strong>
-          </p>
-        </div>
-        <div className={styles.actions}>
-          <button
-            className={styles.exportBtn}
-            onClick={() => handleExport("json")}
-            disabled={exporting || entries.length === 0}
-          >
-            <Download size={14} />
-            JSON
-          </button>
-          <button
-            className={styles.exportBtn}
-            onClick={() => handleExport("csv")}
-            disabled={exporting || entries.length === 0}
-          >
-            <Download size={14} />
-            CSV
-          </button>
-          {entries.length > 0 && (
-            <button className={styles.clearBtn} onClick={clearAll}>
-              <Trash2 size={14} />
-              Clear All
-            </button>
-          )}
-        </div>
-      </div>
+      <AuditLogHeader
+        entriesCount={entries.length}
+        exporting={exporting}
+        onExportJson={() => handleExport("json")}
+        onExportCsv={() => handleExport("csv")}
+        onClearAll={clearAll}
+      />
 
       {entries.length === 0 ? (
-        <div className={styles.empty}>
-          <FileText size={40} strokeWidth={1} />
-          <h3>No Entries Yet</h3>
-          <p>
-            Audit logs will appear here once requests flow through the gateway.
-            Each entry records what was detected and sanitized — without ever
-            storing original sensitive values.
-          </p>
-        </div>
+        <AuditLogEmpty />
       ) : (
         <div className={styles.entryList}>
           {entries.map((entry) => (

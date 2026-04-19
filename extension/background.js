@@ -28,10 +28,12 @@ function connect() {
     ws.onclose = () => {
       console.log("[Aelvyril] Disconnected from desktop app");
       chrome.runtime.sendMessage({ type: "connection_status", connected: false }).catch(() => {});
+      ws = null;
       scheduleReconnect();
     };
 
     ws.onerror = () => {
+      ws = null;
       scheduleReconnect();
     };
 
@@ -51,7 +53,8 @@ function connect() {
             .catch(() => {});
         }
       } catch (e) {
-        console.error("[Aelvyril] Failed to parse message:", e);
+        // Silently log parsing errors
+        console.warn("[Aelvyril] Failed to parse message");
       }
     };
   } catch (e) {
@@ -59,9 +62,24 @@ function connect() {
   }
 }
 
+const RECONNECT_DELAY_MS = 3000;
+
 function scheduleReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer);
-  reconnectTimer = setTimeout(connect, 3000);
+  reconnectTimer = setTimeout(connect, RECONNECT_DELAY_MS);
+}
+
+function clearTimers() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (ws) {
+    ws.onclose = null;
+    ws.onerror = null;
+    ws.close();
+    ws = null;
+  }
 }
 
 // ── Message Handling ──────────────────────────────────────────────────────

@@ -303,19 +303,18 @@ function KeyAuditTrail() {
   );
 }
 
-function getActionClass(action: string): string {
-  switch (action) {
-    case "Created":
-      return styles.actionCreated;
-    case "Accessed":
-      return styles.actionAccessed;
-    case "Rotated":
-      return styles.actionRotated;
-    case "Deleted":
-      return styles.actionDeleted;
-    case "AccessDenied":
-      return styles.actionDenied;
-    default:
-      return "";
-  }
+// Action style mapping for lower complexity
+const ACTION_STYLES: Record<string, string> = {
+  Created: "actionCreated",
+  Accessed: "actionAccessed",
+  Rotated: "actionRotated",
+  Deleted: "actionDeleted",
+  AccessDenied: "actionDenied",
+  Expired: "actionRotated", // Reuse Rotated style for Expired
+};
+
+function getActionClass(action: string | undefined): string {
+  if (!action) return "";
+  const styleName = ACTION_STYLES[action];
+  return styleName ? (styles as Record<string, string>)[styleName] ?? "" : "";
 }

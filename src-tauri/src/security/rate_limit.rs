@@ -95,15 +95,18 @@ impl RateLimiter {
 
     /// Check if a request from the given client is allowed.
     /// Call this BEFORE processing the request.
+    /// Atomically checks the concurrent limit and per-client rate limits.
     pub fn check(&self, client_id: &str) -> RateLimitResult {
         let now = Instant::now();
 
-        // Check concurrent limit first (global)
+        // Check concurrent limit first (global) — atomically reserve a slot
         {
-            let active = self.active_requests.lock();
+            let mut active = self.active_requests.lock();
             if *active >= self.config.max_concurrent_requests {
                 return RateLimitResult::DeniedConcurrentLimit;
             }
+            // Reserve the slot now so no other request can race past the limit
+            *active += 1;
         }
 
         let mut buckets = self.buckets.lock();
@@ -114,10 +117,16 @@ impl RateLimiter {
         bucket.prune(now);
 
         if bucket.minute_count() >= self.config.max_requests_per_minute as usize {
+            // Release the reserved concurrent slot since we're denying this request
+            let mut active = self.active_requests.lock();
+            *active = active.saturating_sub(1);
             return RateLimitResult::DeniedMinuteLimit;
         }
 
         if bucket.hour_count() >= self.config.max_requests_per_hour as usize {
+            // Release the reserved concurrent slot since we're denying this request
+            let mut active = self.active_requests.lock();
+            *active = active.saturating_sub(1);
             return RateLimitResult::DeniedHourLimit;
         }
 
@@ -135,6 +144,12 @@ impl RateLimiter {
         }
     }
 
+    /// Returns a handle to the active_requests counter for creating a release guard.
+    /// Used when `check()` has already reserved a slot atomically.
+    pub fn active_requests(&self) -> Arc<Mutex<u32>> {
+        self.active_requests.clone()
+    }
+
     /// Prune stale entries from all buckets (call periodically)
     pub fn prune_all(&self) {
         let now = Instant::now();
@@ -148,7 +163,7 @@ impl RateLimiter {
 
 /// RAII guard that releases the concurrent slot on drop
 pub struct ConcurrentGuard {
-    active_requests: Arc<Mutex<u32>>,
+    pub(crate) active_requests: Arc<Mutex<u32>>,
 }
 
 impl Drop for ConcurrentGuard {
@@ -223,8 +238,9 @@ mod tests {
         };
         let limiter = RateLimiter::new(config);
 
-        let _g1 = limiter.acquire_concurrent();
-        let _g2 = limiter.acquire_concurrent();
+        // check() atomically reserves a concurrent slot
+        assert_eq!(limiter.check("client-1"), RateLimitResult::Allowed);
+        assert_eq!(limiter.check("client-1"), RateLimitResult::Allowed);
 
         // Third concurrent should be denied
         assert_eq!(
@@ -232,8 +248,11 @@ mod tests {
             RateLimitResult::DeniedConcurrentLimit
         );
 
-        // Drop one guard
-        drop(_g2);
+        // Simulate releasing by manually decrementing
+        let active = limiter.active_requests();
+        let mut guard = active.lock();
+        *guard = guard.saturating_sub(1);
+        drop(guard);
 
         // Now allowed again
         assert_eq!(limiter.check("client-1"), RateLimitResult::Allowed);

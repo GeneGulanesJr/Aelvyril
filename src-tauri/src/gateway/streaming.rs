@@ -93,13 +93,26 @@ pub fn forward_streaming_request(
 /// Forward a streaming SSE request, yielding raw data strings instead of Events.
 /// This allows callers (e.g., server.rs) to rehydrate the data before wrapping
 /// it in an SSE Event.
+///
+/// For OpenAI providers, automatically injects `stream_options: { include_usage: true }`
+/// into the request body so the final SSE chunk contains actual token usage data.
 pub fn forward_streaming_request_raw(
     client: Client,
     url: String,
     api_key: String,
-    body: serde_json::Value,
+    mut body: serde_json::Value,
     is_anthropic: bool,
 ) -> impl Stream<Item = Result<String, Infallible>> {
+    // Inject stream_options for OpenAI to get usage data in the final chunk
+    if !is_anthropic {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert(
+                "stream_options".to_string(),
+                serde_json::json!({ "include_usage": true }),
+            );
+        }
+    }
+
     let mut req = client.post(&url);
 
     if is_anthropic {

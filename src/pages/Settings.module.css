@@ -151,6 +151,21 @@
   box-shadow: 0 0 0 4px rgba(245, 200, 66, 0.14);
 }
 
+.inputError {
+  border-color: var(--danger);
+}
+
+.inputError:focus {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 4px var(--danger-subtle);
+}
+
+.fieldError {
+  font-size: 12px;
+  color: var(--danger);
+  margin-top: 4px;
+}
+
 .input::placeholder {
   color: var(--text-muted);
 }

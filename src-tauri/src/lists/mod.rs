@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn test_add_and_list_deny() {
         let mgr = ListManager::new();
-        let rule = mgr
+        let _rule = mgr
             .add_deny(r"PROJECT_\w+", "Internal project codes")
             .unwrap();
         let rules = mgr.list_deny();

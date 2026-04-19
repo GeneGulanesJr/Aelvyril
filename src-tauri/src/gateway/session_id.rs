@@ -3,6 +3,9 @@
 use axum::http::HeaderMap;
 use sha2::{Digest, Sha256};
 
+/// Number of bytes to use from the SHA-256 hash for session ID fingerprints
+const SESSION_FINGERPRINT_BYTES: usize = 12;
+
 /// Derive a session ID from request headers.
 ///
 /// Strategy:
@@ -58,7 +61,7 @@ pub fn derive_session_id(headers: &HeaderMap) -> String {
 
     if has_identifying_info {
         let hash = hasher.finalize();
-        hex::encode(&hash[..12])
+        hex::encode(&hash[..SESSION_FINGERPRINT_BYTES])
     } else {
         // 3. No identifying headers — unique session per request
         uuid::Uuid::new_v4().to_string()

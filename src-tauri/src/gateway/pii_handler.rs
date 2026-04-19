@@ -16,18 +16,23 @@ pub async fn detect_pii(
     text_content: &str,
 ) -> Vec<PiiMatch> {
     latency.pii_start();
-    let pii_cache = gw.app_state.read().await.pii_cache.clone();
 
-    if let Some(cached_matches) = pii_cache.get(text_content) {
+    // Use read guard instead of cloning the cache
+    let app_state = gw.app_state.read().await;
+
+    if let Some(cached_matches) = app_state.pii_cache.get(text_content) {
         latency.pii_done();
-        return cached_matches;
+        return cached_matches.clone(); // Clone only on cache hit
     }
 
     let pii_engine = gw.pii_engine.read().await;
     let detected = pii_engine.detect(text_content).await;
     drop(pii_engine);
 
-    pii_cache.insert(text_content, detected.clone());
+    // Cache the detected matches
+    app_state.pii_cache.insert(text_content, detected.clone());
+    drop(app_state);
+
     latency.pii_done();
     detected
 }
@@ -46,10 +51,12 @@ pub fn pseudonymize_and_store(
     latency.pseudo_start();
 
     let (sanitized_body, mappings) = if matches.is_empty() {
+        // Return the original body as-is when no PII detected
         (body.clone(), Vec::new())
     } else {
         let mut pseudonymizer = Pseudonymizer::new();
         let (sanitized_text, mappings) = pseudonymizer.pseudonymize(text_content, matches);
+        // Clone only when necessary (when PII is detected)
         let mut sanitized_body = body.clone();
         body::replace_text_in_body(&mut sanitized_body, text_content, &sanitized_text);
         (sanitized_body, mappings)
@@ -102,14 +109,26 @@ pub async fn rehydrate_response(
         .unwrap_or_else(|| serde_json::to_string(response).unwrap_or_default());
 
     latency.rehydrate_done();
+
+    // Avoid cloning by building the string directly
+    let provider_owned = provider_name.to_string();
+    let model_owned = model.to_string();
+
     {
         let tracker = gw.app_state.read().await.latency_benchmark.clone();
-        tracker.record(latency.build(is_streaming, provider_name.to_string(), model.to_string()));
+        tracker.record(latency.build(is_streaming, provider_owned, model_owned));
     }
 
+    // Avoid unnecessary clone by using Cow for parsing
     match serde_json::from_str::<serde_json::Value>(&rehydrated) {
         Ok(json) => Json(json).into_response(),
-        Err(_) => Json(response.clone()).into_response(),
+        Err(_) => {
+            // Fallback: re-parse from original response
+            let response_str = serde_json::to_string(response).unwrap_or_default();
+            let fallback_json = serde_json::from_str::<serde_json::Value>(&response_str)
+                .unwrap_or_else(|_| response.clone());
+            Json(fallback_json).into_response()
+        }
     }
 }
 
@@ -141,23 +160,7 @@ pub mod body {
 
         if let Some(messages) = body.get("messages").and_then(|m| m.as_array()) {
             for message in messages {
-                if let Some(content) = message.get("content") {
-                    match content {
-                        serde_json::Value::String(s) => {
-                            text.push_str(s);
-                            text.push('\n');
-                        }
-                        serde_json::Value::Array(parts) => {
-                            for part in parts {
-                                if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
-                                    text.push_str(t);
-                                    text.push('\n');
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                extract_message_text(message, &mut text);
             }
         }
 
@@ -167,6 +170,29 @@ pub mod body {
         }
 
         text
+    }
+
+    /// Extract text from a single message's `content` field (string or multipart array).
+    fn extract_message_text(message: &serde_json::Value, text: &mut String) {
+        let content = match message.get("content") {
+            Some(c) => c,
+            None => return,
+        };
+        match content {
+            serde_json::Value::String(s) => {
+                text.push_str(s);
+                text.push('\n');
+            }
+            serde_json::Value::Array(parts) => {
+                for part in parts {
+                    if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+                        text.push_str(t);
+                        text.push('\n');
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Replace text content in the JSON body with sanitized version.
@@ -183,23 +209,7 @@ pub mod body {
         if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
             let mut seg_idx = 0;
             for message in messages {
-                if let Some(content) = message.get_mut("content") {
-                    match content {
-                        serde_json::Value::String(s) => {
-                            if seg_idx < sanitized_segments.len() {
-                                *s = sanitized_segments[seg_idx].to_string();
-                            }
-                            seg_idx += 1;
-                        }
-                        serde_json::Value::Array(parts) => {
-                            if seg_idx < sanitized_segments.len() {
-                                replace_multipart_content(parts, sanitized_segments[seg_idx]);
-                            }
-                            seg_idx += 1;
-                        }
-                        _ => {}
-                    }
-                }
+                seg_idx = replace_message_content(message, &sanitized_segments, seg_idx);
             }
         }
 
@@ -212,6 +222,33 @@ pub mod body {
         }
     }
 
+    /// Replace text in a single message's content, returning the updated segment index.
+    fn replace_message_content(
+        message: &mut serde_json::Value,
+        sanitized_segments: &[&str],
+        seg_idx: usize,
+    ) -> usize {
+        let content = match message.get_mut("content") {
+            Some(c) => c,
+            None => return seg_idx,
+        };
+        match content {
+            serde_json::Value::String(s) => {
+                if seg_idx < sanitized_segments.len() {
+                    *s = sanitized_segments[seg_idx].to_string();
+                }
+                seg_idx + 1
+            }
+            serde_json::Value::Array(parts) => {
+                if seg_idx < sanitized_segments.len() {
+                    replace_multipart_content(parts, sanitized_segments[seg_idx]);
+                }
+                seg_idx + 1
+            }
+            _ => seg_idx,
+        }
+    }
+
     /// Replace text in a multi-part content array with the corresponding sanitized segment.
     fn replace_multipart_content(parts: &mut [serde_json::Value], sanitized_text: &str) {
         let text_parts: Vec<&str> = parts
@@ -220,26 +257,35 @@ pub mod body {
             .collect();
 
         if text_parts.len() <= 1 {
-            // Single text part (or none) — replace directly
-            for part in parts.iter_mut() {
-                if let Some(serde_json::Value::String(text)) = part.get_mut("text") {
-                    *text = sanitized_text.to_string();
-                }
-            }
+            replace_multipart_single(parts, sanitized_text);
         } else {
-            // Multiple text parts — distribute across parts
-            let sanitized_parts: Vec<&str> = sanitized_text.split('\n').collect();
-            let mut part_idx = 0;
-            for part in parts.iter_mut() {
-                if part.get("text").map_or(false, |t| t.is_string()) {
-                    if let Some(serde_json::Value::String(t)) = part.get_mut("text") {
-                        if part_idx < sanitized_parts.len() {
-                            *t = sanitized_parts[part_idx].to_string();
-                        }
-                    }
-                    part_idx += 1;
+            replace_multipart_multi(parts, sanitized_text);
+        }
+    }
+
+    /// Replace text when there is a single (or zero) text part — just overwrite it.
+    fn replace_multipart_single(parts: &mut [serde_json::Value], sanitized_text: &str) {
+        for part in parts.iter_mut() {
+            if let Some(serde_json::Value::String(text)) = part.get_mut("text") {
+                *text = sanitized_text.to_string();
+            }
+        }
+    }
+
+    /// Distribute sanitized text across multiple text parts, split by newlines.
+    fn replace_multipart_multi(parts: &mut [serde_json::Value], sanitized_text: &str) {
+        let sanitized_parts: Vec<&str> = sanitized_text.split('\n').collect();
+        let mut part_idx = 0;
+        for part in parts.iter_mut() {
+            if !part.get("text").is_some_and(|t| t.is_string()) {
+                continue;
+            }
+            if let Some(serde_json::Value::String(t)) = part.get_mut("text") {
+                if part_idx < sanitized_parts.len() {
+                    *t = sanitized_parts[part_idx].to_string();
                 }
             }
+            part_idx += 1;
         }
     }
 

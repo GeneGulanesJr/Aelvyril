@@ -3,11 +3,14 @@
 use axum::http::StatusCode;
 use axum::response::{sse::Event, IntoResponse, Response, Sse};
 use futures::StreamExt;
+use std::sync::Arc;
 
 use crate::gateway::router;
 use crate::perf::benchmark::LatencyBuilder;
 use crate::pii::recognizers::PiiMatch;
 use crate::pseudonym::Pseudonymizer;
+use crate::token_usage::{pricing, TokenCountSource};
+use crate::token_usage::tracker::TokenUsageTracker;
 
 use super::pii_handler::body;
 use super::server::GatewayState;
@@ -32,6 +35,7 @@ pub async fn forward_and_rehydrate(
     latency: LatencyBuilder,
     is_streaming: bool,
 ) -> Result<Response, (LatencyBuilder, String)> {
+    let request_start = std::time::Instant::now();
     match crate::gateway::streaming::forward_request(
         &ctx.gw.http_client,
         ctx.upstream_url,
@@ -41,16 +45,34 @@ pub async fn forward_and_rehydrate(
     )
     .await
     {
-        Ok(response) => Ok(super::pii_handler::rehydrate_response(
-            ctx.gw,
-            latency,
-            ctx.session_id,
-            &response,
-            is_streaming,
-            ctx.provider_name,
-            ctx.model,
-        )
-        .await),
+        Ok(response) => {
+            // Record token usage from the raw API response before rehydration.
+            // The response<serde_json::Value> contains the `usage` field
+            // with prompt/completion token counts.
+            let duration_ms = request_start.elapsed().as_millis() as u64;
+            let tracker = ctx.gw.app_state.blocking_read().token_usage_tracker.clone();
+            let event = crate::token_usage::tracker::TokenUsageTracker::new_from_response(
+                ctx.session_id,
+                ctx.model,
+                "chat_completions",
+                duration_ms,
+                &response,
+                ctx.is_anthropic,
+                is_streaming,
+            );
+            tracker.record(event);
+
+            Ok(super::pii_handler::rehydrate_response(
+                ctx.gw,
+                latency,
+                ctx.session_id,
+                &response,
+                is_streaming,
+                ctx.provider_name,
+                ctx.model,
+            )
+            .await)
+        }
         Err(e) => Err((latency, e.to_string())),
     }
 }
@@ -58,10 +80,13 @@ pub async fn forward_and_rehydrate(
 // ── Streaming Handler ───────────────────────────────────────────────────────
 
 /// Handle the streaming response path: forward as SSE and rehydrate each chunk.
+/// After the stream completes, parses the final usage chunk (enabled via
+/// `stream_options.include_usage`) and records actual token counts to the
+/// tracker. Falls back to Estimated counts if no usage data arrives.
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_streaming(
     gw: GatewayState,
-    mut latency: LatencyBuilder,
+    latency: LatencyBuilder,
     session_id: String,
     upstream_url: String,
     api_key: String,
@@ -70,8 +95,9 @@ pub async fn handle_streaming(
     provider_name: &str,
     model: &str,
 ) -> Response {
+    let request_start = std::time::Instant::now();
     let session_id_for_rehydrate = session_id.clone();
-    let app_state_for_rehydrate = gw.app_state.clone();
+    let app_state_for_rehydrate = std::sync::Arc::clone(&gw.app_state);
 
     let stream = crate::gateway::streaming::forward_streaming_request_raw(
         gw.http_client.clone(),
@@ -81,17 +107,72 @@ pub async fn handle_streaming(
         is_anthropic,
     );
 
-    // Record latency for streaming
-    latency.upstream_done();
-    latency.rehydrate_start();
-    latency.rehydrate_done();
-    {
-        let tracker = gw.app_state.read().await.latency_benchmark.clone();
-        tracker.record(latency.build(true, provider_name.to_string(), model.to_string()));
-    }
+    record_streaming_latency(&gw, latency, provider_name, model).await;
 
-    // Rehydrate SSE events in the stream
-    let rehydrated_stream = async_stream::stream! {
+    // Capture the last SSE chunk that contains usage data for token recording.
+    let last_usage_chunk: Arc<parking_lot::Mutex<Option<String>>> = Arc::new(parking_lot::Mutex::new(None));
+    let last_usage_chunk_clone = Arc::clone(&last_usage_chunk);
+
+    // Prepare data for post-stream token recording
+    let tracker_for_post = gw.app_state.read().await.token_usage_tracker.clone();
+    let session_id_for_post = session_id.clone();
+    let model_for_post = model.to_string();
+
+    let rehydrated_stream = build_rehydrated_stream(
+        stream,
+        app_state_for_rehydrate,
+        session_id_for_rehydrate,
+        last_usage_chunk_clone,
+        is_anthropic,
+        request_start,
+        tracker_for_post,
+        session_id_for_post,
+        model_for_post,
+    );
+
+    Sse::new(Box::pin(rehydrated_stream))
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response()
+}
+
+/// Record latency benchmark for a streaming request.
+async fn record_streaming_latency(
+    gw: &GatewayState,
+    latency: LatencyBuilder,
+    provider_name: &str,
+    model: &str,
+) {
+    let tracker = gw.app_state.read().await.latency_benchmark.clone();
+    tracker.record(latency.build(true, provider_name.to_string(), model.to_string()));
+}
+
+/// Check if an SSE chunk contains usage/token data.
+fn is_usage_chunk(data: &str, is_anthropic: bool) -> bool {
+    if data == "[DONE]" {
+        return false;
+    }
+    if is_anthropic {
+        data.contains("\"message_stop\"") || data.contains("\"usage\"")
+    } else {
+        data.contains("\"usage\"")
+    }
+}
+
+/// Build the rehydrated SSE stream that tracks the last usage chunk and
+/// records a token-usage event after the stream completes.
+#[allow(clippy::too_many_arguments)]
+fn build_rehydrated_stream(
+    stream: impl futures::Stream<Item = Result<String, std::convert::Infallible>> + Send + 'static,
+    app_state: std::sync::Arc<tokio::sync::RwLock<crate::AppState>>,
+    session_id: String,
+    last_usage_chunk: Arc<parking_lot::Mutex<Option<String>>>,
+    is_anthropic: bool,
+    request_start: std::time::Instant,
+    tracker: Arc<TokenUsageTracker>,
+    session_id_for_post: String,
+    model_for_post: String,
+) -> impl futures::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static {
+    async_stream::stream! {
         futures::pin_mut!(stream);
         while let Some(result) = stream.next().await {
             let data_str = result.unwrap_or_default();
@@ -99,19 +180,67 @@ pub async fn handle_streaming(
                 continue;
             }
 
+            if is_usage_chunk(&data_str, is_anthropic) {
+                let mut last = last_usage_chunk.lock();
+                *last = Some(data_str.clone());
+            }
+
             let rehydrated_chunk = super::pii_handler::rehydrate_sse_chunk(
-                &app_state_for_rehydrate,
-                &session_id_for_rehydrate,
+                &app_state,
+                &session_id,
                 data_str,
             ).await;
 
             yield Ok::<_, std::convert::Infallible>(Event::default().data(rehydrated_chunk));
         }
-    };
 
-    Sse::new(Box::pin(rehydrated_stream))
-        .keep_alive(axum::response::sse::KeepAlive::default())
-        .into_response()
+        // Post-stream: record token usage from the captured usage chunk
+        let duration_ms = request_start.elapsed().as_millis() as u64;
+        let final_usage = last_usage_chunk.lock().take();
+
+        let event = build_post_stream_event(
+            final_usage.as_deref(),
+            &model_for_post,
+            &session_id_for_post,
+            is_anthropic,
+            duration_ms,
+        );
+        tracker.record(event);
+    }
+}
+
+/// Build a `TokenUsageEvent` from the final usage chunk captured during streaming.
+fn build_post_stream_event(
+    final_usage: Option<&str>,
+    model: &str,
+    session_id: &str,
+    is_anthropic: bool,
+    duration_ms: u64,
+) -> crate::token_usage::TokenUsageEvent {
+    let (tokens_in_system, tokens_in_user, tokens_in_cached, tokens_out, token_count_source) =
+        match final_usage {
+            Some(chunk) => extract_streaming_usage(chunk, model, is_anthropic),
+            None => {
+                (pricing::estimate_system_tokens(model), 0, 0, 0, TokenCountSource::Estimated)
+            }
+        };
+
+    crate::token_usage::tracker::TokenUsageTracker::build_event(
+        session_id,
+        "chat_completions",
+        model,
+        tokens_in_system,
+        tokens_in_user,
+        tokens_in_cached,
+        tokens_out,
+        0,  // tokens_truncated
+        true,  // was_streamed
+        false, // was_partial
+        duration_ms,
+        tokens_out > 0, // success
+        token_count_source,
+        0,  // retry_attempt
+    )
 }
 
 // ── Failover ────────────────────────────────────────────────────────────────
@@ -209,4 +338,158 @@ fn bad_gateway_response(error: &str) -> Response {
         axum::Json(serde_json::json!({ "error": error })),
     )
         .into_response()
+}
+
+/// Extract token counts from a streaming SSE usage chunk.
+///
+/// OpenAI sends a final chunk with `usage` when `stream_options.include_usage`
+/// is set. Anthropic includes usage in the `message_stop` event.
+fn extract_streaming_usage(
+    chunk: &str,
+    model: &str,
+    is_anthropic: bool,
+) -> (u64, u64, u64, u64, TokenCountSource) {
+    // SSE chunks are prefixed with "data: " — strip that and try to parse as JSON.
+    // The chunk may contain multiple JSON objects separated by newlines.
+    // We try each line until we find one with a `usage` field.
+    for line in chunk.lines() {
+        let line = line.strip_prefix("data: ").unwrap_or(line).trim();
+        if line.is_empty() || line == "[DONE]" {
+            continue;
+        }
+
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
+            let usage = if is_anthropic {
+                parsed.get("usage").or_else(|| parsed.get("delta").and_then(|d| d.get("usage")))
+            } else {
+                parsed.get("usage")
+            };
+
+            if let Some(usage_data) = usage {
+                if let Some(result) = extract_usage_tokens(usage_data, model, is_anthropic) {
+                    return result;
+                }
+            }
+        }
+    }
+
+    // No usable usage data found — fall back to estimated
+    (pricing::estimate_system_tokens(model), 0, 0, 0, TokenCountSource::Estimated)
+}
+
+/// Extract token counts from a parsed `usage` JSON object.
+/// Returns `Some((sys, user, cached, out, source))` if the data is usable, `None` otherwise.
+fn extract_usage_tokens(
+    usage: &serde_json::Value,
+    model: &str,
+    is_anthropic: bool,
+) -> Option<(u64, u64, u64, u64, TokenCountSource)> {
+    if is_anthropic {
+        extract_anthropic_usage_tokens(usage, model)
+    } else {
+        extract_openai_usage_tokens(usage, model)
+    }
+}
+
+/// Parse Anthropic-style `usage` fields and compute token breakdown.
+fn extract_anthropic_usage_tokens(
+    usage: &serde_json::Value,
+    model: &str,
+) -> Option<(u64, u64, u64, u64, TokenCountSource)> {
+    let input_tokens = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+    let output_tokens = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+    let cache_read = usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    if input_tokens == 0 && output_tokens == 0 {
+        return None;
+    }
+
+    let sys = pricing::estimate_system_tokens(model);
+    let user = if input_tokens > sys { input_tokens - sys } else { input_tokens };
+    Some((sys, user, cache_read, output_tokens, TokenCountSource::ApiReported))
+}
+
+/// Parse OpenAI-style `usage` fields and compute token breakdown.
+fn extract_openai_usage_tokens(
+    usage: &serde_json::Value,
+    model: &str,
+) -> Option<(u64, u64, u64, u64, TokenCountSource)> {
+    let prompt_tokens = usage.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+    let completion_tokens = usage.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+    let cached_tokens = usage
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    if prompt_tokens == 0 && completion_tokens == 0 {
+        return None;
+    }
+
+    let sys = pricing::estimate_system_tokens(model);
+    let user = if prompt_tokens > sys { prompt_tokens - sys } else { prompt_tokens };
+    Some((sys, user, cached_tokens, completion_tokens, TokenCountSource::ApiReported))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_streaming_usage_openai() {
+        let chunk = r#"data: {"id":"chatcmpl-123","object":"chat.completion.chunk","usage":{"prompt_tokens":1500,"completion_tokens":200,"total_tokens":1700}}"#;
+        let (sys, _user, cached, out, source) = extract_streaming_usage(chunk, "gpt-4o", false);
+        assert_eq!(source, TokenCountSource::ApiReported);
+        assert!(sys > 0, "system tokens should be estimated: {}", sys);
+        assert_eq!(out, 200);
+        assert_eq!(cached, 0);
+    }
+
+    #[test]
+    fn test_extract_streaming_usage_openai_with_cache() {
+        let chunk = r#"data: {"id":"chatcmpl-123","object":"chat.completion.chunk","usage":{"prompt_tokens":1500,"completion_tokens":200,"total_tokens":1700,"prompt_tokens_details":{"cached_tokens":500}}}"#;
+        let (_sys, _user, cached, out, source) = extract_streaming_usage(chunk, "gpt-4o", false);
+        assert_eq!(source, TokenCountSource::ApiReported);
+        assert_eq!(out, 200);
+        assert_eq!(cached, 500);
+    }
+
+    #[test]
+    fn test_extract_streaming_usage_anthropic() {
+        let chunk = r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":150}}"#;
+        let (sys, _user, _cached, out, source) = extract_streaming_usage(chunk, "claude-3-5-sonnet", true);
+        assert_eq!(source, TokenCountSource::ApiReported);
+        assert!(sys > 0);
+        assert_eq!(out, 150);
+    }
+
+    #[test]
+    fn test_extract_streaming_usage_no_data() {
+        // Chunk without usage — should fall back to estimated
+        let chunk = r#"data: {"id":"chatcmpl-123","choices":[{"delta":{"content":"hello"}}]}"#;
+        let (sys, user, _cached, out, source) = extract_streaming_usage(chunk, "gpt-4o", false);
+        assert_eq!(source, TokenCountSource::Estimated);
+        assert!(sys > 0);
+        assert_eq!(user, 0);
+        assert_eq!(out, 0);
+    }
+
+    #[test]
+    fn test_extract_streaming_usage_multiline() {
+        // Multiple lines in one chunk, usage is on the last line
+        let chunk = r#"data: {"id":"chatcmpl-123","choices":[{"delta":{"content":"hi"}}]}
+data: {"id":"chatcmpl-123","usage":{"prompt_tokens":1000,"completion_tokens":50,"total_tokens":1050}}"#;
+        let (_sys, _user, _cached, out, source) = extract_streaming_usage(chunk, "gpt-4o", false);
+        assert_eq!(source, TokenCountSource::ApiReported);
+        assert_eq!(out, 50);
+    }
+
+    #[test]
+    fn test_extract_streaming_usage_done_marker() {
+        // [DONE] should be skipped, but earlier data with usage should be found
+        let chunk = r#"data: {"usage":{"prompt_tokens":800,"completion_tokens":100}}"#;
+        let (_sys, _user, _cached, out, source) = extract_streaming_usage(chunk, "gpt-4o", false);
+        assert_eq!(source, TokenCountSource::ApiReported);
+        assert_eq!(out, 100);
+    }
 }

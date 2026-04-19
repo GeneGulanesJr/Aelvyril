@@ -4,8 +4,11 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json};
 use sha2::{Digest, Sha256};
 
+/// Number of hex characters to use from the SHA-256 hash for client IDs
+const CLIENT_ID_HEX_LENGTH: usize = 16;
+
 use crate::gateway::router;
-use crate::security::rate_limit::RateLimitResult;
+use crate::security::rate_limit::{ConcurrentGuard, RateLimitResult};
 use crate::AppState;
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -29,7 +32,7 @@ pub fn derive_client_id(headers: &HeaderMap) -> String {
     let mut hasher = Sha256::new();
     hasher.update(auth.as_bytes());
     let hash = hasher.finalize();
-    hex::encode(hash)[..16].to_string()
+    hex::encode(hash)[..CLIENT_ID_HEX_LENGTH].to_string()
 }
 
 // ── Request Authentication ──────────────────────────────────────────────────
@@ -142,7 +145,12 @@ pub async fn rate_limit_middleware(
 
     match result {
         RateLimitResult::Allowed => {
-            let _guard = gw.app_state.read().await.rate_limiter.acquire_concurrent();
+            // check() already atomically reserved a concurrent slot;
+            // ConcurrentGuard will release it when the request completes.
+            let _guard =
+                ConcurrentGuard {
+                    active_requests: gw.app_state.read().await.rate_limiter.active_requests(),
+                };
             next.run(request).await
         }
         RateLimitResult::DeniedMinuteLimit => rate_limit_response("too many requests per minute"),
@@ -154,6 +162,7 @@ pub async fn rate_limit_middleware(
 }
 
 /// Authenticate a passthrough request. Returns the gateway key, or an error response.
+#[allow(clippy::result_large_err)]
 pub fn authenticate_passthrough<'a>(
     gateway_key: Option<&'a String>,
     headers: &HeaderMap,

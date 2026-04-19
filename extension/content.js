@@ -26,6 +26,7 @@ const AI_TOOL_HOSTNAMES = [
 
 let isAiTool = false;
 let bannerElement = null;
+let bannerAutoDismissTimer = null;
 let pendingRequests = new Map();
 
 // ── Init ───────────────────────────────────────────────────────────────────
@@ -54,6 +55,9 @@ function handlePaste(event) {
 
   const requestId = crypto.randomUUID();
   pendingRequests.set(requestId, { content: clipboardData });
+
+  // Auto-cleanup if no response arrives within 15 seconds
+  setTimeout(() => pendingRequests.delete(requestId), 15000);
 
   // Send to background for scanning
   chrome.runtime.sendMessage(
@@ -98,6 +102,13 @@ function showWarningBanner(entities, sanitizedContent) {
     .map(([type, count]) => `${type} (${count})`)
     .join(", ");
 
+  // Escape HTML to prevent XSS from entity names
+  const escapedList = entityList
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
   bannerElement = document.createElement("div");
   bannerElement.id = "aelvyril-banner";
   bannerElement.innerHTML = `
@@ -105,7 +116,7 @@ function showWarningBanner(entities, sanitizedContent) {
       <div class="aelvyril-banner-icon">🛡️</div>
       <div class="aelvyril-banner-text">
         <strong>Aelvyril detected sensitive content:</strong>
-        <span>${entityList}</span>
+        <span>${escapedList}</span>
       </div>
       <div class="aelvyril-banner-actions">
         ${sanitizedContent ? '<button class="aelvyril-btn aelvyril-btn-primary" data-action="sanitize">Sanitize</button>' : ''}
@@ -138,18 +149,34 @@ function showWarningBanner(entities, sanitizedContent) {
   document.body.appendChild(bannerElement);
 
   // Auto-dismiss after 30 seconds
-  setTimeout(() => removeBanner(), 30000);
+  if (bannerAutoDismissTimer) clearTimeout(bannerAutoDismissTimer);
+  bannerAutoDismissTimer = setTimeout(() => removeBanner(), 30000);
 }
 
+const NOTIFICATION_DURATION_MS = 3000;
+let notificationTimer = null;
+
 function showNotification(text) {
+  // Clear any existing notification timer
+  if (notificationTimer) clearTimeout(notificationTimer);
+  const existing = document.getElementById("aelvyril-notification");
+  if (existing) existing.remove();
+
   const notif = document.createElement("div");
   notif.id = "aelvyril-notification";
   notif.textContent = text;
   document.body.appendChild(notif);
-  setTimeout(() => notif.remove(), 3000);
+  notificationTimer = setTimeout(() => {
+    notif.remove();
+    notificationTimer = null;
+  }, NOTIFICATION_DURATION_MS);
 }
 
 function removeBanner() {
+  if (bannerAutoDismissTimer) {
+    clearTimeout(bannerAutoDismissTimer);
+    bannerAutoDismissTimer = null;
+  }
   const existing = document.getElementById("aelvyril-banner");
   if (existing) existing.remove();
   bannerElement = null;

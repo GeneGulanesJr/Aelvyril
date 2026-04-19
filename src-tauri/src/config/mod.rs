@@ -1,7 +1,19 @@
 use serde::{Deserialize, Serialize};
 
+const GATEWAY_BIND_ADDR_ENV: &str = "AELVYRIL_GATEWAY_BIND";
+const GATEWAY_PORT_ENV: &str = "AELVYRIL_GATEWAY_PORT";
+
+/// Default gateway port (fallback when AELVYRIL_GATEWAY_PORT is not set)
+const DEFAULT_GATEWAY_PORT: u16 = 4242;
+
+/// Default session timeout in minutes
+const DEFAULT_SESSION_TIMEOUT_MINUTES: u32 = 30;
+
+pub mod store;
+
 /// Persistent app settings (saved to disk)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     /// Launch at system startup
     pub launch_at_login: bool,
@@ -15,21 +27,38 @@ pub struct AppSettings {
     pub session_timeout_minutes: u32,
     /// Gateway port
     pub gateway_port: u16,
+    /// Gateway bind address (can be configured via AELVYRIL_GATEWAY_BIND env var)
+    pub gateway_bind_address: String,
     /// Enable individual PII recognizers
     pub enabled_recognizers: Vec<String>,
     /// Detection confidence threshold (0.0–1.0)
     pub confidence_threshold: f64,
+    /// Rate limit: max requests per minute (per client)
+    pub rate_limit_max_requests_per_minute: u32,
+    /// Rate limit: max requests per hour (per client)
+    pub rate_limit_max_requests_per_hour: u32,
+    /// Rate limit: max concurrent requests (global)
+    pub rate_limit_max_concurrent_requests: u32,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
+        let gateway_bind_address =
+            std::env::var(GATEWAY_BIND_ADDR_ENV).unwrap_or_else(|_| "127.0.0.1".to_string());
+        let gateway_port: u16 = std::env::var(GATEWAY_PORT_ENV)
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(DEFAULT_GATEWAY_PORT);
+        let rate_limit_defaults = crate::security::rate_limit::RateLimitConfig::default();
+
         Self {
             launch_at_login: false,
             minimize_to_tray: true,
             show_notifications: true,
             clipboard_monitoring: false,
-            session_timeout_minutes: 30,
-            gateway_port: 4242,
+            session_timeout_minutes: DEFAULT_SESSION_TIMEOUT_MINUTES,
+            gateway_port,
+            gateway_bind_address,
             enabled_recognizers: vec![
                 "email".into(),
                 "phone".into(),
@@ -41,6 +70,9 @@ impl Default for AppSettings {
                 "iban".into(),
             ],
             confidence_threshold: 0.5,
+            rate_limit_max_requests_per_minute: rate_limit_defaults.max_requests_per_minute,
+            rate_limit_max_requests_per_hour: rate_limit_defaults.max_requests_per_hour,
+            rate_limit_max_concurrent_requests: rate_limit_defaults.max_concurrent_requests,
         }
     }
 }

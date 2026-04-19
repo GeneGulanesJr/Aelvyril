@@ -3,6 +3,22 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
+
+// ── Audit Table Column Indices ──
+
+/// Column indices for the audit_entries SELECT query.
+/// Must stay in sync with the column order in `get_all()` and `get_stats()`.
+mod col {
+    pub const ID: usize = 0;
+    pub const TIMESTAMP: usize = 1;
+    pub const SESSION_ID: usize = 2;
+    pub const PROVIDER: usize = 3;
+    pub const MODEL: usize = 4;
+    pub const ENTITY_TYPES: usize = 5;
+    pub const TOTAL_ENTITIES: usize = 6;
+    pub const STREAMING: usize = 7;
+    pub const TOKENS_GENERATED: usize = 8;
+}
 use rusqlite::{params, Connection};
 use serde_json;
 
@@ -77,15 +93,15 @@ impl AuditStore {
 
         let entries = stmt
             .query_map([], |row| {
-                let id: String = row.get(0)?;
-                let timestamp_str: String = row.get(1)?;
-                let session_id: String = row.get(2)?;
-                let provider: String = row.get(3)?;
-                let model: String = row.get(4)?;
-                let entity_types_str: String = row.get(5)?;
-                let total_entities: i32 = row.get(6)?;
-                let streaming: i32 = row.get(7)?;
-                let tokens_str: String = row.get(8)?;
+                let id: String = row.get(col::ID)?;
+                let timestamp_str: String = row.get(col::TIMESTAMP)?;
+                let session_id: String = row.get(col::SESSION_ID)?;
+                let provider: String = row.get(col::PROVIDER)?;
+                let model: String = row.get(col::MODEL)?;
+                let entity_types_str: String = row.get(col::ENTITY_TYPES)?;
+                let total_entities: i32 = row.get(col::TOTAL_ENTITIES)?;
+                let streaming: i32 = row.get(col::STREAMING)?;
+                let tokens_str: String = row.get(col::TOKENS_GENERATED)?;
 
                 let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)
                     .map(|dt| dt.to_utc())

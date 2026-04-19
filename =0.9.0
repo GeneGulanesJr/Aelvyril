@@ -1,0 +1,3 @@
+usage: jdocmunch-mcp [-h]
+                     {serve,init,claude-md,index-file,index-local,hook-pretooluse,hook-posttooluse,hook-precompact} ...
+jdocmunch-mcp: error: unrecognized arguments: --version

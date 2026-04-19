@@ -14,15 +14,14 @@ Endpoints:
     GET  /supported  — List supported entity types
 """
 
-import json
+from __future__ import annotations
+
 import logging
 import os
-import sys
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask import Flask, Response, request, jsonify
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,14 +30,64 @@ logging.basicConfig(
 logger = logging.getLogger("presidio-service")
 
 app = Flask(__name__)
-CORS(app)
+
+# ── HTTP Status Code Constants ─────────────────────────────────────────────────
+# Named constants replace magic numbers so every response is self-documenting.
+
+HTTP_OK = 200
+HTTP_BAD_REQUEST = 400
+HTTP_INTERNAL_ERROR = 500
+HTTP_SERVICE_UNAVAILABLE = 503
+
+
+# ── Structured Error Types ──────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ServiceError:
+    """Structured error payload returned by all error responses."""
+
+    error: str
+    detail: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        d: Dict[str, Any] = {"error": self.error}
+        if self.detail is not None:
+            d["detail"] = self.detail
+        return d
+
+
+# ── Analyzer Result Type ────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class RecognizerMatch:
+    """A single PII detection result returned to the caller."""
+
+    entity_type: str
+    start: int
+    end: int
+    score: float
+    recognizer_name: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "entity_type": self.entity_type,
+            "start": self.start,
+            "end": self.end,
+            "score": self.score,
+            "analysis_metadata": {
+                "recognizer_name": self.recognizer_name,
+            },
+        }
+
 
 # ── Presidio setup ─────────────────────────────────────────────────────────────
 
-_analyzer = None
+_analyzer: Optional[object] = None
 _analyzer_error: Optional[str] = None
 
-SUPPORTED_ENTITIES = [
+SUPPORTED_ENTITIES: List[str] = [
     "PERSON",
     "EMAIL_ADDRESS",
     "PHONE_NUMBER",
@@ -61,8 +110,14 @@ SUPPORTED_ENTITIES = [
 ]
 
 
-def get_analyzer():
-    """Lazy-load the Presidio analyzer (supports graceful fallback)."""
+def get_analyzer() -> Tuple[Optional[object], Optional[str]]:
+    """Lazy-load the Presidio analyzer (supports graceful fallback).
+
+    Returns:
+        A tuple of (analyzer_instance_or_None, error_string_or_None).
+        On success the analyzer is cached; on failure the error is cached
+        so we don't retry on every request.
+    """
     global _analyzer, _analyzer_error
 
     if _analyzer is not None or _analyzer_error is not None:
@@ -72,45 +127,84 @@ def get_analyzer():
         from presidio_analyzer import AnalyzerEngine
 
         _analyzer = AnalyzerEngine()
-        all_entities = ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "US_SSN",
-                        "CREDIT_CARD", "IP_ADDRESS", "IBAN_CODE", "URL",
-                        "DOMAIN_NAME", "LOCATION", "DATE_TIME", "CRYPTO",
-                        "API_KEY", "MEDICAL_LICENSE", "NRP", "US_PASSPORT",
-                        "UK_NHS", "US_BANK_NUMBER", "US_ZIP_CODE"]
-        recs = _analyzer.registry.get_recognizers(language="en", entities=all_entities)
+        recs = _analyzer.registry.get_recognizers(
+            language="en", entities=SUPPORTED_ENTITIES
+        )
         logger.info(
             "Presidio AnalyzerEngine initialized — %d recognizers loaded",
             len(recs),
         )
         return _analyzer, None
-    except Exception as e:
-        _analyzer_error = str(e)
-        logger.error("Failed to initialize Presidio: %s", e)
+    except Exception as exc:
+        _analyzer_error = str(exc)
+        logger.error("Failed to initialize Presidio: %s", exc)
         logger.error("The service will start but /analyze will return errors.")
         logger.error("Install dependencies: pip install presidio-analyzer")
         return None, _analyzer_error
+
+
+# ── Request / Response Helpers ──────────────────────────────────────────────────
+
+
+def _parse_analyze_request(data: Dict[str, Any]) -> Tuple[Optional[ServiceError], str, str, Optional[List[str]], float]:
+    """Validate and extract fields from an /analyze request body.
+
+    Returns:
+        (error_or_None, text, language, entities, score_threshold)
+    """
+    text: str = data.get("text", "")
+    if not text:
+        # Empty text is not an error — just returns zero results.
+        return None, "", "en", None, 0.5
+
+    language: str = data.get("language", "en")
+    entities: Optional[List[str]] = data.get("entities") or None  # None => all
+    score_threshold: float = data.get("score_threshold", 0.5)
+    return None, text, language, entities, score_threshold
+
+
+def _presidio_results_to_matches(results: list) -> List[RecognizerMatch]:
+    """Convert Presidio AnalyzerResults into our serialisable ``RecognizerMatch`` list."""
+    matches: List[RecognizerMatch] = []
+    for r in results:
+        recognizer_name: Optional[str] = None
+        if hasattr(r, "recognition_metadata") and r.recognition_metadata:
+            recognizer_name = getattr(r.recognition_metadata, "recognizer_name", None)
+        matches.append(
+            RecognizerMatch(
+                entity_type=r.entity_type,
+                start=r.start,
+                end=r.end,
+                score=r.score,
+                recognizer_name=recognizer_name,
+            )
+        )
+    return matches
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 
 @app.route("/health", methods=["GET"])
-def health():
+def health() -> Tuple[Response, int]:
     """Health check — returns analyzer status."""
     analyzer, error = get_analyzer()
     if analyzer is not None:
-        return jsonify({"status": "healthy", "presidio": True}), 200
-    return jsonify({"status": "degraded", "presidio": False, "error": error}), 503
+        return jsonify({"status": "healthy", "presidio": True}), HTTP_OK
+    return (
+        jsonify({"status": "degraded", "presidio": False, "error": error}),
+        HTTP_SERVICE_UNAVAILABLE,
+    )
 
 
 @app.route("/supported", methods=["GET"])
-def supported():
+def supported() -> Tuple[Response, int]:
     """List supported entity types."""
-    return jsonify({"entities": SUPPORTED_ENTITIES})
+    return jsonify({"entities": SUPPORTED_ENTITIES}), HTTP_OK
 
 
 @app.route("/analyze", methods=["POST"])
-def analyze():
+def analyze() -> Tuple[Response, int]:
     """Analyze text for PII entities.
 
     Request body:
@@ -129,36 +223,36 @@ def analyze():
                     "start": 0,
                     "end": 20,
                     "score": 0.85,
-                    "analysis_metadata": {}
+                    "analysis_metadata": {"recognizer_name": "..."}
                 }
             ]
         }
     """
+    # ── 1. Analyzer availability ────────────────────────────────────────────
     analyzer, error = get_analyzer()
     if analyzer is None:
         return (
-            jsonify(
-                {
-                    "error": "Presidio analyzer not initialized",
-                    "detail": error,
-                }
-            ),
-            503,
+            jsonify(ServiceError("Presidio analyzer not initialized", detail=error).to_dict()),
+            HTTP_SERVICE_UNAVAILABLE,
         )
 
+    # ── 2. Parse request ────────────────────────────────────────────────────
     try:
         data = request.get_json(force=True)
     except Exception:
-        return jsonify({"error": "Invalid JSON body"}), 400
+        return (
+            jsonify(ServiceError("Invalid JSON body").to_dict()),
+            HTTP_BAD_REQUEST,
+        )
 
-    text = data.get("text", "")
+    parse_err, text, language, entities, score_threshold = _parse_analyze_request(data)
+    if parse_err is not None:
+        return jsonify(parse_err.to_dict()), HTTP_BAD_REQUEST
+
     if not text:
-        return jsonify({"result": []})
+        return jsonify({"result": []}), HTTP_OK
 
-    language = data.get("language", "en")
-    entities = data.get("entities") or None  # None = all
-    score_threshold = data.get("score_threshold", 0.5)
-
+    # ── 3. Run analysis ─────────────────────────────────────────────────────
     try:
         results = analyzer.analyze(
             text=text,
@@ -166,39 +260,30 @@ def analyze():
             entities=entities,
             score_threshold=score_threshold,
         )
+        matches = _presidio_results_to_matches(results)
+        return jsonify({"result": [m.to_dict() for m in matches]}), HTTP_OK
 
-        # Convert to serializable format
-        response_results = []
-        for r in results:
-            recognizer_name = None
-            if hasattr(r, 'recognition_metadata') and r.recognition_metadata:
-                recognizer_name = getattr(r.recognition_metadata, 'recognizer_name', None)
-            response_results.append(
-                {
-                    "entity_type": r.entity_type,
-                    "start": r.start,
-                    "end": r.end,
-                    "score": r.score,
-                    "analysis_metadata": {
-                        "recognizer_name": recognizer_name,
-                    },
-                }
-            )
-
-        return jsonify({"result": response_results})
-
-    except Exception as e:
-        logger.error("Analysis failed: %s", e, exc_info=True)
-        return jsonify({"error": "Analysis failed", "detail": str(e)}), 500
+    except Exception as exc:
+        logger.error("Analysis failed: %s", exc, exc_info=True)
+        return (
+            jsonify(ServiceError("Analysis failed", detail=str(exc)).to_dict()),
+            HTTP_INTERNAL_ERROR,
+        )
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 
 if __name__ == "__main__":
-    host = os.environ.get("PRESIDIO_HOST", "127.0.0.1")
-    port = int(os.environ.get("PRESIDIO_PORT", "3000"))
-    debug = os.environ.get("PRESIDIO_DEBUG", "false").lower() == "true"
+    host: str = os.environ.get(
+        "AELVYRIL_PRESIDIO_HOST", os.environ.get("PRESIDIO_HOST", "127.0.0.1")
+    )
+    port: int = int(
+        os.environ.get(
+            "AELVYRIL_PRESIDIO_PORT", os.environ.get("PRESIDIO_PORT", "3000")
+        )
+    )
+    debug: bool = os.environ.get("PRESIDIO_DEBUG", "false").lower() == "true"
 
     # Pre-warm the analyzer
     get_analyzer()

@@ -55,7 +55,6 @@ pub struct Recognizer {
 }
 
 // ── Compiled regex patterns ─────────────────────────────────────────────────
-
 static EMAIL_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap());
 

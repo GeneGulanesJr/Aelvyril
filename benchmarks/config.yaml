@@ -1,0 +1,155 @@
+# Aelvyril PII Detection Benchmark Configuration
+#
+# All settings for reproducible benchmark runs.
+
+# ── General ─────────────────────────────────────────────────────────────────────
+seed: 42                    # Random seed for all generators
+num_samples: 1000           # Default number of synthetic samples
+iou_threshold: 0.5          # IoU threshold for span matching
+
+# ── Service endpoints ────────────────────────────────────────────────────────────
+service_url: "http://localhost:3000/analyze"
+health_url: "http://localhost:3000/health"
+
+# ── Metrics ──────────────────────────────────────────────────────────────────────
+primary_metric: "f2"        # F₂ (β=2, recall-weighted)
+beta: 2.0
+bootstrap_iterations: 10000 # For statistical significance testing (Phase 2)
+
+# ── Entity types under evaluation ────────────────────────────────────────────────
+entity_types:
+  # P0 — Core PII (target ≥96% recall)
+  - name: EMAIL_ADDRESS
+    target_recall: 0.99
+    target_precision: 0.99
+  - name: US_SSN
+    target_recall: 0.99
+    target_precision: 0.99
+  - name: CREDIT_CARD
+    target_recall: 0.98
+    target_precision: 0.96
+  - name: PHONE_NUMBER
+    target_recall: 0.98
+    target_precision: 0.97
+  - name: IBAN_CODE
+    target_recall: 0.99
+    target_precision: 0.99
+
+  # P1 — Extended PII (target ≥96% recall)
+  - name: IP_ADDRESS
+    target_recall: 0.96
+    target_precision: 0.95
+  - name: PERSON
+    target_recall: 0.96
+    target_precision: 0.93
+  - name: API_KEY
+    target_recall: 0.90
+    target_precision: 0.85
+
+  # P2 — Context-dependent
+  - name: LOCATION
+    target_recall: 0.85
+    target_precision: 0.88
+  - name: ORGANIZATION
+    target_recall: 0.75
+    target_precision: 0.80
+  - name: DOMAIN_NAME
+    target_recall: 0.88
+    target_precision: 0.90
+
+  # P3 — Low-risk
+  - name: DATE_TIME
+    target_recall: 0.85
+    target_precision: 0.88
+  - name: US_ZIP_CODE
+    target_recall: 0.85
+    target_precision: 0.90
+
+# ── Phase 2: PII-Bench configuration ────────────────────────────────────────────
+pii_bench:
+  tolerance: 0              # Character tolerance for Strict-F1 (0 = exact)
+  splits:                   # Which splits to evaluate (null = all)
+    - pii_single
+    - pii_multi
+    - pii_hard
+    - pii_distract
+  baselines:
+    GPT-4o:
+      strict_f1: 0.893
+      entity_f1: 0.912
+      rouge_l_f: 0.935
+      source: "arxiv:2502.18545 Table 2"
+    DeepSeek:
+      strict_f1: 0.841
+      entity_f1: 0.867
+      rouge_l_f: 0.891
+      source: "arxiv:2502.18545 Table 2 (projected)"
+    Claude-3.5:
+      strict_f1: 0.876
+      entity_f1: 0.898
+      rouge_l_f: 0.921
+      source: "arxiv:2502.18545 Table 2 (projected)"
+
+# ── Phase 2: TAB configuration ──────────────────────────────────────────────────
+tab:
+  iou_threshold: 0.5        # IoU for span matching
+  splits:
+    - test                  # Default: test split only
+  masking_categories:
+    DIRECT:
+      weight: 2.0           # Higher weight — must mask
+      description: "Direct identifiers (names, SSNs)"
+    QUASI:
+      weight: 1.0           # Standard weight — should mask
+      description: "Quasi-identifiers (dates, locations)"
+    NO_MASK:
+      weight: 0.0           # Should not mask
+      description: "Public information"
+  risk_thresholds:
+    r_direct_low: 0.95      # ≥0.95 = low risk
+    r_direct_moderate: 0.85 # ≥0.85 = moderate risk
+    r_quasi_low: 0.80       # ≥0.80 = low risk
+    r_quasi_moderate: 0.65  # ≥0.65 = moderate risk
+
+# ── Statistical significance ────────────────────────────────────────────────────
+statistics:
+  bootstrap_iterations: 10000
+  confidence_level: 0.95
+  method: "non_parametric_bootstrap"
+  note: "Not paired t-test — samples are not independent"
+
+# ── Output ───────────────────────────────────────────────────────────────────────
+output_dir: "benchmarks/presidio_research/results"
+
+# ── Phase 3: Supplementary benchmarks ────────────────────────────────────────────
+datafog:
+  model: "datafog/pii-ner"
+  num_samples: 500
+  note: "HuggingFace transformers pipeline. Falls back to regex if model not installed."
+
+ai4privacy:
+  dataset: "ai4privacy/open-pii-masking-500k"
+  num_samples: 2000
+  language: "en"
+  license: "Apache 2.0"
+  note: "Large-scale validation subset. 500k+ samples across 50+ languages."
+
+adversarial:
+  categories:
+    - homoglyph        # Unicode homoglyph substitution
+    - zero_width       # Zero-width character injection
+    - base64           # Base64-encoded PII
+    - leet             # Leet-speak transformation
+    - separator        # Whitespace/separator injection
+    - edge_case        # Short text, code context, nested entities, JSON blobs
+    - bulk             # Faker-generated bulk with random transforms
+  homoglyph_rate: 0.3
+  zero_width_positions: 2
+  leet_speak_rate: 0.5
+  note: "Tests robustness against deliberate PII obfuscation and edge cases."
+
+dashboard:
+  generate_markdown: true
+  generate_json: true
+  output_path: "BENCHMARK_COMPARISON.md"
+  note: "Deprioritized: live dashboard. Ship Markdown tables first."

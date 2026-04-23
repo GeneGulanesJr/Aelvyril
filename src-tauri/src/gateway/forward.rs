@@ -50,7 +50,7 @@ pub async fn forward_and_rehydrate(
             // The response<serde_json::Value> contains the `usage` field
             // with prompt/completion token counts.
             let duration_ms = request_start.elapsed().as_millis() as u64;
-            let tracker = ctx.gw.app_state.blocking_read().token_usage_tracker.clone();
+            let tracker = ctx.gw.app_state.read().await.token_usage_tracker.clone();
             let event = crate::token_usage::tracker::TokenUsageTracker::new_from_response(
                 ctx.session_id,
                 ctx.model,
@@ -160,6 +160,9 @@ fn is_usage_chunk(data: &str, is_anthropic: bool) -> bool {
 
 /// Build the rehydrated SSE stream that tracks the last usage chunk and
 /// records a token-usage event after the stream completes.
+///
+/// If the stream ends without a final usage chunk (partial disconnect),
+/// the event is marked as `was_partial = true` with estimated token counts.
 #[allow(clippy::too_many_arguments)]
 fn build_rehydrated_stream(
     stream: impl futures::Stream<Item = Result<String, std::convert::Infallible>> + Send + 'static,
@@ -174,10 +177,19 @@ fn build_rehydrated_stream(
 ) -> impl futures::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static {
     async_stream::stream! {
         futures::pin_mut!(stream);
+        let mut stream_ended_normally = false;
+        let mut chunk_count: u64 = 0;
+
         while let Some(result) = stream.next().await {
             let data_str = result.unwrap_or_default();
             if data_str.is_empty() {
                 continue;
+            }
+            chunk_count += 1;
+
+            // Check for stream completion markers
+            if data_str.trim() == "data: [DONE]" || data_str.trim() == "[DONE]" {
+                stream_ended_normally = true;
             }
 
             if is_usage_chunk(&data_str, is_anthropic) {
@@ -198,24 +210,37 @@ fn build_rehydrated_stream(
         let duration_ms = request_start.elapsed().as_millis() as u64;
         let final_usage = last_usage_chunk.lock().take();
 
+        // If the stream didn't end normally AND we got no usage chunk,
+        // this was a partial disconnect — mark was_partial = true
+        // Even if we got some chunks, if no [DONE] was received and no
+        // usage data, it's likely a partial stream.
+        let was_partial = !stream_ended_normally && final_usage.is_none();
+        // Also consider it partial if we got very few chunks and no usage
+        let was_partial = was_partial || (chunk_count < 3 && final_usage.is_none());
+
         let event = build_post_stream_event(
             final_usage.as_deref(),
             &model_for_post,
             &session_id_for_post,
             is_anthropic,
             duration_ms,
+            was_partial,
         );
         tracker.record(event);
     }
 }
 
 /// Build a `TokenUsageEvent` from the final usage chunk captured during streaming.
+///
+/// When `was_partial` is true, it indicates the stream disconnected before
+/// the [DONE] marker or final usage chunk was received.
 fn build_post_stream_event(
     final_usage: Option<&str>,
     model: &str,
     session_id: &str,
     is_anthropic: bool,
     duration_ms: u64,
+    was_partial: bool,
 ) -> crate::token_usage::TokenUsageEvent {
     let (tokens_in_system, tokens_in_user, tokens_in_cached, tokens_out, token_count_source) =
         match final_usage {
@@ -235,9 +260,9 @@ fn build_post_stream_event(
         tokens_out,
         0,  // tokens_truncated
         true,  // was_streamed
-        false, // was_partial
+        was_partial, // was_partial: true if stream disconnected early
         duration_ms,
-        tokens_out > 0, // success
+        tokens_out > 0, // success: at least some output received
         token_count_source,
         0,  // retry_attempt
     )

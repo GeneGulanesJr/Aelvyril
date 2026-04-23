@@ -26,10 +26,12 @@ mod col {
     pub const WAS_STREAMED: usize = 14;
     pub const WAS_PARTIAL: usize = 15;
     pub const DURATION_MS: usize = 16;
-    pub const COST_ESTIMATE_CENTS: usize = 17;
-    pub const PRICING_AS_OF: usize = 18;
-    pub const COST_UNAVAILABLE: usize = 19;
-    pub const SUCCESS: usize = 20;
+    pub const ACTUAL_COST_CENTS: usize = 17;
+    pub const COST_ESTIMATE_CENTS: usize = 18;
+    pub const PRICING_AS_OF: usize = 19;
+    pub const COST_UNAVAILABLE: usize = 20;
+    pub const TOKENS_IN_CACHE_WRITE: usize = 21;
+    pub const SUCCESS: usize = 22;
 }
 
 /// Persistent token usage event store backed by SQLite.
@@ -68,24 +70,35 @@ impl TokenUsageStore {
                 tokens_in_system     INTEGER NOT NULL DEFAULT 0,
                 tokens_in_user       INTEGER NOT NULL DEFAULT 0,
                 tokens_in_cached     INTEGER NOT NULL DEFAULT 0,
-                tokens_out           INTEGER NOT NULL DEFAULT 0,
+                tokens_out            INTEGER NOT NULL DEFAULT 0,
                 tokens_truncated     INTEGER NOT NULL DEFAULT 0,
                 token_count_source   TEXT NOT NULL DEFAULT 'api_reported',
                 was_streamed         INTEGER NOT NULL DEFAULT 0,
                 was_partial          INTEGER NOT NULL DEFAULT 0,
-                duration_ms         INTEGER NOT NULL DEFAULT 0,
+                duration_ms          INTEGER NOT NULL DEFAULT 0,
+                actual_cost_cents    INTEGER DEFAULT NULL,
                 cost_estimate_cents  INTEGER NOT NULL DEFAULT 0,
                 pricing_as_of        TEXT NOT NULL DEFAULT '',
                 cost_unavailable     INTEGER NOT NULL DEFAULT 0,
+                tokens_in_cache_write INTEGER NOT NULL DEFAULT 0,
                 success              INTEGER NOT NULL DEFAULT 1
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_tu_timestamp ON token_usage_events(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_tu_session ON token_usage_events(session_id);
-            CREATE INDEX IF NOT EXISTS idx_tu_model ON token_usage_events(model_id);
-            CREATE INDEX IF NOT EXISTS idx_tu_tool ON token_usage_events(tool_name);",
+            );",
         )
         .map_err(|e| format!("Failed to create token usage schema: {}", e))?;
+
+        // Schema v2 migration: add actual_cost_cents and tokens_in_cache_write.
+        // These are idempotent — ALTER TABLE ADD COLUMN fails silently if column exists
+        // because we catch and ignore the error.
+        let _ = conn.execute_batch("ALTER TABLE token_usage_events ADD COLUMN actual_cost_cents INTEGER DEFAULT NULL");
+        let _ = conn.execute_batch("ALTER TABLE token_usage_events ADD COLUMN tokens_in_cache_write INTEGER NOT NULL DEFAULT 0");
+
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_tu_timestamp ON token_usage_events(timestamp);
+             CREATE INDEX IF NOT EXISTS idx_tu_session ON token_usage_events(session_id);
+             CREATE INDEX IF NOT EXISTS idx_tu_model ON token_usage_events(model_id);
+             CREATE INDEX IF NOT EXISTS idx_tu_tool ON token_usage_events(tool_name);",
+        )
+        .map_err(|e| format!("Failed to create token usage indexes: {}", e))?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -101,8 +114,9 @@ impl TokenUsageStore {
                 tool_name, model_id, retry_attempt,
                 tokens_in_system, tokens_in_user, tokens_in_cached, tokens_out, tokens_truncated,
                 token_count_source, was_streamed, was_partial,
-                duration_ms, cost_estimate_cents, pricing_as_of, cost_unavailable, success
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+                duration_ms, actual_cost_cents, cost_estimate_cents, pricing_as_of, cost_unavailable,
+                tokens_in_cache_write, success
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
             params![
                 event.event_id,
                 event.schema_version,
@@ -121,9 +135,11 @@ impl TokenUsageStore {
                 event.was_streamed as i32,
                 event.was_partial as i32,
                 event.duration_ms,
+                event.actual_cost_cents,
                 event.cost_estimate_cents,
                 event.pricing_as_of,
                 event.cost_unavailable as i32,
+                event.tokens_in_cache_write,
                 event.success as i32,
             ],
         )
@@ -181,71 +197,136 @@ impl TokenUsageStore {
                         tool_name, model_id, retry_attempt,
                         tokens_in_system, tokens_in_user, tokens_in_cached, tokens_out, tokens_truncated,
                         token_count_source, was_streamed, was_partial,
-                        duration_ms, cost_estimate_cents, pricing_as_of, cost_unavailable, success
+                        duration_ms, actual_cost_cents, cost_estimate_cents, pricing_as_of, cost_unavailable,
+                        tokens_in_cache_write, success
                  FROM token_usage_events ORDER BY timestamp DESC LIMIT ?1",
             )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let events = stmt
             .query_map(params![limit as i64], |row| {
-                let event_id: String = row.get(col::EVENT_ID)?;
-                let schema_version: i32 = row.get(col::SCHEMA_VERSION)?;
-                let timestamp_str: String = row.get(col::TIMESTAMP)?;
-                let session_id: String = row.get(col::SESSION_ID)?;
-                let tenant_id: String = row.get(col::TENANT_ID)?;
-                let tool_name: String = row.get(col::TOOL_NAME)?;
-                let model_id: String = row.get(col::MODEL_ID)?;
-                let retry_attempt: i32 = row.get(col::RETRY_ATTEMPT)?;
-                let tokens_in_system: i64 = row.get(col::TOKENS_IN_SYSTEM)?;
-                let tokens_in_user: i64 = row.get(col::TOKENS_IN_USER)?;
-                let tokens_in_cached: i64 = row.get(col::TOKENS_IN_CACHED)?;
-                let tokens_out: i64 = row.get(col::TOKENS_OUT)?;
-                let tokens_truncated: i64 = row.get(col::TOKENS_TRUNCATED)?;
-                let token_count_source_str: String = row.get(col::TOKEN_COUNT_SOURCE)?;
-                let was_streamed: i32 = row.get(col::WAS_STREAMED)?;
-                let was_partial: i32 = row.get(col::WAS_PARTIAL)?;
-                let duration_ms: i64 = row.get(col::DURATION_MS)?;
-                let cost_estimate_cents: i64 = row.get(col::COST_ESTIMATE_CENTS)?;
-                let pricing_as_of: String = row.get(col::PRICING_AS_OF)?;
-                let cost_unavailable: i32 = row.get(col::COST_UNAVAILABLE)?;
-                let success: i32 = row.get(col::SUCCESS)?;
-
-                let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)
-                    .map(|dt| dt.to_utc())
-                    .unwrap_or_else(|_| Utc::now());
-
-                let token_count_source: TokenCountSource =
-                    serde_json::from_str(&token_count_source_str)
-                        .unwrap_or(TokenCountSource::ApiReported);
-
-                Ok(TokenUsageEvent {
-                    event_id,
-                    schema_version: schema_version as u32,
-                    timestamp,
-                    session_id,
-                    tenant_id,
-                    tool_name,
-                    model_id,
-                    retry_attempt: retry_attempt as u32,
-                    tokens_in_system: tokens_in_system as u64,
-                    tokens_in_user: tokens_in_user as u64,
-                    tokens_in_cached: tokens_in_cached as u64,
-                    tokens_out: tokens_out as u64,
-                    tokens_truncated: tokens_truncated as u64,
-                    token_count_source,
-                    was_streamed: was_streamed != 0,
-                    was_partial: was_partial != 0,
-                    duration_ms: duration_ms as u64,
-                    cost_estimate_cents: cost_estimate_cents as u64,
-                    pricing_as_of,
-                    cost_unavailable: cost_unavailable != 0,
-                    success: success != 0,
-                })
+                Self::row_to_event(row)
             })
             .map_err(|e| format!("Failed to query token usage events: {}", e))?
             .filter_map(|r| r.ok())
             .collect();
 
         Ok(events)
+    }
+
+    /// Get the N most recent events for a specific tenant.
+    /// Enforces tenant isolation: only returns events belonging to the given tenant.
+    pub fn get_recent_for_tenant(
+        &self,
+        tenant_id: &str,
+        limit: usize,
+    ) -> Result<Vec<TokenUsageEvent>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT event_id, schema_version, timestamp, session_id, tenant_id,
+                        tool_name, model_id, retry_attempt,
+                        tokens_in_system, tokens_in_user, tokens_in_cached, tokens_out, tokens_truncated,
+                        token_count_source, was_streamed, was_partial,
+                        duration_ms, actual_cost_cents, cost_estimate_cents, pricing_as_of, cost_unavailable,
+                        tokens_in_cache_write, success
+                 FROM token_usage_events WHERE tenant_id = ?1 ORDER BY timestamp DESC LIMIT ?2",
+            )
+            .map_err(|e| format!("Failed to prepare tenant query: {}", e))?;
+
+        let events = stmt
+            .query_map(params![tenant_id, limit as i64], |row| {
+                Self::row_to_event(row)
+            })
+            .map_err(|e| format!("Failed to query token usage events for tenant: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(events)
+    }
+
+    /// Export events for a specific tenant (privacy-safe: only includes
+    /// events belonging to that tenant).
+    pub fn export_json_for_tenant(
+        &self,
+        tenant_id: &str,
+    ) -> Result<String, String> {
+        let events = self.get_recent_for_tenant(tenant_id, 10_000)?;
+        serde_json::to_string_pretty(&events).map_err(|e| format!("Failed to serialize: {}", e))
+    }
+
+    /// Delete all events for a specific tenant (right-to-delete / GDPR compliance).
+    pub fn delete_tenant_data(&self,
+        tenant_id: &str,
+    ) -> Result<u64, String> {
+        let conn = self.conn.lock();
+        let count = conn
+            .execute(
+                "DELETE FROM token_usage_events WHERE tenant_id = ?1",
+                params![tenant_id],
+            )
+            .map_err(|e| format!("Failed to delete tenant data: {}", e))?;
+        Ok(count as u64)
+    }
+
+    /// Helper: Convert a database row into a TokenUsageEvent.
+    fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<TokenUsageEvent> {
+        let event_id: String = row.get(col::EVENT_ID)?;
+        let schema_version: i32 = row.get(col::SCHEMA_VERSION)?;
+        let timestamp_str: String = row.get(col::TIMESTAMP)?;
+        let session_id: String = row.get(col::SESSION_ID)?;
+        let tenant_id: String = row.get(col::TENANT_ID)?;
+        let tool_name: String = row.get(col::TOOL_NAME)?;
+        let model_id: String = row.get(col::MODEL_ID)?;
+        let retry_attempt: i32 = row.get(col::RETRY_ATTEMPT)?;
+        let tokens_in_system: i64 = row.get(col::TOKENS_IN_SYSTEM)?;
+        let tokens_in_user: i64 = row.get(col::TOKENS_IN_USER)?;
+        let tokens_in_cached: i64 = row.get(col::TOKENS_IN_CACHED)?;
+        let tokens_out: i64 = row.get(col::TOKENS_OUT)?;
+        let tokens_truncated: i64 = row.get(col::TOKENS_TRUNCATED)?;
+        let token_count_source_str: String = row.get(col::TOKEN_COUNT_SOURCE)?;
+        let was_streamed: i32 = row.get(col::WAS_STREAMED)?;
+        let was_partial: i32 = row.get(col::WAS_PARTIAL)?;
+        let duration_ms: i64 = row.get(col::DURATION_MS)?;
+        let actual_cost_cents: Option<i64> = row.get(col::ACTUAL_COST_CENTS)?;
+        let cost_estimate_cents: i64 = row.get(col::COST_ESTIMATE_CENTS)?;
+        let pricing_as_of: String = row.get(col::PRICING_AS_OF)?;
+        let cost_unavailable: i32 = row.get(col::COST_UNAVAILABLE)?;
+        let tokens_in_cache_write: i64 = row.get(col::TOKENS_IN_CACHE_WRITE)?;
+        let success: i32 = row.get(col::SUCCESS)?;
+
+        let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)
+            .map(|dt| dt.to_utc())
+            .unwrap_or_else(|_| Utc::now());
+
+        let token_count_source: TokenCountSource =
+            serde_json::from_str(&token_count_source_str)
+                .unwrap_or(TokenCountSource::ApiReported);
+
+        Ok(TokenUsageEvent {
+            event_id,
+            schema_version: schema_version as u32,
+            timestamp,
+            session_id,
+            tenant_id,
+            tool_name,
+            model_id,
+            retry_attempt: retry_attempt as u32,
+            tokens_in_system: tokens_in_system as u64,
+            tokens_in_user: tokens_in_user as u64,
+            tokens_in_cached: tokens_in_cached as u64,
+            tokens_out: tokens_out as u64,
+            tokens_truncated: tokens_truncated as u64,
+            tokens_in_cache_write: tokens_in_cache_write as u64,
+            token_count_source,
+            was_streamed: was_streamed != 0,
+            was_partial: was_partial != 0,
+            duration_ms: duration_ms as u64,
+            actual_cost_cents: actual_cost_cents.map(|c| c as u64),
+            cost_estimate_cents: cost_estimate_cents as u64,
+            pricing_as_of,
+            cost_unavailable: cost_unavailable != 0,
+            success: success != 0,
+        })
     }
 }

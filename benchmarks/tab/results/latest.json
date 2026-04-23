@@ -1,0 +1,10 @@
+{
+  "aelvyril_version": "dev",
+  "timestamp": "2026-04-23T14:45:53.489026+00:00",
+  "tab_evaluation": {
+    "recall_direct": 0.9623,
+    "recall_quasi": 0.8434,
+    "weighted_f1": 0.9012,
+    "num_documents": 1268
+  }
+}

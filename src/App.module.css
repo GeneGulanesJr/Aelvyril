@@ -3,11 +3,21 @@
   height: 100vh;
   width: 100vw;
   overflow: hidden;
+  background: var(--bg-app);
+  min-width: 0;
 }
 
 .main {
   flex: 1;
-  overflow-y: auto;
-  padding: 32px;
-  background: transparent;
+  min-width: 0;
+  overflow: hidden;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 900px) {
+  .main {
+    padding: 16px 16px;
+  }
 }

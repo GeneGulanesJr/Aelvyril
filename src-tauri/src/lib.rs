@@ -17,6 +17,7 @@ pub mod bootstrap;
 pub mod commands;
 pub mod state;
 pub mod token_usage;
+pub mod orchestrator;
 
 use std::sync::Arc;
 
@@ -32,6 +33,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .manage(Arc::new(RwLock::new(AppState::new())))
+        .manage(crate::orchestrator::SharedOrchState::default())
         .setup(bootstrap::setup::setup)
         .invoke_handler(commands::invoke_handler())
         .run(tauri::generate_context!())

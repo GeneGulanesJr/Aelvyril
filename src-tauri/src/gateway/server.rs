@@ -28,6 +28,7 @@ use tower_http::trace::TraceLayer;
 use crate::gateway::router;
 use crate::perf::benchmark::LatencyBuilder;
 use crate::token_usage::pricing;
+use crate::token_usage::tracker::TokenUsageTracker;
 use crate::token_usage::{TokenCountSource, TokenUsageEvent, TOKEN_USAGE_SCHEMA_VERSION};
 use crate::AppState;
 
@@ -119,7 +120,7 @@ pub async fn start_server(
 /// records the event asynchronously. Never blocks the response path.
 #[allow(clippy::too_many_arguments)]
 fn record_token_usage_from_response(
-    app_state: &Arc<RwLock<AppState>>,
+    tracker: &Arc<TokenUsageTracker>,
     session_id: &str,
     model: &str,
     is_streaming: bool,
@@ -149,10 +150,12 @@ fn record_token_usage_from_response(
         tokens_in_cached,
         tokens_out,
         tokens_truncated: 0, // Populated if truncation is detected
+        tokens_in_cache_write: 0, // Populated from cache_creation_input_tokens for Anthropic
         token_count_source,
         was_streamed: is_streaming,
         was_partial: false, // Updated for streaming if needed
         duration_ms,
+        actual_cost_cents: None, // Computed below if provider reports cost
         cost_estimate_cents: 0,   // Computed below
         pricing_as_of: String::new(), // Computed below
         cost_unavailable: false,  // Computed below
@@ -176,7 +179,6 @@ fn record_token_usage_from_response(
     };
 
     // Fire-and-forget: record event asynchronously (never blocks response)
-    let tracker = app_state.blocking_read().token_usage_tracker.clone();
     tracker.record(event);
 }
 
@@ -375,7 +377,8 @@ async fn forward_non_streaming(
     match forward::forward_and_rehydrate(fwd_ctx, latency, false).await {
         Ok(response) => response,
         Err((latency, e)) => {
-            record_failed_request(gw, session_id, model, request_start, &e);
+            let tracker = gw.app_state.read().await.token_usage_tracker.clone();
+            record_failed_request(&tracker, session_id, model, request_start, &e);
             forward::try_failover(FailoverContext {
                 gw,
                 latency,
@@ -394,13 +397,13 @@ async fn forward_non_streaming(
 
 /// Record a failed (non-2xx) request to the token usage tracker.
 fn record_failed_request(
-    gw: &GatewayState,
+    tracker: &Arc<TokenUsageTracker>,
     session_id: &str,
     model: &str,
     request_start: std::time::Instant,
     error: &str,
 ) {
-    let tracker = gw.app_state.blocking_read().token_usage_tracker.clone();
+    let tracker = tracker.clone();
     let event = crate::token_usage::tracker::TokenUsageTracker::new_err(
         session_id,
         model,
@@ -422,7 +425,7 @@ async fn handle_passthrough(
 ) -> Response {
     let request_start = std::time::Instant::now();
 
-    let (provider, api_key) = match resolve_passthrough_provider(&gw, &headers).await {
+    let (provider, api_key) = match resolve_passthrough_provider(&gw, &headers, &body).await {
         Ok(resolved) => resolved,
         Err(resp) => return resp,
     };
@@ -447,8 +450,9 @@ async fn handle_passthrough(
     {
         Ok(response) => {
             let duration_ms = request_start.elapsed().as_millis() as u64;
+            let tracker = gw.app_state.read().await.token_usage_tracker.clone();
             record_token_usage_from_response(
-                &gw.app_state,
+                &tracker,
                 "passthrough",
                 model,
                 false,
@@ -467,23 +471,49 @@ async fn handle_passthrough(
     }
 }
 
-/// Authenticate and resolve the default provider + API key for passthrough requests.
+/// Authenticate and resolve the provider + API key for passthrough requests.
+/// Routes to the correct provider based on the `model` field in the request body,
+/// falling back to the first provider if no model is specified or no match is found.
 async fn resolve_passthrough_provider(
     gw: &GatewayState,
     headers: &HeaderMap,
+    body: &serde_json::Value,
 ) -> Result<(crate::config::ProviderConfig, String), Response> {
     let app_state = gw.app_state.read().await;
 
     super::auth::authenticate_passthrough(app_state.gateway_key.as_ref(), headers)?;
 
-    let provider = match app_state.providers.first() {
-        Some(p) => p.clone(),
+    // Try model-based routing first (same as chat completions)
+    let model = body.get("model").and_then(|m| m.as_str());
+    let provider = match model {
+        Some(m) => match router::resolve_provider(&app_state.providers, m) {
+            Ok(p) => p.clone(),
+            Err(_) => {
+                // No provider for this specific model — fall back to first provider
+                match app_state.providers.first() {
+                    Some(p) => p.clone(),
+                    None => {
+                        return Err((
+                            StatusCode::BAD_REQUEST,
+                            Json(serde_json::json!({ "error": "No providers configured" })),
+                        )
+                            .into_response());
+                    }
+                }
+            }
+        },
         None => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "No providers configured" })),
-            )
-                .into_response());
+            // No model field — use first provider
+            match app_state.providers.first() {
+                Some(p) => p.clone(),
+                None => {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": "No providers configured" })),
+                    )
+                        .into_response());
+                }
+            }
         }
     };
 

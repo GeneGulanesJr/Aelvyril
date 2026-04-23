@@ -1,0 +1,7 @@
+# Keep summary files, exclude raw data
+*.json
+!latest.json
+!run_manifest.json
+*.csv
+!F2_AELVYRIL.md
+!.gitignore

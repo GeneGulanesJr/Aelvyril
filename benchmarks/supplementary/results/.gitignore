@@ -1,0 +1,7 @@
+# Raw benchmark results — commit summaries, exclude raw data
+*.json
+!latest.json
+!run_manifest.json
+
+# Keep the directory
+!.gitignore

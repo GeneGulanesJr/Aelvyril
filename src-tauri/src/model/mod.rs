@@ -5,12 +5,15 @@
 //! or false positives based on surrounding context.
 //!
 //! **Architecture:**
-//! - Uses a weighted feature-based classifier (no external runtime dependency).
+//! - Uses a weighted feature-based classifier (no external runtime dependency)
+//!   as the default/fallback mode.
 //! - The classifier is trained via hand-tuned weights over a 128-dimensional
 //!   feature vector derived from keyword proximity, PII density, and statistical
 //!   text features.
-//! - When an ONNX model file is available, it can be loaded via the `ort` crate
-//!   (behind the `onnx` feature flag) for ML-based inference instead.
+//! - When the `onnx` feature is enabled and a model file is available, the
+//!   ONNX-based LFM2.5-350M model is used for ML-based PII detection.
+//!   The ONNX model produces structured JSON output with entity types and
+//!   confidence scores, which is merged with the heuristic classifier results.
 //!
 //! **Current Mode:** Heuristic classifier with production-quality feature weights.
 //!
@@ -20,6 +23,9 @@
 //! - 8 statistical features: text length, digit ratio, special char ratio, etc.
 //! - 10 binary features: PII-type regex pattern presence
 //! - 74 padding features (reserved for future use)
+
+pub mod features;
+pub mod onnx_detect;
 
 use std::path::Path;
 

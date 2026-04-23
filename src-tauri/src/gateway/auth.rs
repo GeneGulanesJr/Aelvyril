@@ -147,10 +147,11 @@ pub async fn rate_limit_middleware(
         RateLimitResult::Allowed => {
             // check() already atomically reserved a concurrent slot;
             // ConcurrentGuard will release it when the request completes.
-            let _guard =
-                ConcurrentGuard {
-                    active_requests: gw.app_state.read().await.rate_limiter.active_requests(),
-                };
+            // Guard is created here so it's always dropped (releasing the slot)
+            // regardless of whether auth succeeds or fails downstream.
+            let _guard = ConcurrentGuard {
+                active_requests: gw.app_state.read().await.rate_limiter.active_requests(),
+            };
             next.run(request).await
         }
         RateLimitResult::DeniedMinuteLimit => rate_limit_response("too many requests per minute"),

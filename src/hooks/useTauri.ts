@@ -2,6 +2,7 @@ export * from "./tauri/audit";
 export * from "./tauri/clipboard";
 export * from "./tauri/lists";
 export * from "./tauri/onboarding";
+export * from "./tauri/orchestrator";
 export * from "./tauri/providers";
 export * from "./tauri/security";
 export * from "./tauri/sessions";

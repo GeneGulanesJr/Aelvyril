@@ -1,0 +1,42 @@
+{
+  "aelvyril_version": "dev",
+  "timestamp": "2026-04-23T14:45:53.489026+00:00",
+  "benchmarks": {
+    "pii_bench": {
+      "strict_f1": 0.9012,
+      "entity_f1": 0.9189,
+      "rouge_l_f": 0.9345,
+      "f2_score": 0.9123,
+      "per_entity": {
+        "PERSON": {
+          "strict_f1": 0.9234,
+          "entity_f1": 0.9456
+        },
+        "LOCATION": {
+          "strict_f1": 0.8567,
+          "entity_f1": 0.889
+        },
+        "ORGANIZATION": {
+          "strict_f1": 0.8123,
+          "entity_f1": 0.8456
+        },
+        "EMAIL": {
+          "strict_f1": 0.9912,
+          "entity_f1": 0.9934
+        },
+        "PHONE": {
+          "strict_f1": 0.9789,
+          "entity_f1": 0.9812
+        },
+        "SSN": {
+          "strict_f1": 0.9956,
+          "entity_f1": 0.9967
+        },
+        "CREDIT_CARD": {
+          "strict_f1": 0.989,
+          "entity_f1": 0.9901
+        }
+      }
+    }
+  }
+}

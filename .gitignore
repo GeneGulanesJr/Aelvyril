@@ -42,3 +42,10 @@ models/
 # Pi agent config
 .pi/
 .agents/
+# Local virtual environment for benchmarks
+.bench-venv/
+
+__pycache__/
+*.pyc
+.bench-venv/
+benchmarks/data/

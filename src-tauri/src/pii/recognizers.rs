@@ -16,6 +16,12 @@ pub enum PiiType {
     Domain,
     Date,
     ZipCode,
+    /// Person name — NER-driven via Presidio (spaCy/transformer)
+    Person,
+    /// Physical location — NER-driven via Presidio
+    Location,
+    /// Organization name — NER-driven via Presidio
+    Organization,
 }
 
 impl fmt::Display for PiiType {
@@ -31,6 +37,9 @@ impl fmt::Display for PiiType {
             PiiType::Domain => write!(f, "Domain"),
             PiiType::Date => write!(f, "Date"),
             PiiType::ZipCode => write!(f, "Zip_Code"),
+            PiiType::Person => write!(f, "Person"),
+            PiiType::Location => write!(f, "Location"),
+            PiiType::Organization => write!(f, "Organization"),
         }
     }
 }
@@ -306,5 +315,12 @@ mod tests {
         let text = "Call me at (555) 123-4567";
         let m = r.regex.find(text);
         assert!(m.is_some());
+    }
+
+    #[test]
+    fn test_display_person_location_organization() {
+        assert_eq!(PiiType::Person.to_string(), "Person");
+        assert_eq!(PiiType::Location.to_string(), "Location");
+        assert_eq!(PiiType::Organization.to_string(), "Organization");
     }
 }

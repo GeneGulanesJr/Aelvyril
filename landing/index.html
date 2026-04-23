@@ -14,6 +14,7 @@
   </script>
 
   <title>Aelvyril — Local Privacy Gateway</title>
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@300;400;500;600&family=Cormorant:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Inter:wght@200;300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -70,9 +71,9 @@
       --global-bg-y: 0%;
       --global-bg-shift: 0px;
       --global-pan: 0px;
-      --global-zoom: 1.18;
+      --global-zoom: 1.16;
       /* Default focal point (matches the castle/balcony crop you shared) */
-      --global-bg-x: 62%;
+      --global-bg-x: 50%;
     }
     .global-art {
       position: fixed;
@@ -80,34 +81,64 @@
       z-index: -3;
       pointer-events: none;
       overflow: hidden;
-      opacity: 0.92;
+      opacity: 0.98;
     }
     .global-art::before {
       content: "";
       position: absolute;
       left: 0;
       right: 0;
-      /* Large overscan buffer so vertical pan never reveals empty bands. */
-      top: -120vh;
-      bottom: -120vh;
+      top: 0;
+      bottom: 0;
       background-image: url("./HeroBackground.png");
       background-repeat: no-repeat;
       background-size: cover;
-      /* Anchor to the TOP of the artwork, then we pan downward via translate. */
-      background-position: var(--global-bg-x) top;
+      background-position: var(--global-bg-x) var(--global-bg-y);
       transform: translate3d(0, var(--global-pan), 0) scale(var(--global-zoom));
-      transform-origin: center top;
-      will-change: transform;
-      filter: saturate(0.98) contrast(1.02);
+      transform-origin: center center;
+      will-change: transform, background-position;
+      transition: transform 1.75s var(--ease-ethereal), background-position 1.75s var(--ease-ethereal), filter 1.35s var(--ease-ethereal);
+      filter: saturate(1.04) contrast(1.04);
     }
     .global-art::after {
       content: "";
       position: absolute;
       inset: 0;
       background:
-        radial-gradient(ellipse at 68% 24%, rgba(205,176,122,0.08) 0%, transparent 46%),
-        radial-gradient(ellipse at 18% 72%, rgba(103,122,184,0.12) 0%, transparent 46%);
+        radial-gradient(ellipse at 68% 24%, rgba(255, 243, 214, 0.16) 0%, transparent 44%),
+        radial-gradient(ellipse at 74% 66%, rgba(130, 152, 218, 0.14) 0%, transparent 44%),
+        radial-gradient(ellipse at 18% 74%, rgba(103,122,184,0.08) 0%, transparent 46%);
       pointer-events: none;
+    }
+    body.art-beat-overview {
+      --global-bg-x: 42%;
+      --global-bg-y: 0%;
+      --global-zoom: 1.14;
+    }
+    body.art-beat-pipeline {
+      --global-bg-x: 58%;
+      --global-bg-y: 50%;
+      --global-zoom: 1.16;
+    }
+    body.art-beat-features {
+      --global-bg-x: 74%;
+      --global-bg-y: 100%;
+      --global-zoom: 1.12;
+    }
+    body.art-beat-overview::before {
+      background:
+        linear-gradient(180deg, rgba(8, 12, 24, 0.34) 0%, rgba(7, 11, 21, 0.72) 100%),
+        linear-gradient(90deg, rgba(7, 11, 21, 0.84) 0%, rgba(7, 11, 21, 0.58) 30%, rgba(7, 11, 21, 0.16) 70%, rgba(7, 11, 21, 0.04) 100%);
+    }
+    body.art-beat-pipeline::before {
+      background:
+        linear-gradient(180deg, rgba(8, 12, 24, 0.38) 0%, rgba(7, 11, 21, 0.74) 100%),
+        linear-gradient(90deg, rgba(7, 11, 21, 0.74) 0%, rgba(7, 11, 21, 0.48) 30%, rgba(7, 11, 21, 0.14) 70%, rgba(7, 11, 21, 0.03) 100%);
+    }
+    body.art-beat-features::before {
+      background:
+        linear-gradient(180deg, rgba(8, 12, 24, 0.44) 0%, rgba(7, 11, 21, 0.78) 100%),
+        linear-gradient(90deg, rgba(7, 11, 21, 0.68) 0%, rgba(7, 11, 21, 0.42) 30%, rgba(7, 11, 21, 0.12) 72%, rgba(7, 11, 21, 0.02) 100%);
     }
     .side-shimmer {
       position: fixed;
@@ -117,7 +148,7 @@
       z-index: 2;
       pointer-events: none;
       overflow: visible;
-      opacity: 0.44;
+      opacity: 0.28;
     }
     .side-shimmer--left {
       left: 0;
@@ -161,13 +192,59 @@
       68% { transform: translate3d(-12px, -34px, 0) scale(1.18) rotate(1deg); opacity: 0.22; }
       100% { transform: translate3d(0, -8px, 0) scale(0.98) rotate(2deg); opacity: 0.14; }
     }
+    .scene-atmosphere {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      overflow: hidden;
+    }
+    .waterfall-mist {
+      position: absolute;
+      border-radius: 999px;
+      filter: blur(28px);
+      opacity: 0.18;
+      mix-blend-mode: screen;
+      background: radial-gradient(circle at 50% 45%, rgba(228, 237, 255, 0.62) 0%, rgba(228, 237, 255, 0.2) 46%, transparent 82%);
+      animation: mistDrift 12s ease-in-out infinite;
+    }
+    .waterfall-mist.m1 {
+      width: min(44vw, 560px);
+      height: min(22vh, 220px);
+      left: 38%;
+      bottom: 18%;
+    }
+    .waterfall-mist.m2 {
+      width: min(34vw, 440px);
+      height: min(18vh, 170px);
+      left: 52%;
+      bottom: 28%;
+      opacity: 0.14;
+      animation-delay: -4.2s;
+    }
+    .waterfall-mist.m3 {
+      width: min(32vw, 400px);
+      height: min(18vh, 180px);
+      left: 26%;
+      bottom: 8%;
+      opacity: 0.12;
+      animation-delay: -7s;
+    }
+    @keyframes mistDrift {
+      0% { transform: translate3d(0, 0, 0) scale(0.96); }
+      40% { transform: translate3d(-10px, -8px, 0) scale(1.04); }
+      70% { transform: translate3d(12px, -18px, 0) scale(1.08); }
+      100% { transform: translate3d(0, -6px, 0) scale(1); }
+    }
     body::before {
       content: "";
       position: fixed;
       inset: 0;
       z-index: -2;
       background:
-        linear-gradient(180deg, rgba(8, 12, 24, 0.66) 0%, rgba(7, 11, 21, 0.96) 100%);
+        linear-gradient(180deg, rgba(8, 12, 24, 0.4) 0%, rgba(7, 11, 21, 0.76) 100%),
+        linear-gradient(90deg, rgba(7, 11, 21, 0.8) 0%, rgba(7, 11, 21, 0.55) 30%, rgba(7, 11, 21, 0.14) 68%, rgba(7, 11, 21, 0.04) 100%);
+      transition: background 1s var(--ease-ethereal);
     }
     body::after {
       content: "";
@@ -176,8 +253,18 @@
       z-index: -1;
       pointer-events: none;
       background:
-        radial-gradient(ellipse at 68% 24%, rgba(205,176,122,0.12) 0%, transparent 45%),
-        radial-gradient(ellipse at 18% 72%, rgba(103,122,184,0.16) 0%, transparent 44%);
+        radial-gradient(ellipse at 66% 20%, rgba(255, 247, 220, 0.16) 0%, transparent 44%),
+        radial-gradient(ellipse at 78% 62%, rgba(141, 164, 231, 0.2) 0%, transparent 46%),
+        radial-gradient(ellipse at 18% 72%, rgba(103,122,184,0.12) 0%, transparent 44%);
+    }
+    body.art-reveal::before {
+      background:
+        linear-gradient(180deg, rgba(8, 12, 24, 0.22) 0%, rgba(7, 11, 21, 0.6) 100%),
+        linear-gradient(90deg, rgba(7, 11, 21, 0.62) 0%, rgba(7, 11, 21, 0.42) 30%, rgba(7, 11, 21, 0.08) 72%, rgba(7, 11, 21, 0.02) 100%);
+    }
+    body.art-reveal .nav {
+      background: rgba(11, 15, 28, 0.32);
+      border-bottom-color: rgba(205, 176, 122, 0.04);
     }
 
     a {
@@ -470,8 +557,8 @@
     .layer-base {
       inset: 0;
       background:
-        linear-gradient(90deg, rgba(7,11,21,0.94) 0%, rgba(7,11,21,0.76) 32%, rgba(7,11,21,0.34) 58%, rgba(7,11,21,0.12) 100%),
-        linear-gradient(180deg, rgba(8,11,19,0.08) 0%, rgba(8,11,19,0.6) 74%, rgba(8,11,19,0.9) 100%);
+        linear-gradient(90deg, rgba(7,11,21,0.84) 0%, rgba(7,11,21,0.56) 30%, rgba(7,11,21,0.2) 62%, rgba(7,11,21,0.06) 100%),
+        linear-gradient(180deg, rgba(8,11,19,0.04) 0%, rgba(8,11,19,0.46) 76%, rgba(8,11,19,0.72) 100%);
       background-position: center top;
       background-size: auto 100%;
       background-repeat: no-repeat;
@@ -498,8 +585,8 @@
       z-index: 1;
       pointer-events: none;
       background:
-        radial-gradient(ellipse at 52% 50%, rgba(7,11,21,0) 38%, rgba(7,11,21,0.58) 100%),
-        linear-gradient(180deg, rgba(7,11,21,0.02) 42%, rgba(7,11,21,0.68) 100%);
+        radial-gradient(ellipse at 54% 46%, rgba(7,11,21,0) 44%, rgba(7,11,21,0.46) 100%),
+        linear-gradient(180deg, rgba(7,11,21,0.01) 45%, rgba(7,11,21,0.52) 100%);
     }
     .hero-content {
       position: relative;
@@ -1557,7 +1644,7 @@
       .nav-toggle { display: flex; }
       .mobile-menu { display: flex; }
       .layer-base { background-position: center top; }
-      .pipeline { grid-template-columns: 1fr; gap: 14px; height: auto; max-height: 340px; }
+      .pipeline { grid-template-columns: 1fr; gap: 14px; height: auto; max-height: none; }
       .pipe-track, .pipe-dot, .energy-burst { display: none; }
       .pipeline::after,
       .pipeline::before { display: none; }
@@ -1576,6 +1663,21 @@
     }
 
     @media (max-width: 640px) {
+      body.art-beat-overview {
+        --global-bg-x: 40%;
+        --global-bg-y: 0%;
+        --global-zoom: 1.1;
+      }
+      body.art-beat-pipeline {
+        --global-bg-x: 56%;
+        --global-bg-y: 50%;
+        --global-zoom: 1.12;
+      }
+      body.art-beat-features {
+        --global-bg-x: 72%;
+        --global-bg-y: 100%;
+        --global-zoom: 1.08;
+      }
       .page { height: auto; min-height: 100vh; }
       .hero { padding: 100px 20px 60px; }
       .layer-base {
@@ -1628,17 +1730,10 @@
 </head>
 <body>
   <div class="global-art" aria-hidden="true"></div>
-  <div class="side-shimmer side-shimmer--left" aria-hidden="true">
-    <span class="fog-wisp w1"></span>
-    <span class="fog-wisp w2"></span>
-    <span class="fog-wisp w3"></span>
-    <span class="fog-wisp w4"></span>
-  </div>
-  <div class="side-shimmer side-shimmer--right" aria-hidden="true">
-    <span class="fog-wisp w1"></span>
-    <span class="fog-wisp w2"></span>
-    <span class="fog-wisp w3"></span>
-    <span class="fog-wisp w4"></span>
+  <div class="scene-atmosphere" aria-hidden="true">
+    <span class="waterfall-mist m1"></span>
+    <span class="waterfall-mist m2"></span>
+    <span class="waterfall-mist m3"></span>
   </div>
 
   <!-- Navigation -->
@@ -2089,10 +2184,21 @@
     (function() {
       const pages = document.querySelectorAll('.page');
       const navLinks = document.querySelectorAll('.nav-links a');
+      const pageBeatClasses = ['art-beat-overview', 'art-beat-pipeline', 'art-beat-features'];
       let current = 0;
       let isScrolling = false;
       let queuedIndex = null;
+      let revealTimer = null;
       const ANIM_MS = 560;
+
+      function setArtBeat(index, reveal = false) {
+        pageBeatClasses.forEach(cls => document.body.classList.remove(cls));
+        document.body.classList.add(pageBeatClasses[index] || pageBeatClasses[0]);
+        if (!reveal) return;
+        document.body.classList.add('art-reveal');
+        clearTimeout(revealTimer);
+        revealTimer = setTimeout(() => document.body.classList.remove('art-reveal'), 1400);
+      }
 
       function scrollTo(index) {
         if (index < 0 || index >= pages.length) return;
@@ -2129,6 +2235,7 @@
         }
         current = index;
         setActiveNav();
+        setArtBeat(index, index === 1);
         requestAnimationFrame(tick);
       }
 
@@ -2229,6 +2336,7 @@
           if (entry.isIntersecting && !isScrolling) {
             current = Array.from(pages).indexOf(entry.target);
             setActiveNav();
+            setArtBeat(current);
           }
         });
       }, { threshold: 0.5 });
@@ -2236,6 +2344,7 @@
 
       // Init aria-current
       setActiveNav();
+      setArtBeat(current);
 
       // ── Scroll indicator ────────────────────────────────
       (function() {
@@ -2715,23 +2824,41 @@
       (function() {
         const pipelineSection = document.getElementById('pipeline');
         if (!pipelineSection) return;
+        const compactViewport = window.matchMedia('(max-width: 1024px)').matches;
+        const observerThreshold = compactViewport ? 0.2 : 0.55;
+        const observerRootMargin = compactViewport ? '0px 0px -12% 0px' : '0px';
+
+        const startDemo = () => {
+          if (hasAutoPlayed) return;
+          hasAutoPlayed = true;
+          if (typeof timeline.restart === 'function') timeline.restart();
+          if (typeof timeline.play === 'function') timeline.play();
+          setPausedUi(false);
+        };
 
         const observer = new IntersectionObserver((entries) => {
           if (hasAutoPlayed) return;
           entries.forEach(entry => {
             if (!entry.isIntersecting) return;
-            hasAutoPlayed = true;
-            try {
-              if (typeof timeline.restart === 'function') timeline.restart();
-              if (typeof timeline.play === 'function') timeline.play();
-              setPausedUi(false);
-            } finally {
-              observer.disconnect();
-            }
+            startDemo();
+            observer.disconnect();
           });
-        }, { threshold: 0.55 });
+        }, { threshold: observerThreshold, rootMargin: observerRootMargin });
 
         observer.observe(pipelineSection);
+
+        // Fallback for mobile layouts where intersection ratios can be unstable.
+        const maybeStartFromViewport = () => {
+          if (hasAutoPlayed) return;
+          const rect = pipelineSection.getBoundingClientRect();
+          const inView = rect.top < window.innerHeight * 0.88 && rect.bottom > window.innerHeight * 0.2;
+          if (!inView) return;
+          startDemo();
+          observer.disconnect();
+          window.removeEventListener('scroll', maybeStartFromViewport);
+        };
+        window.addEventListener('scroll', maybeStartFromViewport, { passive: true });
+        maybeStartFromViewport();
       })();
 
       if (playPauseBtn) {
@@ -2755,79 +2882,29 @@
       }
     })();
 
-    // ── Global background parallax (one vertical image) ─────
+    // ── Global background framing lock (section beats drive framing) ──
     (function() {
-      const bg = document.querySelector('.global-art');
-      if (!bg) return;
-      const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-      // This needs to be clearly visible: we physically translate an oversized image plane.
-      const computeMaxPan = () => {
-        // Keep strong camera motion, but clamp to avoid exposing empty strips.
-        const base = Math.max(220, Math.round(window.innerHeight * 0.72));
-        return prefersReduced ? Math.round(base * 0.45) : base;
-      };
-      let raf = null;
-      let maxPanPx = computeMaxPan();
-
-      const clamp01 = (n) => Math.max(0, Math.min(1, n));
-      const update = () => {
-        raf = null;
-        const doc = document.documentElement;
-        const scrollMax = Math.max(1, doc.scrollHeight - window.innerHeight);
-        const p = clamp01(window.scrollY / scrollMax);
-
-        // Translate from top -> bottom as you scroll (camera pans down the image).
-        // Negative means the image plane moves up, revealing lower parts of the art.
-        const pan = (-p * maxPanPx).toFixed(2) + 'px';
-        doc.style.setProperty('--global-pan', pan);
-      };
-
-      const request = () => {
-        if (raf) return;
-        raf = requestAnimationFrame(update);
-      };
-
-      window.addEventListener('scroll', request, { passive: true });
-      window.addEventListener('resize', () => {
-        maxPanPx = computeMaxPan();
-        request();
-      }, { passive: true });
-      request();
+      // Keep vertical framing deterministic per section:
+      // page 1 = top, page 2 = middle, page 3 = bottom.
+      document.documentElement.style.setProperty('--global-pan', '0px');
     })();
 
-    // ── Side ethereal fog (anime.js) ─────────────────────────
+    // ── Scene atmosphere (anime.js) ───────────────────────────
     (function() {
       if (typeof anime === 'undefined' || typeof anime.animate !== 'function') return;
 
-      const rails = Array.from(document.querySelectorAll('.side-shimmer'));
-      const wisps = Array.from(document.querySelectorAll('.fog-wisp'));
-      if (!rails.length || !wisps.length) return;
+      const mistEls = Array.from(document.querySelectorAll('.waterfall-mist'));
+      if (!mistEls.length) return;
 
-      rails.forEach((rail, i) => {
-        anime.animate(rail, {
-          opacity: [0.26, 0.5, 0.26],
-          duration: 7600 + (i * 1200),
-          ease: 'inOutSine',
-          loop: true,
-        });
-      });
-
-      wisps.forEach((wisp, i) => {
-        const side = wisp.closest('.side-shimmer--right') ? 1 : -1;
-        const duration = 9000 + (i * 1100);
-        const driftX = side * (20 + i * 4);
-        const driftY = -44 - (i * 7);
-
-        anime.animate(wisp, {
-          opacity: [0.14, 0.34, 0.12],
-          translateX: [0, driftX, -driftX * 0.3, 0],
-          translateY: [0, driftY * 0.55, driftY, -8],
-          scaleX: [0.94, 1.22, 1.08, 0.98],
-          scaleY: [0.9, 1.18, 1.04, 0.96],
-          rotate: [side * 2, side * -1.5, side * 1.2],
-          duration,
-          delay: i * 260,
+      mistEls.forEach((mist, i) => {
+        anime.animate(mist, {
+          opacity: [0.1, 0.22, 0.1],
+          translateX: [0, -6 + i * 5, 8 - i * 4, 0],
+          translateY: [0, -8 - i * 3, -20 - i * 5, -6],
+          scaleX: [0.96, 1.06, 1.08, 1],
+          scaleY: [0.94, 1.03, 1.08, 1],
+          duration: 9800 + i * 1200,
+          delay: i * 400,
           ease: 'inOutSine',
           loop: true,
         });

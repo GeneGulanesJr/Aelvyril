@@ -1,0 +1,229 @@
+.detailPanel {
+  padding: 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow-y: auto;
+  max-height: calc(100vh - 12rem);
+}
+
+.detailHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.detailHeader h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.closeBtn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.closeBtn:hover {
+  color: var(--text-primary);
+  background: var(--state-hover-overlay);
+}
+
+.loading {
+  text-align: center;
+  color: var(--text-secondary);
+  padding: 2rem;
+}
+
+.error {
+  text-align: center;
+  color: var(--danger);
+  padding: 2rem;
+}
+
+.taskInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.requestSection label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.requestText {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.statusSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+}
+
+.statusRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.statusValue {
+  color: var(--text-primary);
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.blockedSection {
+  padding: 1rem;
+  background: var(--warning-subtle);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+.blockedSection h4 {
+  color: var(--warning);
+  margin: 0.5rem 0;
+  font-size: 0.95rem;
+}
+
+.blockedSection p {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin: 0 0 1rem 0;
+}
+
+.warningIcon {
+  color: var(--warning);
+}
+
+.blockedInput {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  resize: vertical;
+  min-height: 4rem;
+  margin-bottom: 0.75rem;
+  font-family: inherit;
+}
+
+.blockedInput:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(245, 200, 66, 0.14);
+}
+
+.submitGuidanceBtn {
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: rgba(10, 22, 40, 0.95);
+  border: none;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.submitGuidanceBtn:hover {
+  background: var(--accent-hover);
+}
+
+.submitGuidanceBtn:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
+}
+
+.errorLog {
+  padding: 1rem;
+  background: var(--danger-subtle);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+}
+
+.errorLog h4 {
+  font-size: 0.85rem;
+  color: var(--danger);
+  margin: 0 0 0.5rem 0;
+}
+
+.errorLog ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.errorLog li {
+  font-size: 0.8rem;
+  color: var(--danger);
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.errorLog li:last-child {
+  border-bottom: none;
+}
+
+.planSection {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.planSection h4 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 0.5rem 0;
+}
+
+.goal {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin: 0 0 1rem 0;
+  line-height: 1.5;
+}
+
+.cancelTaskBtn {
+  width: 100%;
+  margin-top: 1rem;
+  padding: 0.625rem;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid var(--danger-subtle);
+  color: var(--danger);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cancelTaskBtn:hover {
+  background: var(--danger-subtle);
+}

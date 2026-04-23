@@ -1,0 +1,22 @@
+# Benchmark raw outputs — keep structure, ignore raw JSON data
+**/results/*.json
+!**/results/latest.json
+!**/results/run_manifest.json
+!**/results/.gitignore
+
+# Generated deliverables (recreated by pipeline)
+BENCHMARK_COMPARISON.md
+BENCHMARK_RESULTS.md
+ERROR_ANALYSIS.md
+CROSS_BENCHMARK_MATRIX.md
+*.tex
+
+# Datasets (downloaded, not committed)
+data/pii-bench/
+data/tab/
+data/ai4privacy/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo

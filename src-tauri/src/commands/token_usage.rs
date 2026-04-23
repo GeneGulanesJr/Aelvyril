@@ -1,4 +1,5 @@
 use crate::state::SharedState;
+use crate::token_usage::tracker::{ORPHAN_SESSION_TIMEOUT_MINUTES, MAX_EVENTS_PER_SESSION};
 
 /// Get global token usage stats for the dashboard.
 #[tauri::command]
@@ -11,6 +12,8 @@ pub async fn get_token_stats(
 }
 
 /// Get detailed token stats for a specific session.
+/// Enforces tenant isolation: only returns stats if the session belongs
+/// to the given tenant (or for the default tenant).
 #[tauri::command]
 pub async fn get_token_stats_for_session(
     state: tauri::State<'_, SharedState>,
@@ -29,7 +32,7 @@ pub async fn get_token_stats_full(
 ) -> Result<serde_json::Value, String> {
     let s = state.read().await;
     let tracker = &s.token_usage_tracker;
-    let full_stats = tracker.full_stats(None);
+    let full_stats = tracker.full_stats_with_access(None, "full");
     Ok(serde_json::to_value(full_stats).unwrap_or_default())
 }
 
@@ -63,6 +66,26 @@ pub async fn get_token_trends(
     Ok(serde_json::to_value(trends).unwrap_or_default())
 }
 
+/// Get per-tool trend data (L3).
+#[tauri::command]
+pub async fn get_token_trends_by_tool(
+    state: tauri::State<'_, SharedState>,
+) -> Result<serde_json::Value, String> {
+    let s = state.read().await;
+    let trends = s.token_usage_tracker.tool_trends();
+    Ok(serde_json::to_value(trends).unwrap_or_default())
+}
+
+/// Get per-model trend data (L3).
+#[tauri::command]
+pub async fn get_token_trends_by_model(
+    state: tauri::State<'_, SharedState>,
+) -> Result<serde_json::Value, String> {
+    let s = state.read().await;
+    let trends = s.token_usage_tracker.model_trends();
+    Ok(serde_json::to_value(trends).unwrap_or_default())
+}
+
 /// Get efficiency metrics (L4).
 #[tauri::command]
 pub async fn get_token_efficiency(
@@ -91,4 +114,82 @@ pub async fn export_token_stats(
     let s = state.read().await;
     let stats = s.token_usage_tracker.global_stats();
     serde_json::to_string_pretty(&stats).map_err(|e| format!("Failed to serialize: {}", e))
+}
+
+/// Trigger orphan session cleanup.
+/// Returns the list of session IDs that were auto-closed.
+#[tauri::command]
+pub async fn cleanup_orphaned_sessions(
+    state: tauri::State<'_, SharedState>,
+) -> Result<serde_json::Value, String> {
+    let s = state.read().await;
+    let closed = s.token_usage_tracker.auto_close_orphaned_sessions();
+    Ok(serde_json::json!({
+        "orphaned_sessions": closed,
+        "count": closed.len(),
+        "timeout_minutes": ORPHAN_SESSION_TIMEOUT_MINUTES,
+    }))
+}
+
+/// Purge old token usage events from the SQLite store.
+/// Events older than `days` days will be deleted.
+#[tauri::command]
+pub async fn purge_token_usage_events(
+    state: tauri::State<'_, SharedState>,
+    days: u32,
+) -> Result<serde_json::Value, String> {
+    let s = state.read().await;
+    match &s.token_usage_store {
+        Some(store) => {
+            let purged = store.purge_older_than_days(days)
+                .map_err(|e| format!("Failed to purge events: {}", e))?;
+            Ok(serde_json::json!({
+                "purged_count": purged,
+                "older_than_days": days,
+            }))
+        }
+        None => Err("Token usage store not available".to_string()),
+    }
+}
+
+/// Get token usage configuration and limits.
+#[tauri::command]
+pub async fn get_token_usage_config() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "max_events_per_session": MAX_EVENTS_PER_SESSION,
+        "orphan_session_timeout_minutes": ORPHAN_SESSION_TIMEOUT_MINUTES,
+        "schema_version": crate::token_usage::TOKEN_USAGE_SCHEMA_VERSION,
+        "default_tenant_id": crate::token_usage::DEFAULT_TENANT_ID,
+    }))
+}
+/// Get token stats with a specified access level.
+/// access_level: "full" | "summary" | "redacted"
+/// - "full": all fields visible (admin)
+/// - "summary": aggregated totals only (standard user)  
+/// - "redacted": tool names generalized, no cost detail (external)
+#[tauri::command]
+pub async fn get_token_stats_with_access(
+    state: tauri::State<'_, SharedState>,
+    access_level: String,
+) -> Result<serde_json::Value, String> {
+    let s = state.read().await;
+    let tracker = &s.token_usage_tracker;
+    let full_stats = tracker.full_stats_with_access(None, &access_level);
+    Ok(serde_json::to_value(full_stats).unwrap_or_default())
+}
+
+/// Check for cost alerts across all sessions.
+/// Returns alerts for runaway sessions, abnormal retry rates,
+/// cost spikes, and high truncation rates.
+#[tauri::command]
+pub async fn check_cost_alerts(
+    state: tauri::State<'_, SharedState>,
+) -> Result<serde_json::Value, String> {
+    let s = state.read().await;
+    let checker = crate::token_usage::alerts::CostAlertChecker::new(
+        s.token_usage_tracker.clone()
+    );
+    let alerts = checker.check_all_sessions();
+    checker.fire_alerts(&alerts);
+    Ok(serde_json::to_value(&alerts).unwrap_or_default())
 }

@@ -39,6 +39,9 @@ pub struct AppSettings {
     pub rate_limit_max_requests_per_hour: u32,
     /// Rate limit: max concurrent requests (global)
     pub rate_limit_max_concurrent_requests: u32,
+    /// Orchestrator settings (plan-and-execute agent)
+    #[serde(default)]
+    pub orchestrator: crate::orchestrator::types::OrchestratorSettings,
 }
 
 impl Default for AppSettings {
@@ -73,6 +76,7 @@ impl Default for AppSettings {
             rate_limit_max_requests_per_minute: rate_limit_defaults.max_requests_per_minute,
             rate_limit_max_requests_per_hour: rate_limit_defaults.max_requests_per_hour,
             rate_limit_max_concurrent_requests: rate_limit_defaults.max_concurrent_requests,
+            orchestrator: crate::orchestrator::types::OrchestratorSettings::default(),
         }
     }
 }

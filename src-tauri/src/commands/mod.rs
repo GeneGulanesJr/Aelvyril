@@ -2,6 +2,7 @@ mod audit;
 mod clipboard;
 mod lists;
 mod onboarding;
+mod orchestrator;
 mod providers;
 mod security;
 mod sessions;
@@ -13,6 +14,7 @@ pub use audit::*;
 pub use clipboard::*;
 pub use lists::*;
 pub use onboarding::*;
+pub use orchestrator::*;
 pub use providers::*;
 pub use security::*;
 pub use sessions::*;
@@ -70,12 +72,30 @@ pub fn invoke_handler<R: tauri::Runtime>(
         get_token_stats,
         get_token_stats_for_session,
         get_token_stats_full,
+        get_token_stats_with_access,
         get_token_stats_by_tool,
         get_token_stats_by_model,
         get_token_trends,
+        get_token_trends_by_tool,
+        get_token_trends_by_model,
         get_token_efficiency,
         reset_token_stats,
         export_token_stats,
+        cleanup_orphaned_sessions,
+        purge_token_usage_events,
+        get_token_usage_config,
+        check_cost_alerts,
+        // ── Orchestrator ──
+        start_orchestrator_task,
+        get_orchestrator_state,
+        get_orchestrator_task_list,
+        get_orchestrator_plan,
+        cancel_orchestrator_task,
+        respond_to_blocked,
+        get_orchestrator_settings,
+        update_orchestrator_settings,
+        get_execution_result,
+        get_validation_result,
     ]
 }
 

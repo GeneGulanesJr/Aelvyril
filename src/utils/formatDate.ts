@@ -19,6 +19,8 @@ export function formatDate(iso: string) {
 /**
  * Format an ISO timestamp as a human-readable relative time string.
  */
+export const formatDateRelative = timeSince;
+
 export function timeSince(iso: string) {
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / MS_PER_MINUTE);

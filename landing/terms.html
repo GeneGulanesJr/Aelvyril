@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aelvyril Terms</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@300;400;500;600&family=Cormorant:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Inter:wght@200;300;400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --obsidian: #070b15;
+      --umber: #31374d;
+      --ivory: #e9e1cf;
+      --pearl: #d8d0bf;
+      --mist: #aca59a;
+      --fog: #83809a;
+      --gold: #cdb07a;
+      --gold-soft: #ddc493;
+      --gold-glow: rgba(205, 176, 122, 0.4);
+      --container: 920px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ivory);
+      background: var(--obsidian);
+      line-height: 1.7;
+      min-height: 100vh;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -2;
+      background:
+        linear-gradient(180deg, rgba(8, 12, 24, 0.66) 0%, rgba(7, 11, 21, 0.96) 100%);
+    }
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background:
+        radial-gradient(ellipse at 68% 24%, rgba(205,176,122,0.12) 0%, transparent 45%),
+        radial-gradient(ellipse at 18% 72%, rgba(103,122,184,0.16) 0%, transparent 44%);
+    }
+
+    a {
+      color: var(--gold);
+      text-decoration: none;
+    }
+    a:hover { opacity: 0.85; }
+
+    :focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 2px;
+    }
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      background: rgba(11, 15, 28, 0.58);
+      border-bottom: 1px solid rgba(205, 176, 122, 0.08);
+    }
+    .nav-inner {
+      max-width: var(--container);
+      margin: 0 auto;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .nav-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--gold);
+      font-family: 'Cinzel', serif;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-size: 0.85rem;
+    }
+    .nav-brand svg { width: 22px; height: 22px; filter: drop-shadow(0 0 6px var(--gold-glow)); }
+    .nav-back {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(205, 176, 122, 0.38);
+      color: rgba(216, 208, 191, 0.92);
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      background: rgba(12, 16, 28, 0.35);
+    }
+    .nav-back svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+    .nav-back:hover { border-color: var(--gold); color: var(--gold); }
+
+    main {
+      max-width: var(--container);
+      margin: 22px auto 28px;
+      padding: 0 20px;
+    }
+
+    .card {
+      background: rgba(12, 16, 28, 0.72);
+      border: 1px solid rgba(205, 176, 122, 0.14);
+      border-radius: 12px;
+      padding: clamp(18px, 3.5vw, 28px);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 10px 34px rgba(0,0,0,0.38);
+    }
+
+    h1, h2 { font-family: 'Cormorant', serif; font-weight: 400; }
+    h1 {
+      margin: 0 0 8px;
+      color: var(--ivory);
+      font-size: clamp(1.8rem, 3.3vw, 2.4rem);
+      line-height: 1.15;
+    }
+    h2 {
+      margin-top: 22px;
+      margin-bottom: 8px;
+      color: var(--gold-soft);
+      font-size: 1.15rem;
+      letter-spacing: 0.01em;
+    }
+    p, li { color: rgba(216, 208, 191, 0.86); }
+    ul { padding-left: 1.15rem; }
+    .meta {
+      font-size: 0.8rem;
+      color: var(--fog);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin: 0 0 16px;
+    }
+
+    .footer {
+      border-top: 1px solid rgba(197, 163, 103, 0.08);
+      padding: 18px 0 26px;
+      text-align: center;
+      color: var(--fog);
+      font-size: 0.7rem;
+      letter-spacing: 0.08em;
+    }
+
+    @media (max-width: 640px) {
+      .nav-inner { padding: 14px 14px; }
+      main { padding: 0 14px; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav" aria-label="Legal navigation">
+    <div class="nav-inner">
+      <a class="nav-brand" href="./index.html" aria-label="Back to Aelvyril landing page">
+        <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+          <path d="M16 2C16 2 20 8 20 14C20 20 16 26 16 26C16 26 12 20 12 14C12 8 16 2 16 2Z" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M16 26V30M10 18C10 18 13 16 16 16C19 16 22 18 22 18M8 12C8 12 12 10 16 10C20 10 24 12 24 12" stroke="currentColor" stroke-width="1" opacity="0.5"/>
+        </svg>
+        Aelvyril
+      </a>
+
+      <a class="nav-back" href="./index.html">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/><path d="M9 12h12"/></svg>
+        Back to landing
+      </a>
+    </div>
+  </nav>
+
+  <main>
+    <div class="card">
+      <h1>Terms of Use</h1>
+      <p class="meta">Last updated: 2026-04-23</p>
+
+      <p>By using Aelvyril, you agree to the following baseline terms.</p>
+
+      <h2>Use of the Software</h2>
+      <ul>
+        <li>You are responsible for reviewing outputs before relying on them in production workflows.</li>
+        <li>You are responsible for how you configure providers, models, and keys.</li>
+        <li>You must comply with applicable laws and third-party provider terms.</li>
+      </ul>
+
+      <h2>No Warranty</h2>
+      <p>
+        Aelvyril is provided "as is" without warranties of any kind, express or implied, including fitness for a
+        particular purpose and non-infringement.
+      </p>
+
+      <h2>Limitation of Liability</h2>
+      <p>
+        To the maximum extent permitted by law, the project maintainers are not liable for damages arising from use
+        or inability to use the software.
+      </p>
+
+      <h2>Open Source</h2>
+      <p>
+        Aelvyril source code and project details are available on
+        <a href="https://github.com/GeneGulanesJr/Aelvyril">GitHub</a>.
+      </p>
+
+      <h2>Updates</h2>
+      <p>
+        These terms may be updated as the project evolves. Continued use after changes means you accept the revised terms.
+      </p>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div>&copy; 2026 Aelvyril</div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,27 @@
+# Benchmark Stack for Aelvyril PII Detection
+# Usage: docker compose -f docker-compose.bench.yml up -d
+#
+# Spins up:
+#   - Presidio analyzer service (Python/Flask) on port 3000
+#   - Health check validates the analyzer is ready before benchmarks run
+#
+# Requires:
+#   - presidio-analyzer pip package installed in the presidio container
+
+services:
+  presidio:
+    build:
+      context: ../src-tauri
+      dockerfile: ../../benchmarks/docker/Dockerfile.presidio
+    ports:
+      - "3000:3000"
+    environment:
+      - AELVYRIL_PRESIDIO_HOST=0.0.0.0
+      - AELVYRIL_PRESIDIO_PORT=3000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:3000/health').raise_for_status()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped

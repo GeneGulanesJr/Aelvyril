@@ -6,14 +6,21 @@ import {
   Settings,
   Shield,
   Gauge,
+  Bot,
+  HelpCircle,
+  Info,
+  Sun,
+  Moon,
 } from "lucide-react";
 import { useGatewayStatus } from "../hooks/useTauri";
+import { useTheme } from "../hooks/useTheme";
 import styles from "./Sidebar.module.css";
 
 const navItems = [
   { to: "/", icon: Activity, label: "Dashboard" },
   { to: "/sessions", icon: Clock, label: "Sessions" },
   { to: "/audit", icon: FileText, label: "Audit Log" },
+  { to: "/orchestrator", icon: Bot, label: "Orchestrator" },
   { to: "/security", icon: Gauge, label: "Security" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ];
@@ -31,11 +38,37 @@ function SidebarNav() {
           end={to === "/"}
           className={navItemClass}
         >
-          <Icon size={18} />
+          <Icon size={18} strokeWidth={1.5} />
           <span>{label}</span>
         </NavLink>
       ))}
     </nav>
+  );
+}
+
+function FooterNav() {
+  return (
+    <div className={styles.footerNav}>
+      <a href="#" className={styles.footerLink} onClick={e => e.preventDefault()}>
+        <HelpCircle size={16} strokeWidth={1.5} />
+        <span>Help</span>
+      </a>
+      <a href="#" className={styles.footerLink} onClick={e => e.preventDefault()}>
+        <Info size={16} strokeWidth={1.5} />
+        <span>About</span>
+      </a>
+    </div>
+  );
+}
+
+function ThemeToggle() {
+  const { resolved, toggle } = useTheme();
+  const Icon = resolved === "dark" ? Sun : Moon;
+  return (
+    <button className={styles.themeToggle} onClick={toggle} title="Toggle theme">
+      <Icon size={16} strokeWidth={1.5} />
+      <span>{resolved === "dark" ? "Light mode" : "Dark mode"}</span>
+    </button>
   );
 }
 
@@ -74,11 +107,13 @@ export function Sidebar() {
   return (
     <aside className={styles.sidebar}>
       <div className={styles.logo}>
-        <Shield size={24} strokeWidth={2.5} />
-        <span className={styles.logoText}>Aelvyril</span>
+        <Shield size={22} strokeWidth={1.5} />
+        <span className={styles.logoText}>AELVYRIL</span>
       </div>
       <SidebarNav />
       <div className={styles.footer}>
+        <FooterNav />
+        <ThemeToggle />
         <GatewayStatusPill active={gatewayActive} />
         <ClipboardStatus enabled={clipboardOn} />
         <SetupBadge show={showSetup} />

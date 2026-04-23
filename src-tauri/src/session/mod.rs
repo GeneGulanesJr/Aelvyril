@@ -157,12 +157,31 @@ impl SessionManager {
         self.mapping_tables.remove(session_id);
     }
 
-    /// Expire sessions past the timeout
-    pub fn expire_sessions(&self) {
+    /// Expire sessions past the timeout.
+    /// Returns a list of expired session IDs (useful for closing token usage sessions).
+    pub fn expire_sessions(&self) -> Vec<String> {
         let cutoff =
             chrono::Utc::now() - chrono::Duration::from_std(self.timeout).unwrap_or_default();
+
+        // Collect expired session IDs
+        let expired_ids: Vec<String> = self.sessions
+            .iter()
+            .filter(|entry| entry.value().last_activity <= cutoff)
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        // Remove expired sessions
         self.sessions
             .retain(|_, session| session.last_activity > cutoff);
+
+        // Clean up mapping tables for expired sessions
+        for id in &expired_ids {
+            self.mapping_tables.remove(id);
+        }
+
+        // Note: Callers should also invoke close_session on the TokenUsageTracker
+        // for each expired session to finalize token usage stats.
+        expired_ids
     }
 
     /// Count active sessions

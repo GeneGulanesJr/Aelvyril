@@ -108,11 +108,11 @@ fn presidio_entity_to_pii_type(entity: &str) -> PiiType {
         "URL" | "DOMAIN_NAME" => PiiType::Domain,
         "DATE_TIME" | "DATE" => PiiType::Date,
         "US_ZIP_CODE" | "ZIP_CODE" => PiiType::ZipCode,
-        // Map location-related types
-        "LOCATION" | "US_STATE" | "CITY" | "STREET_ADDRESS" => PiiType::ApiKey,
-        // Map person name to a high-confidence custom detection
-        "PERSON" => PiiType::ApiKey,
-        // Map financial identifiers
+        // NER-driven entity types (Phase 0 — Presidio passthrough)
+        "PERSON" | "PER" => PiiType::Person,
+        "LOCATION" | "US_STATE" | "CITY" | "STREET_ADDRESS" | "LOC" => PiiType::Location,
+        "ORGANIZATION" | "ORG" | "NRP" => PiiType::Organization,
+        // Map financial identifiers to ApiKey (high-confidence catch-all)
         "US_BANK_NUMBER" | "US_PASSPORT" | "UK_NHS" => PiiType::ApiKey,
         // Default — preserve as ApiKey with high confidence so nothing slips through
         _ => {
@@ -471,7 +471,9 @@ mod tests {
         assert_eq!(presidio_entity_to_pii_type("DATE_TIME"), PiiType::Date);
         assert_eq!(presidio_entity_to_pii_type("US_ZIP_CODE"), PiiType::ZipCode);
         assert_eq!(presidio_entity_to_pii_type("DOMAIN_NAME"), PiiType::Domain);
-        assert_eq!(presidio_entity_to_pii_type("PERSON"), PiiType::ApiKey);
+        assert_eq!(presidio_entity_to_pii_type("PERSON"), PiiType::Person);
+        assert_eq!(presidio_entity_to_pii_type("LOCATION"), PiiType::Location);
+        assert_eq!(presidio_entity_to_pii_type("ORGANIZATION"), PiiType::Organization);
         assert_eq!(presidio_entity_to_pii_type("UNKNOWN_TYPE"), PiiType::ApiKey);
     }
 

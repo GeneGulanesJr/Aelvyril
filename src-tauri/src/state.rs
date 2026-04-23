@@ -101,6 +101,15 @@ impl AppState {
             token_usage_store.as_ref().map(|s| std::sync::Arc::new(s.clone())),
         ));
 
+        // Refresh LiteLLM pricing data in background (non-blocking)
+        // Best-effort: if fetch fails, hardcoded pricing fallback is used
+        let pricing_result = crate::token_usage::pricing::refresh_pricing_from_litellm();
+        if pricing_result {
+            tracing::info!("LiteLLM pricing data loaded successfully");
+        } else {
+            tracing::info!("Using hardcoded pricing fallback (LiteLLM fetch failed or not yet available)");
+        }
+
         Self {
             gateway_key: None,
             gateway_port: settings.gateway_port,

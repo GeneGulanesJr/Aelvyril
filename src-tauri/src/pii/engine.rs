@@ -309,4 +309,37 @@ mod tests {
         let matches = engine.detect("john@test.com").await;
         assert!(matches.iter().any(|m| m.pii_type == PiiType::Email));
     }
+
+    #[test]
+    fn test_ner_types_in_summarize() {
+        // Verify that Person, Location, Organization PiiTypes are included
+        // in summarize_matches output when present.
+        let matches = vec![
+            PiiMatch {
+                pii_type: PiiType::Person,
+                text: "John Smith".into(),
+                start: 0,
+                end: 10,
+                confidence: 0.85,
+            },
+            PiiMatch {
+                pii_type: PiiType::Location,
+                text: "New York".into(),
+                start: 15,
+                end: 23,
+                confidence: 0.80,
+            },
+            PiiMatch {
+                pii_type: PiiType::Organization,
+                text: "Acme Corp".into(),
+                start: 28,
+                end: 37,
+                confidence: 0.75,
+            },
+        ];
+        let summary = summarize_matches(&matches);
+        assert_eq!(summary.get("Person"), Some(&1));
+        assert_eq!(summary.get("Location"), Some(&1));
+        assert_eq!(summary.get("Organization"), Some(&1));
+    }
 }

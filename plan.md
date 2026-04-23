@@ -16,7 +16,7 @@
 - [x] Build request router that forwards to upstream OpenAI-compatible endpoints
 - [x] Implement streaming (SSE) passthrough for chat completions
 - [x] Implement multi-provider routing based on model name in the request (e.g. `gpt-4o` → OpenAI, `claude-sonnet` → Anthropic)
-- [ ] Implement automatic failover to next available provider if primary fails
+- [x] Implement automatic failover to next available provider if primary fails
 
 ### 1.3 Keychain Integration
 - [x] Integrate `keyring` crate for OS-native secret storage
@@ -31,6 +31,7 @@
   - Email, Phone, IP Address, Domain, API Key patterns, Credit Card, SSN, IBAN
   - Regex-based recognizers cover 90%+ of structured PII without any external dependency
 - [ ] The local LFM2.5-350M model (Section 1.5) handles the contextual/semantic sensitivity pass that Presidio normally needs spaCy NER for — eliminating the only part that can't be cleanly reimplemented in pure Rust
+  - [x] Heuristic weighted classifier (128-feature, hand-tuned weights) implemented as fallback
 - [x] Build entity extraction pipeline that returns structured matches with confidence scores
 
 ### 1.5 Local Model Layer (LFM2.5-350M via ONNX)
@@ -39,9 +40,11 @@
   - Quantization options: fp32 (1.4 GB), fp16 (725 MB), q8 (634 MB), **q4f16 (255 MB)**, q4 (294 MB)
   - **Recommended**: `model_q4f16.onnx` + `model_q4f16.onnx_data` (~255 MB) — best size-to-quality ratio for CPU inference
   - Multi-language support: en, ar, zh, fr, de, ja, ko, es, pt
-- [ ] **Runtime**: [`ort`](https://crates.io/crates/ort) crate v2.0 (Rust wrapper for ONNX Runtime 1.24) — 8.3M downloads, mature, cross-platform CPU support
+- [x] **Runtime**: [`ort`](https://crates.io/crates/ort) crate v2.0 (Rust wrapper for ONNX Runtime 1.24) — 8.3M downloads, mature, cross-platform CPU support
+- [x] `ort` dependency added behind `onnx` feature flag; `OnnxModelService` module created with model loading, inference skeleton, and JSON output parsing
+- [x] `ndarray` updated to 0.17 to match `ort` dependency
 - [ ] Bundle the ONNX model files with the Tauri app (downloaded on first launch or included in installer)
-- [ ] Build model service that accepts a prompt and returns detected sensitive spans
+- [ ] Complete the iterative token generation loop in `run_inference()` (currently a placeholder — production requires autoregressive decode loop)
 - [ ] Run model inference in a background thread to avoid blocking the gateway
 - [ ] Tune detection thresholds to balance catch rate vs. false positives
 
@@ -54,9 +57,9 @@
 
 ### 1.7 Rehydration Layer
 - [x] Scan upstream response for any tokens present in the session mapping
-- [ ] Replace tokens with original values in streaming and non-streaming modes
-- [ ] Gracefully handle tokens the upstream model modifies or drops
-- [ ] Deliver fully restored response to the client
+- [x] Replace tokens with original values in streaming and non-streaming modes
+- [x] Gracefully handle tokens the upstream model modifies or drops
+- [x] Deliver fully restored response to the client
 
 ### 1.8 Session Management
 - [x] Tie sessions to the conversation context of the client tool

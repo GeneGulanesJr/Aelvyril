@@ -1,6 +1,14 @@
 # Changelog
 
 ## 2026-04-23
+- Made the favicon background transparent by removing the filled backdrop rectangle from `landing/favicon.svg` and `public/aelvyril-mark.svg`.
+- Updated browser favicon branding to match the top-nav Aelvyril mark by adding shared icon assets (`landing/favicon.svg`, `public/aelvyril-mark.svg`) and wiring them in both landing and app HTML entry points.
+- Fixed mobile pipeline demo playback reliability in `landing/index.html` by loosening autoplay visibility thresholds, adding a scroll-viewport fallback trigger, and removing the mobile `max-height` cap that could clip the animation scene.
+- Polished landing art transitions with slower section-to-section focal interpolation, added per-section readability overlays, and tuned mobile beat framing so top/middle/bottom composition remains consistent on smaller screens.
+- Corrected landing art framing lock by removing continuous global background pan and binding the art plane to the viewport, so section beats now honor true top/middle/bottom vertical focus.
+- Adjusted landing section framing to explicit vertical beats: page 1 focuses the top of `landing/HeroBackground.png`, page 2 focuses the middle, and page 3 focuses the bottom.
+- Retuned landing background framing to avoid a center-only composition by introducing per-section focal targets across X/Y (left spires in overview, central flow in pipeline, right balcony/garden in features).
+- Applied an art-first cinematic pass to `landing/index.html`: lighter directional overlays, section-based background camera beats, slower global pan for readability, a brief mid-scroll art reveal, and scene-anchored waterfall mist replacing side rails.
 - Refreshed `landing/index.html` copy to keep a serious tone while preserving mythic styling (more literal CTAs and demo labels; removed “Oracle” / “Enter the Gateway” phrasing).
 - Fixed landing page keyboard snap controls so fullpage shortcuts no longer override focused interactive controls (for example buttons/links).
 - Fixed landing page wheel snapping to allow scrolling inside nested overflow containers before advancing fullpage sections.

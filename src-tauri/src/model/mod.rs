@@ -24,6 +24,7 @@
 //! - 10 binary features: PII-type regex pattern presence
 //! - 74 padding features (reserved for future use)
 
+pub mod downloader;
 pub mod features;
 pub mod onnx_detect;
 

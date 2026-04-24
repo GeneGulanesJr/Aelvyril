@@ -30,10 +30,25 @@ const PII_DETECTION_USER_TEMPLATE: &str = "Analyze this text for PII entities:\n
 const MAX_INPUT_CHARS: usize = 4000;
 
 /// Maximum tokens for the model to generate (output length budget).
-const MAX_OUTPUT_TOKENS: u32 = 512;
+const MAX_OUTPUT_TOKENS: usize = 512;
+
+/// Temperature for generation (0.0 = greedy, higher = more random).
+/// Lower values produce more deterministic output — good for structured JSON detection.
+const GENERATION_TEMPERATURE: f32 = 0.3;
+
+/// Top-p (nucleus) sampling threshold. Only consider tokens whose cumulative
+/// probability falls within this threshold.
+const GENERATION_TOP_P: f32 = 0.9;
+
+/// Early stopping: if no new non-whitespace content produced after this many
+/// tokens, stop generating (model is "stuck").
+const GENERATION_STUCK_LIMIT: usize = 50;
 
 /// Confidence threshold below which model detections are discarded.
 const MIN_ONNX_CONFIDENCE: f64 = 0.4;
+
+/// EOS token ID for LFM2.5 (standard Llama tokenizer EOS).
+const EOS_TOKEN_ID: i64 = 2;
 
 // ── ONNX Model Entity Types ──────────────────────────────────────────────────
 
@@ -176,61 +191,128 @@ mod onnx_impl {
                 .map_err(|e| format!("Tokenization failed: {}", e))?;
 
             let input_ids: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
-            let attention_mask: Vec<i64> = encoding.get_attention_mask().iter().map(|&m| m as i64).collect();
+            let attention_mask: Vec<i64> =
+                encoding.get_attention_mask().iter().map(|&m| m as i64).collect();
+            let initial_len = input_ids.len();
 
-            let seq_len = input_ids.len();
+            // Mutable generation state — grow token by token
+            let mut generated_ids = input_ids;
+            let mut generated_tokens: Vec<String> = Vec::new();
+            let mut tokens_since_new_content: usize = 0;
+            let mut rng = rand::rng();
 
-            // Create ndarray input arrays
-            let input_ids_arr = ndarray::Array2::from_shape_vec((1, seq_len), input_ids)
-                .map_err(|e| format!("Failed to shape input_ids: {}", e))?;
-            let attention_mask_arr = ndarray::Array2::from_shape_vec((1, seq_len), attention_mask)
-                .map_err(|e| format!("Failed to shape attention_mask: {}", e))?;
+            for step in 0..MAX_OUTPUT_TOKENS {
+                let seq_len = generated_ids.len();
 
-            // Create input tensors
-            let input_ids_value = TensorRef::from_array_view(&input_ids_arr)
-                .map_err(|e| format!("Failed to create input_ids tensor: {}", e))?
-                .into();
-            let attention_mask_value = TensorRef::from_array_view(&attention_mask_arr)
-                .map_err(|e| format!("Failed to create attention_mask tensor: {}", e))?
-                .into();
+                // Build input tensors
+                let input_ids_arr = ndarray::Array2::from_shape_vec(
+                    (1, seq_len),
+                    generated_ids.clone(),
+                )
+                .map_err(|e| format!("Failed to shape input_ids at step {}: {}", step, e))?;
+                let attention_mask_arr = ndarray::Array2::from_shape_vec(
+                    (1, seq_len),
+                    attention_mask.clone(),
+                )
+                .map_err(|e| {
+                    format!("Failed to shape attention_mask at step {}: {}", step, e)
+                })?;
 
-            // Build session inputs from a Vec of named inputs
-            let inputs: Vec<(&str, SessionInputValue<'_>)> = vec![
-                ("input_ids", input_ids_value),
-                ("attention_mask", attention_mask_value),
-            ];
+                let input_ids_value = TensorRef::from_array_view(&input_ids_arr)
+                    .map_err(|e| format!("Failed to create input_ids tensor: {}", e))?
+                    .into();
+                let attention_mask_value = TensorRef::from_array_view(&attention_mask_arr)
+                    .map_err(|e| format!("Failed to create attention_mask tensor: {}", e))?
+                    .into();
 
-            let outputs = session
-                .run(inputs)
-                .map_err(|e| format!("ONNX inference failed: {}", e))?;
+                let inputs: Vec<(&str, SessionInputValue<'_>)> = vec![
+                    ("input_ids", input_ids_value),
+                    ("attention_mask", attention_mask_value),
+                ];
 
-            // Get logits output (may be named "logits" or just the first output)
-            let logits_value = outputs
-                .get("logits")
-                .or_else(|| {
-                    outputs.keys().next().and_then(|k| outputs.get(k))
-                });
+                // Run single forward pass
+                let outputs = session
+                    .run(inputs)
+                    .map_err(|e| format!("ONNX inference failed at step {}: {}", step, e))?;
 
-            // For now, since LFM2.5 is a causal LM and requires iterative generation,
-            // which is complex, we'll return a placeholder indicating the model
-            // loaded but generation needs further implementation.
-            // The heuristic classifier serves as the primary detection method,
-            // with ONNX as a future enhancement layer.
-            tracing::info!("ONNX model inference completed, parsing structured output...");
+                // Extract logits: shape (1, seq_len, vocab_size)
+                let logits_output = outputs
+                    .get("logits")
+                    .or_else(|| outputs.keys().next().and_then(|k| outputs.get(k)))
+                    .ok_or("No logits output from model")?;
 
-            // Extract logits and do simple greedy decoding
-            // This is a simplified approach — production would need iterative generation
-            let generated_text = match logits_value {
-                Some(_) => {
-                    // Model produced output — for LMs, we'd need iterative token generation
-                    // For now, indicate to the caller that the model is available
-                    // but full generation is deferred (heuristic fallback handles this)
-                    String::new()
+                let logits_tensor = logits_output
+                    .try_extract_tensor::<f32>()
+                    .map_err(|e| format!("Failed to extract logits tensor: {}", e))?;
+
+                let logits_shape = logits_tensor.shape().to_vec();
+                let ndim = logits_shape.len();
+
+                if ndim < 2 {
+                    return Err(format!("Unexpected logits shape: {:?}", logits_shape));
                 }
-                None => String::new(),
-            };
 
-            Ok(generated_text)
+                let vocab_size = logits_shape[ndim - 1];
+                let logits_view = logits_tensor.view();
+
+                // Extract logits for the last token position only
+                let mut last_logits: Vec<f32> = vec![0.0f32; vocab_size];
+                for v in 0..vocab_size {
+                    // Build index: [0, ..., seq_len-1, v] depending on dimensionality
+                    let idx = if ndim == 3 {
+                        logits_view[[0, seq_len - 1, v]]
+                    } else if ndim == 2 {
+                        logits_view[[seq_len - 1, v]]
+                    } else {
+                        logits_view[[v]]
+                    };
+                    last_logits[v] = idx;
+                }
+
+                // Sample next token
+                let next_token_id = sample_next_token(&last_logits, &mut rng)?;
+
+                // Check for EOS
+                if next_token_id == EOS_TOKEN_ID {
+                    tracing::debug!("EOS at step {}", step);
+                    break;
+                }
+
+                // Decode token to text
+                if let Ok(decoded) = tokenizer.decode(&[next_token_id as u32], false) {
+                    let is_content = !decoded.trim().is_empty();
+                    if is_content {
+                        tokens_since_new_content = 0;
+                    } else {
+                        tokens_since_new_content += 1;
+                    }
+                    generated_tokens.push(decoded);
+                } else {
+                    tokens_since_new_content += 1;
+                }
+
+                // Early stopping: model is producing no useful content
+                if tokens_since_new_content >= GENERATION_STUCK_LIMIT {
+                    tracing::debug!(
+                        "Early stopping at step {}: {} tokens without new content",
+                        step,
+                        tokens_since_new_content
+                    );
+                    break;
+                }
+
+                // Append to sequence for next iteration
+                generated_ids.push(next_token_id);
+                attention_mask.push(1);
+            }
+
+            let output = generated_tokens.join("");
+            tracing::debug!(
+                "ONNX generated {} tokens (input was {} tokens)",
+                generated_tokens.len(),
+                initial_len
+            );
+            Ok(output)
         }
     }
 }
@@ -329,6 +411,76 @@ fn parse_detections(model_output: &str, original_text: &str) -> Vec<OnnxDetectio
     detections
 }
 
+/// Sample the next token from logits using temperature + top-p (nucleus) sampling.
+///
+/// When temperature is 0.0, uses pure greedy decoding (argmax).
+/// Otherwise, applies temperature scaling → softmax → top-p filtering → random sample.
+fn sample_next_token<R: rand::Rng>(
+    logits: &[f32],
+    rng: &mut R,
+) -> Result<i64, String> {
+    if GENERATION_TEMPERATURE <= 0.0 {
+        // Pure greedy decoding
+        return Ok(logits
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .map(|(id, _)| id as i64)
+            .unwrap_or(EOS_TOKEN_ID));
+    }
+
+    // Apply temperature scaling: softmax(x/T) = softmax(x / T)
+    let max_logit = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let scaled: Vec<f32> = logits
+        .iter()
+        .map(|l| (l - max_logit) / GENERATION_TEMPERATURE)
+        .collect();
+
+    // Softmax for numerical stability
+    let exp_sum: f32 = scaled.iter().map(|l| l.exp()).sum();
+    if exp_sum <= 0.0 || !exp_sum.is_finite() {
+        return Err(format!("Invalid softmax sum: {}", exp_sum));
+    }
+    let probs: Vec<f32> = scaled.iter().map(|l| l.exp() / exp_sum).collect();
+
+    // Top-p (nucleus) filtering: sort by probability descending,
+    // keep tokens until cumulative probability >= top_p
+    let mut sorted_probs: Vec<(usize, f32)> = probs.iter().cloned().enumerate().collect();
+    sorted_probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+    let mut cumulative = 0.0f32;
+    let mut filtered: Vec<(usize, f32)> = Vec::new();
+    for (idx, p) in sorted_probs {
+        cumulative += p;
+        filtered.push((idx, p));
+        if cumulative >= GENERATION_TOP_P {
+            break;
+        }
+    }
+
+    if filtered.is_empty() {
+        return Err("Top-p filtering removed all tokens".into());
+    }
+
+    // Renormalize and sample
+    let filtered_sum: f32 = filtered.iter().map(|(_, p)| p).sum();
+    if filtered_sum <= 0.0 {
+        return Err("Filtered probability sum is zero".into());
+    }
+    let r: f32 = rng.random_range(0.0..filtered_sum);
+    let mut acc = 0.0f32;
+    let chosen = filtered
+        .iter()
+        .find(|(_, p)| {
+            acc += p;
+            acc >= r
+        })
+        .map(|(id, _)| *id as i64)
+        .unwrap_or(EOS_TOKEN_ID);
+
+    Ok(chosen)
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -393,5 +545,33 @@ mod tests {
             std::path::PathBuf::from("/stub"),
         );
         assert!(!service.is_loaded());
+    }
+
+    #[test]
+    fn test_sample_next_token_greedy_picks_max() {
+        let mut logits = vec![0.0f32; 100];
+        logits[42] = 10.0; // clear max
+        let mut rng = rand::rng();
+        let token = sample_next_token(&logits, &mut rng).unwrap();
+        assert_eq!(token, 42);
+    }
+
+    #[test]
+    fn test_sample_next_token_single_high_prob() {
+        // With temperature and top-p, one very high logit should dominate
+        let mut logits = vec![0.0f32; 1000];
+        logits[7] = 100.0;
+        let mut rng = rand::rng();
+        let token = sample_next_token(&logits, &mut rng).unwrap();
+        assert_eq!(token, 7);
+    }
+
+    #[test]
+    fn test_sample_next_token_uniform_distribution() {
+        // All equal logits — should still produce a valid token
+        let logits = vec![1.0f32; 100];
+        let mut rng = rand::rng();
+        let token = sample_next_token(&logits, &mut rng).unwrap();
+        assert!(token >= 0 && token < 100);
     }
 }

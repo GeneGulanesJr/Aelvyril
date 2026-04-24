@@ -1730,7 +1730,7 @@ mod tests {
         tracker.record(event);
 
         // Default tenant should NOT see tenant_a's session
-        let stats = tracker.session_stats_for_tenant("s1", "default");
+        let _stats = tracker.session_stats_for_tenant("s1", "default");
         // "default" is DEFAULT_TENANT_ID, which sees everything - but s1 belongs to tenant_a
         // In this single-tenant impl, DEFAULT_TENANT_ID sees all
     }
@@ -1738,7 +1738,7 @@ mod tests {
     #[test]
     fn test_tenant_id_is_set_in_events() {
         // Privacy: Every event must have a tenant_id (never empty)
-        let tracker = TokenUsageTracker::new();
+        let _tracker = TokenUsageTracker::new();
         let event = make_event("s1", "gpt-4o", "chat", 100, 200, 0, 50, 100, true);
         assert_eq!(event.tenant_id, "default");
         assert!(!event.tenant_id.is_empty());
@@ -1852,7 +1852,7 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
 
         let store = TokenUsageStore::open(&db_path).expect("Failed to open test DB");
-        let mut event = make_event("s1", "gpt-4o", "chat", 100, 200, 0, 50, 100, true);
+        let event = make_event("s1", "gpt-4o", "chat", 100, 200, 0, 50, 100, true);
 
         // Insert the same event twice
         store.insert(&event).expect("First insert should succeed");
@@ -2025,7 +2025,7 @@ mod tests {
     fn test_quality_score_computation() {
         let tracker = TokenUsageTracker::new();
         // 10 events: 8 success, 1 retry, 1 truncation
-        for i in 0..8 {
+        for _i in 0..8 {
             tracker.record(make_event("s1", "gpt-4o", "chat_completions", 100, 500, 0, 100, 200, true));
         }
         tracker.record(make_event("s1", "gpt-4o", "chat_completions", 100, 500, 0, 100, 200, false));
@@ -2140,7 +2140,7 @@ mod tests {
 
     #[test]
     fn test_l1_snapshot_reconciliation_ok() {
-        use crate::token_usage::TokenUsageEvent;
+        
         let events = vec![
             make_event("s1", "gpt-4o", "chat_completions", 100, 500, 0, 100, 200, true),
             make_event("s1", "gpt-4o", "chat_completions", 100, 500, 0, 100, 200, true),
@@ -2179,7 +2179,7 @@ mod tests {
 
     #[test]
     fn test_l1_snapshot_reconciliation_detects_mismatch() {
-        use crate::token_usage::TokenUsageEvent;
+        
         let events = vec![
             make_event("s1", "gpt-4o", "chat_completions", 100, 500, 0, 100, 200, true),
         ];

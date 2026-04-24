@@ -253,10 +253,16 @@ pub fn build_repo_tree_summary(repo_path: &Path) -> String {
 
     // Truncate if over the character budget.
     if summary.len() > MAX_TREE_CHARS {
-        // Try to cut at the last newline within budget.
-        let end = summary[..MAX_TREE_CHARS]
-            .rfind('\n')
-            .unwrap_or(MAX_TREE_CHARS);
+        // Find the last newline within the valid UTF-8 prefix up to MAX_TREE_CHARS.
+        // Use char_indices to avoid slicing mid-character (which would panic).
+        let prefix_end = summary
+            .char_indices()
+            .take_while(|&(i, _)| i < MAX_TREE_CHARS)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        let prefix = &summary[..prefix_end];
+        let end = prefix.rfind('\n').unwrap_or(prefix.len());
         summary.truncate(end);
         summary.push_str("\n... (truncated)");
     }

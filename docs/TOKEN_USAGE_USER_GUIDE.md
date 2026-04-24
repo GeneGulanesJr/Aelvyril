@@ -130,16 +130,16 @@ These ratios help you understand whether you're using tokens effectively:
 
 ## Cost Alerts
 
-Aelvyril monitors for abnormal patterns and fires alerts:
+Aelvyril monitors for abnormal patterns and fires alerts. Thresholds are **configurable** (Settings → Token Usage → Alert Thresholds); defaults:
 
-| Alert | Threshold | What to do |
-|-------|-----------|------------|
-| Cost spike | Session cost > 3× daily average | Check if a new feature or model was deployed |
-| Runaway session | Session cost > $10 | Investigate for infinite loops or retry storms |
-| Abnormal retry rate | > 20% of calls retried | Check provider status page; increase timeout |
-| High truncation rate | > 10% globally | Review context window management; break tasks smaller |
+| Alert | Default Threshold | What to do |
+|-------|-------------------|------------|
+| Cost spike | Session cost > 5× session average | Check if a new feature or model was deployed |
+| Runaway session | Session cost > $5.00 (500¢) | Investigate for infinite loops or retry storms |
+| Abnormal retry rate | > 30% of calls retried | Check provider status page; increase timeout |
+| Daily cost spike | Daily cost > $10.00 (1000¢) | Review daily spend trends; consider budget caps |
 
-Alerts appear in the app logs and can be checked manually via **Settings → Token Usage → Check Alerts**.
+Alerts appear in the app logs and can be checked manually via **Settings → Token Usage → Check Alerts**. You can also query `get_token_usage_config()` to see current runtime thresholds.
 
 ---
 

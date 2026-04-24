@@ -5,7 +5,6 @@ pub mod config;
 pub mod gateway;
 pub mod keychain;
 pub mod lists;
-pub mod model;
 pub mod perf;
 pub mod pii;
 pub mod providers;

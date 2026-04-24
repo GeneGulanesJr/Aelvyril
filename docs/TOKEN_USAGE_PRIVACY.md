@@ -57,7 +57,7 @@ Even aggregate counts can leak information in theory. We address these risks:
 
 ### Intersection Attacks
 Querying stats at two timepoints and diffing them could infer what happened in between. **Mitigation:**
-- Stats API is rate-limited (max 60 req/min)
+- Stats API is rate-limited (default: 120/min, 5000/hour per command)
 - Timestamps are rounded to the nearest minute (not millisecond)
 - Event-level data is batched before persistence
 
@@ -89,6 +89,21 @@ If `session_id` were sequential, an attacker could enumerate all sessions. **Mit
 | `redacted` | Tool names generalized, no cost detail | External / public |
 
 The `meta.access_level` field in every API response tells you which level you're receiving.
+
+---
+
+## Cost Alert Thresholds
+
+Aggregate cost monitoring runs locally to detect potential abuse or budgeting issues. Thresholds are **configurable** and stored in your local settings.
+
+| Threshold | Default | Purpose |
+|------------|---------|---------|
+| `runaway_session_cents` | 500¢ ($5.00) | Flag a session whose total cost exceeds this |
+| `cost_spike_multiplier` | 5.0× | Flag if a single call costs >5× the session average |
+| `abnormal_retry_rate` | 0.30 (30%) | Flag if >30% of calls in a session are retries |
+| `daily_cost_spike_cents` | 1000¢ ($10.00) | Flag if daily spend exceeds this multiple times |
+
+Thresholds are evaluated **client-side only**; no threshold data leaves your machine. You can adjust these values in Settings → Token Usage → Alert Thresholds.
 
 ---
 

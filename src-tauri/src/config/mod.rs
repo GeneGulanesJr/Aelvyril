@@ -39,6 +39,14 @@ pub struct AppSettings {
     pub rate_limit_max_requests_per_hour: u32,
     /// Rate limit: max concurrent requests (global)
     pub rate_limit_max_concurrent_requests: u32,
+    /// Alert threshold: session cost (cents) to flag as runaway
+    pub alert_runaway_session_cents: u64,
+    /// Alert threshold: cost spike multiplier (N× daily average)
+    pub alert_cost_spike_multiplier: f64,
+    /// Alert threshold: retry rate (0.0–1.0) that triggers warning
+    pub alert_abnormal_retry_rate: f64,
+    /// Alert threshold: absolute daily cost (cents) for daily spike alert (0 = disabled)
+    pub alert_daily_cost_spike_cents: u64,
     /// Orchestrator settings (plan-and-execute agent)
     #[serde(default)]
     pub orchestrator: crate::orchestrator::types::OrchestratorSettings,
@@ -76,6 +84,10 @@ impl Default for AppSettings {
             rate_limit_max_requests_per_minute: rate_limit_defaults.max_requests_per_minute,
             rate_limit_max_requests_per_hour: rate_limit_defaults.max_requests_per_hour,
             rate_limit_max_concurrent_requests: rate_limit_defaults.max_concurrent_requests,
+            alert_runaway_session_cents: 500, // $5.00 default
+            alert_cost_spike_multiplier: 5.0,    // 5× session average
+            alert_abnormal_retry_rate: 0.30,     // 30%
+            alert_daily_cost_spike_cents: 1_000, // $10.00 daily spike
             orchestrator: crate::orchestrator::types::OrchestratorSettings::default(),
         }
     }
@@ -163,3 +175,21 @@ mod tests {
         assert!(provider.is_none());
     }
 }
+
+    #[test]
+    fn test_default_alert_thresholds() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.alert_runaway_session_cents, 500, "runaway threshold should be $5.00");
+        assert!((settings.alert_cost_spike_multiplier - 5.0).abs() < 1e-6, "cost spike multiplier should be 5.0");
+        assert!((settings.alert_abnormal_retry_rate - 0.30).abs() < 1e-6, "abnormal retry rate should be 30%");
+        assert_eq!(settings.alert_daily_cost_spike_cents, 1000, "daily spike threshold should be $10.00");
+    }
+
+    #[test]
+    fn test_default_rate_limit_settings_match_gateway_config() {
+        let settings = AppSettings::default();
+        assert!(settings.rate_limit_max_requests_per_minute > 0);
+        assert!(settings.rate_limit_max_requests_per_hour > 0);
+        assert!(settings.rate_limit_max_concurrent_requests > 0);
+    }
+

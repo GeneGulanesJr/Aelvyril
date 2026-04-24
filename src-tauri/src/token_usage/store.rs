@@ -208,7 +208,7 @@ impl TokenUsageStore {
                 Self::row_to_event(row)
             })
             .map_err(|e| format!("Failed to query token usage events: {}", e))?
-            .filter_map(|r| r.ok())
+            .filter_map(|r| r.ok().flatten())
             .collect();
 
         Ok(events)
@@ -239,7 +239,7 @@ impl TokenUsageStore {
                 Self::row_to_event(row)
             })
             .map_err(|e| format!("Failed to query token usage events for tenant: {}", e))?
-            .filter_map(|r| r.ok())
+            .filter_map(|r| r.ok().flatten())
             .collect();
 
         Ok(events)
@@ -270,9 +270,25 @@ impl TokenUsageStore {
     }
 
     /// Helper: Convert a database row into a TokenUsageEvent.
-    fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<TokenUsageEvent> {
+    ///
+    /// Validates `schema_version` before parsing. Events with a version higher
+    /// than the current `TOKEN_USAGE_SCHEMA_VERSION` are silently skipped
+    /// (not returned) so that a future schema upgrade doesn't cause panics.
+    fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<TokenUsageEvent>> {
         let event_id: String = row.get(col::EVENT_ID)?;
         let schema_version: i32 = row.get(col::SCHEMA_VERSION)?;
+
+
+        // Schema version guard: skip events from a future schema we can't parse.
+        if schema_version as u32 > super::TOKEN_USAGE_SCHEMA_VERSION {
+            tracing::warn!(
+                event_id = %event_id,
+                event_schema = schema_version,
+                supported_schema = super::TOKEN_USAGE_SCHEMA_VERSION,
+                "Skipping event with unsupported schema version"
+            );
+            return Ok(None);
+        }
         let timestamp_str: String = row.get(col::TIMESTAMP)?;
         let session_id: String = row.get(col::SESSION_ID)?;
         let tenant_id: String = row.get(col::TENANT_ID)?;
@@ -303,7 +319,7 @@ impl TokenUsageStore {
             serde_json::from_str(&token_count_source_str)
                 .unwrap_or(TokenCountSource::ApiReported);
 
-        Ok(TokenUsageEvent {
+        Ok(Some(TokenUsageEvent {
             event_id,
             schema_version: schema_version as u32,
             timestamp,
@@ -327,6 +343,6 @@ impl TokenUsageStore {
             pricing_as_of,
             cost_unavailable: cost_unavailable != 0,
             success: success != 0,
-        })
+        }))
     }
 }

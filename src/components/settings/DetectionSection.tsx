@@ -80,6 +80,52 @@ export function DetectionSection() {
           onToggle={handleToggleClipboard}
         />
       </div>
+
+      <div className={styles.subSection}>
+        <h3 className={styles.subTitle}>
+          <Eye size={16} />
+          Detection Sensitivity
+        </h3>
+        <p className={styles.subDesc}>
+          Lower threshold = catch more (more false positives). Higher threshold = only high-confidence
+          detections.
+        </p>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "12px",
+            marginTop: "8px",
+          }}
+        >
+          <span
+            style={{
+              fontSize: "13px",
+              color: "var(--text-secondary, #888)",
+              minWidth: "30px",
+            }}
+          >
+            {Math.round(settings.confidence_threshold * 100)}%
+          </span>
+          <input
+            type="range"
+            min="0.1"
+            max="0.9"
+            step="0.05"
+            value={settings.confidence_threshold}
+            onChange={(e) => {
+              update({
+                ...settings,
+                confidence_threshold: parseFloat(e.target.value),
+              });
+            }}
+            style={{
+              flex: 1,
+              accentColor: "var(--accent, #4f46e5)",
+            }}
+          />
+        </div>
+      </div>
     </div>
   );
 }

@@ -39,6 +39,7 @@ from benchmarks.common.reporting import generate_run_manifest
 from benchmarks.common.utils import set_seeds
 from benchmarks.presidio_research.aelvyril_evaluator import (
     AelvyrilEvaluator,
+    AELVYRIL_TO_PRESIDIO,
     PRESIDIO_TO_AELVYRIL,
 )
 from benchmarks.tab.downloader import (
@@ -436,7 +437,7 @@ def run_tab_evaluation(
         # Convert to TabSpan objects
         pred_spans = [
             TabSpan(
-                entity_type=PRESIDIO_TO_AELVYRIL.get(d.entity_type, d.entity_type),
+                entity_type=AELVYRIL_TO_PRESIDIO.get(d.entity_type, d.entity_type),
                 start=d.start,
                 end=d.end,
                 text=d.text,

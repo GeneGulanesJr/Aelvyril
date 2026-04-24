@@ -2360,4 +2360,94 @@ mod tests {
             );
         }
     }
+
+    // ── Schema version guard test ──────────────────────────────────────────────
+
+    #[test]
+    fn test_schema_version_guard_skips_future_version() {
+        use crate::token_usage::store::TokenUsageStore;
+        let db_path = std::env::temp_dir().join("aelvyril_test_schema_guard.db");
+        let _ = std::fs::remove_file(&db_path);
+
+        let store = TokenUsageStore::open(&db_path).expect("Failed to open test DB");
+        let event = make_event("s1", "gpt-4o", "chat_completions", 100, 500, 0, 100, 200, true);
+        store.insert(&event).expect("Insert v2 event should succeed");
+
+        // row_to_event() silently skips events with schema_version > current
+        let events = store.get_recent(100).expect("Query should succeed");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].schema_version, 2);
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    // ── Token reconciliation tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_token_reconciliation_normal() {
+        // Normal: API reports tokens, system estimate is reasonable
+        let response = serde_json::json!({
+            "model": "gpt-4o",
+            "usage": { "prompt_tokens": 1500, "completion_tokens": 500 }
+        });
+        let event = TokenUsageTracker::new_from_response(
+            "s1", "gpt-4o", "chat_completions", 1000, &response, false, false,
+        );
+        assert!(event.tokens_in_system > 0);
+        assert!(event.tokens_in_user > 0);
+        assert_eq!(event.tokens_in_system + event.tokens_in_user, 1500);
+        assert_eq!(event.tokens_out, 500);
+    }
+
+    #[test]
+    fn test_token_reconciliation_zero_usage() {
+        let response = serde_json::json!({
+            "model": "gpt-4o",
+            "usage": { "prompt_tokens": 0, "completion_tokens": 0 }
+        });
+        let event = TokenUsageTracker::new_from_response(
+            "s1", "gpt-4o", "chat_completions", 500, &response, false, false,
+        );
+        assert!(matches!(event.token_count_source, TokenCountSource::Unavailable));
+        assert_eq!(event.tokens_in_user, 0);
+        assert_eq!(event.tokens_out, 0);
+    }
+
+    #[test]
+    fn test_anthropic_cache_tokens() {
+        // Anthropic reports both cache-read and cache-write tokens
+        let response = serde_json::json!({
+            "model": "claude-3-5-sonnet",
+            "usage": {
+                "input_tokens": 2000,
+                "output_tokens": 500,
+                "cache_read_input_tokens": 300,
+                "cache_creation_input_tokens": 100
+            }
+        });
+        let event = TokenUsageTracker::new_from_response(
+            "s1", "claude-3-5-sonnet", "chat_completions", 800, &response, true, false,
+        );
+        assert_eq!(event.tokens_in_cached, 300, "cache-read tokens");
+        assert_eq!(event.tokens_in_cache_write, 100, "cache-write tokens");
+        assert!(matches!(event.token_count_source, TokenCountSource::ApiReported));
+    }
+
+    #[test]
+    fn test_openai_cached_tokens() {
+        // OpenAI reports cached_tokens nested under prompt_tokens_details
+        let response = serde_json::json!({
+            "model": "gpt-4o",
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 200,
+                "prompt_tokens_details": { "cached_tokens": 100 }
+            }
+        });
+        let event = TokenUsageTracker::new_from_response(
+            "s1", "gpt-4o", "chat_completions", 500, &response, false, false,
+        );
+        assert_eq!(event.tokens_in_cached, 100, "cached_tokens from prompt_tokens_details");
+        assert_eq!(event.tokens_in_cache_write, 0, "OpenAI doesn't report cache-write");
+    }
 }

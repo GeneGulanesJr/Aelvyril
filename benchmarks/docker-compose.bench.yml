@@ -1,27 +1,63 @@
-# Benchmark Stack for Aelvyril PII Detection
-# Usage: docker compose -f docker-compose.bench.yml up -d
+# Benchmark stack docker-compose — Aelvyril + Presidio + health checks
 #
-# Spins up:
-#   - Presidio analyzer service (Python/Flask) on port 3000
-#   - Health check validates the analyzer is ready before benchmarks run
+# Brings up reproducible environment for benchmark runs.
+# Services:
+#   presidio  — Microsoft Presidio HTTP analyzer (baseline evaluatable)
+#   mock      — Aelvyril mock /analyze (for CI / offline runs; enable with --profile ci)
 #
-# Requires:
-#   - presidio-analyzer pip package installed in the presidio container
+# Usage:
+#   docker compose -f benchmarks/docker-compose.bench.yml up -d presidio
+#   # Wait for health: docker compose ps
+#   python3 -m benchmarks.run --suite all --service-url http://localhost:5000/analyze
+#   docker compose -f benchmarks/docker-compose.bench.yml down
+#
+# Notes:
+#   - The full Aelvyril desktop app cannot be containerized (Tauri GUI). For
+#     Phase 1 Presidio baseline, use the 'presidio' service above.
+#   - For Phase 3 adversarial + PII-Bench runs against Aelvyril's own detector,
+#     run the local mock service (benchmarks/mock_service.py) or the real app
+#     (usually at http://localhost:3000/analyze). The 'mock' service in this
+#     compose file can be started via: docker compose --profile ci up -d mock
+
+version: "3.9"
 
 services:
   presidio:
     build:
-      context: ../src-tauri
-      dockerfile: ../../benchmarks/docker/Dockerfile.presidio
+      context: .
+      dockerfile: benchmarks/presidio_service.Dockerfile
+    container_name: aelvyril-presidio
     ports:
-      - "3000:3000"
-    environment:
-      - AELVYRIL_PRESIDIO_HOST=0.0.0.0
-      - AELVYRIL_PRESIDIO_PORT=3000
+      - "5000:5000"
+    volumes:
+      - ./benchmarks/data:/app/data:ro
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:3000/health').raise_for_status()"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 5s
       timeout: 3s
-      retries: 20
-      start_period: 30s
-    restart: unless-stopped
+      retries: 5
+      start_period: 10s
+    networks:
+      - bench-net
+
+  mock:
+    build:
+      context: .
+      dockerfile: benchmarks/mock_service.Dockerfile
+    container_name: aelvyril-mock
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 3s
+      timeout: 2s
+      retries: 3
+      start_period: 3s
+    networks:
+      - bench-net
+    profiles:
+      - ci  # Only started with: docker compose --profile ci up
+
+networks:
+  bench-net:
+    driver: bridge

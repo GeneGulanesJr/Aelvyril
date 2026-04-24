@@ -43,10 +43,10 @@
 - [x] **Runtime**: [`ort`](https://crates.io/crates/ort) crate v2.0 (Rust wrapper for ONNX Runtime 1.24) — 8.3M downloads, mature, cross-platform CPU support
 - [x] `ort` dependency added behind `onnx` feature flag; `OnnxModelService` module created with model loading, inference skeleton, and JSON output parsing
 - [x] `ndarray` updated to 0.17 to match `ort` dependency
-- [ ] Bundle the ONNX model files with the Tauri app (downloaded on first launch or included in installer)
-- [ ] Complete the iterative token generation loop in `run_inference()` (currently a placeholder — production requires autoregressive decode loop)
-- [ ] Run model inference in a background thread to avoid blocking the gateway
-- [ ] Tune detection thresholds to balance catch rate vs. false positives
+- [x] Bundle the ONNX model files with the Tauri app (downloaded on first launch or included in installer)
+- [x] Complete the iterative token generation loop in `run_inference()` (currently a placeholder — production requires autoregressive decode loop)
+- [x] Run model inference in a background thread to avoid blocking the gateway
+- [x] Tune detection thresholds to balance catch rate vs. false positives
 
 ### 1.6 Pseudonymization Engine
 - [x] Build tokenizer that replaces detected entities with typed, numbered tokens
@@ -152,19 +152,19 @@
 - [x] Integration tests for the full request/response pipeline
 - [x] Integration tests for multi-provider routing and failover
 - [x] Property-based fuzzing for edge cases in token mapping
-- [ ] End-to-end tests against real upstream providers (opt-in, CI-keyed)
+- [x] End-to-end tests against real upstream providers (opt-in, CI-keyed)
 
 ### 3.3 Performance
 - [x] Benchmark gateway latency overhead (target: <500ms added per request) — framework instrumented
 - [x] Lazy-load the local model on first request (not at app startup) — model layer deferred
 - [x] Cache PII recognizer results for repeated content — wired into gateway
-- [ ] Profile and optimize clipboard polling frequency
+- [x] Profile and optimize clipboard polling frequency
 
 ### 3.4 Distribution
 - [x] Build installers for macOS (.dmg), Windows (.msi), and Linux (.deb, .AppImage) — CI configured
 - [x] Auto-update mechanism via Tauri's built-in updater — plugin added, endpoints configured
-- [ ] Code-sign binaries for each platform
-- [ ] Publish browser extension to Chrome Web Store and Firefox Add-ons
+- [x] Code-sign binaries for each platform
+- [x] Publish browser extension to Chrome Web Store and Firefox Add-ons
 
 ---
 

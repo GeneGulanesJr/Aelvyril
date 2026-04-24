@@ -106,6 +106,29 @@ mod onnx_impl {
             Ok(())
         }
 
+        /// Ensure model is downloaded and loaded. Downloads from HuggingFace
+        /// on first call if the model file is not present.
+        pub async fn ensure_model(
+            &self,
+            progress: Option<super::super::downloader::ProgressCallback>,
+        ) -> Result<(), String> {
+            if self.is_loaded() {
+                return Ok(());
+            }
+
+            // Download if model file is not present
+            if !self.model_path.exists() {
+                let model_dir = self
+                    .model_path
+                    .parent()
+                    .ok_or("Invalid model path: no parent directory")?;
+                let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                super::super::downloader::download_model(model_dir, progress, cancel).await?;
+            }
+
+            self.load_model().await
+        }
+
         pub async fn detect_pii(&self, text: &str) -> Vec<OnnxDetection> {
             if !self.is_loaded() {
                 return Vec::new();

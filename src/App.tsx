@@ -6,7 +6,7 @@ import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
 import { AuditLog } from "./pages/AuditLog";
 import { Onboarding } from "./pages/Onboarding";
-import { Orchestrator } from "./pages/Orchestrator";
+import { ComingSoon } from "./pages/ComingSoon";
 import { useGatewayStatus } from "./hooks/useTauri";
 import styles from "./App.module.css";
 
@@ -23,7 +23,7 @@ export default function App() {
           <Route path="/audit" element={<AuditLog />} />
           <Route path="/security" element={<Security />} />
           <Route path="/settings" element={<Settings />} />
-          <Route path="/orchestrator" element={<Orchestrator />} />
+          <Route path="/orchestrator" element={<ComingSoon title="Orchestrator" description="Plan and execute coding tasks with AI agents — coming soon." icon="orchestrator" />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

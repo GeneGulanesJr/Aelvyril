@@ -57,14 +57,26 @@ impl TokenUsageTracker {
             None
         };
 
-        // L4 quality score: composite of success rate, low retry, low truncation
+        // L4 quality score: composite of success rate, low retry, low truncation.
+        //
+        // When success_rate = 0 (all failures), the retry and truncation components
+        // should also contribute 0 to the score — a session with no successes has
+        // quality_score 0, not 0.4. We only reward absence of retry/truncation when
+        // there are actual successful calls to quality-rate.
         let quality_score = if g.call_count > 0 {
             let success_rate = g.success_count as f64 / g.call_count as f64;
             let retry_rate = g.retry_count as f64 / g.call_count as f64;
-            // Weighted composite: success dominates, retry and truncation penalize
-            let score = (success_rate * 0.6)
-                + ((1.0 - retry_rate.min(1.0)) * 0.2)
-                + ((1.0 - truncation_rate.min(1.0)) * 0.2);
+            let retry_component = if success_rate > 0.0 {
+                (1.0 - retry_rate.min(1.0)) * 0.2
+            } else {
+                0.0
+            };
+            let truncation_component = if success_rate > 0.0 {
+                (1.0 - truncation_rate.min(1.0)) * 0.2
+            } else {
+                0.0
+            };
+            let score = (success_rate * 0.6) + retry_component + truncation_component;
             Some(score.clamp(0.0, 1.0))
         } else {
             None

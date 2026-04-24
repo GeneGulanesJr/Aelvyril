@@ -53,7 +53,7 @@ def check_prerequisites() -> bool:
         errors.append(f"Python 3.11+ required, got {sys.version}")
 
     # Check required packages
-    required_packages = ["requests", "faker", "numpy"]
+    required_packages = ["requests", "numpy"]
     for pkg in required_packages:
         try:
             __import__(pkg)

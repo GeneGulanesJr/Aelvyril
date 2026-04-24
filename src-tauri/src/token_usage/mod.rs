@@ -10,6 +10,13 @@ use serde::{Deserialize, Serialize};
 /// Schema version for migration support. Bump on breaking changes.
 /// v1: Initial schema.
 /// v2: Added `actual_cost_cents` and `tokens_in_cache_write`.
+///
+/// Schema evolution policy:
+/// - Non-breaking additions (new optional fields): no version bump needed
+/// - Breaking changes (removed/renamed fields, type changes): MUST bump version
+/// - Consumers MUST check `schema_version` before parsing — `row_to_event()`
+///   in store.rs silently skips events with unsupported versions
+/// - Migration guide: see `docs/TOKEN_USAGE_MIGRATION_GUIDE.md`
 pub const TOKEN_USAGE_SCHEMA_VERSION: u32 = 2;
 
 /// Default tenant ID for single-tenant deployments.

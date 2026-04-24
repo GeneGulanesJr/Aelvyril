@@ -30,23 +30,9 @@
 - [x] Re-implement Presidio's structured PII recognizers as native Rust regex patterns — no Python sidecar needed
   - Email, Phone, IP Address, Domain, API Key patterns, Credit Card, SSN, IBAN
   - Regex-based recognizers cover 90%+ of structured PII without any external dependency
-- [ ] The local LFM2.5-350M model (Section 1.5) handles the contextual/semantic sensitivity pass that Presidio normally needs spaCy NER for — eliminating the only part that can't be cleanly reimplemented in pure Rust
   - [x] Heuristic weighted classifier (128-feature, hand-tuned weights) implemented as fallback
 - [x] Build entity extraction pipeline that returns structured matches with confidence scores
 
-### 1.5 Local Model Layer (LFM2.5-350M via ONNX)
-- [ ] **Model**: [`LiquidAI/LFM2.5-350M-ONNX`](https://huggingface.co/LiquidAI/LFM2.5-350M-ONNX) on HuggingFace (official Liquid AI ONNX export)
-  - Architecture: `Lfm2ForCausalLM`, 350M parameters
-  - Quantization options: fp32 (1.4 GB), fp16 (725 MB), q8 (634 MB), **q4f16 (255 MB)**, q4 (294 MB)
-  - **Recommended**: `model_q4f16.onnx` + `model_q4f16.onnx_data` (~255 MB) — best size-to-quality ratio for CPU inference
-  - Multi-language support: en, ar, zh, fr, de, ja, ko, es, pt
-- [x] **Runtime**: [`ort`](https://crates.io/crates/ort) crate v2.0 (Rust wrapper for ONNX Runtime 1.24) — 8.3M downloads, mature, cross-platform CPU support
-- [x] `ort` dependency added behind `onnx` feature flag; `OnnxModelService` module created with model loading, inference skeleton, and JSON output parsing
-- [x] `ndarray` updated to 0.17 to match `ort` dependency
-- [x] Bundle the ONNX model files with the Tauri app (downloaded on first launch or included in installer)
-- [x] Complete the iterative token generation loop in `run_inference()` (currently a placeholder — production requires autoregressive decode loop)
-- [x] Run model inference in a background thread to avoid blocking the gateway
-- [x] Tune detection thresholds to balance catch rate vs. false positives
 
 ### 1.6 Pseudonymization Engine
 - [x] Build tokenizer that replaces detected entities with typed, numbered tokens
@@ -184,7 +170,7 @@
 **Rationale**:
 - Microsoft has not ported Presidio to WASM. No mature Rust port exists (the `pii` crate is v0.1.0 with 239 downloads).
 - Presidio's core value for structured PII is regex patterns + allow/deny lists — trivially reimplementable in Rust.
-- The only hard part to port is spaCy NER for contextual understanding — but the LFM2.5-350M local model already handles that semantic pass.
+- The only hard part to port is spaCy NER for contextual understanding — but the heuristic classifier already handles that semantic pass.
 - Result: zero external dependencies, fully native, fast.
 
 ### 2. LFM2.5-350M Runtime → ONNX Runtime via `ort` Crate

@@ -14,6 +14,8 @@ use crate::security::rate_limit::RateLimiter;
 use crate::session::SessionManager;
 use crate::token_usage::store::TokenUsageStore;
 use crate::token_usage::tracker::TokenUsageTracker;
+use crate::token_usage::alerts::CostAlertThresholds;
+use crate::commands::rate_limit::TauriRateLimiter;
 
 pub type SharedState = Arc<RwLock<AppState>>;
 
@@ -31,6 +33,8 @@ pub struct AppState {
     pub onboarding_complete: bool,
     /// Rate limiter for gateway requests
     pub rate_limiter: RateLimiter,
+    /// Rate limiter for Tauri commands (stats API protection)
+    pub tauri_rate_limiter: TauriRateLimiter,
     /// PII detection result cache
     pub pii_cache: PiiCache,
     /// Latency benchmark tracker
@@ -46,6 +50,8 @@ pub struct AppState {
     pub token_usage_tracker: Arc<TokenUsageTracker>,
     /// Persistent token usage store (SQLite)
     pub token_usage_store: Option<TokenUsageStore>,
+    /// Alert thresholds for token usage cost alerts
+    pub alert_thresholds: CostAlertThresholds,
 }
 
 /// Open the token usage SQLite database.
@@ -110,6 +116,13 @@ impl AppState {
             tracing::info!("Using hardcoded pricing fallback (LiteLLM fetch failed or not yet available)");
         }
 
+        let alert_thresholds = CostAlertThresholds {
+            runaway_session_cents: settings.alert_runaway_session_cents,
+            cost_spike_multiplier: settings.alert_cost_spike_multiplier,
+            abnormal_retry_rate: settings.alert_abnormal_retry_rate,
+            daily_cost_spike_cents: settings.alert_daily_cost_spike_cents,
+        };
+
         Self {
             gateway_key: None,
             gateway_port: settings.gateway_port,
@@ -122,6 +135,7 @@ impl AppState {
             clipboard_monitor,
             onboarding_complete: false,
             rate_limiter: RateLimiter::new(rate_limit_config),
+            tauri_rate_limiter: TauriRateLimiter::with_defaults(),
             pii_cache: PiiCache::with_defaults(),
             latency_benchmark: LatencyBenchmark::with_defaults(),
             key_auditor: Arc::new(parking_lot::Mutex::new(
@@ -131,6 +145,7 @@ impl AppState {
             presidio_service: Arc::new(parking_lot::Mutex::new(PresidioService::new())),
             token_usage_tracker,
             token_usage_store,
+            alert_thresholds,
         }
     }
 }

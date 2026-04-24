@@ -415,3 +415,17 @@ impl GlobalTokenStats {
         format!("${:.2}", cents as f64 / 100.0)
     }
 }
+#[cfg(test)]
+mod tests {
+    
+    use crate::config::AppSettings;
+
+    #[test]
+    fn test_app_settings_alert_threshold_defaults() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.alert_runaway_session_cents, 500);
+        assert!((settings.alert_cost_spike_multiplier - 5.0).abs() < 1e-6);
+        assert!((settings.alert_abnormal_retry_rate - 0.30).abs() < 1e-6);
+        assert_eq!(settings.alert_daily_cost_spike_cents, 1000);
+    }
+}

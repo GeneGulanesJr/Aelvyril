@@ -76,22 +76,23 @@ mod onnx_impl {
     use ort::value::TensorRef;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use tokio::sync::RwLock;
 
     pub struct OnnxModelServiceImpl {
-        session: Arc<RwLock<Option<Session>>>,
+        session: Arc<parking_lot::RwLock<Option<Session>>>,
         model_path: PathBuf,
         tokenizer_path: PathBuf,
         loaded: Arc<std::sync::atomic::AtomicBool>,
+        executor: Arc<super::executor::InferenceExecutor>,
     }
 
     impl OnnxModelServiceImpl {
         pub fn new(model_path: PathBuf, tokenizer_path: PathBuf) -> Self {
             Self {
-                session: Arc::new(RwLock::new(None)),
+                session: Arc::new(parking_lot::RwLock::new(None)),
                 model_path,
                 tokenizer_path,
                 loaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                executor: Arc::new(super::executor::InferenceExecutor::new()),
             }
         }
 
@@ -114,7 +115,7 @@ mod onnx_impl {
                 .commit_from_file(&self.model_path)
                 .map_err(|e| format!("Failed to load ONNX model from {:?}: {}", self.model_path, e))?;
 
-            *self.session.write().await = Some(session);
+            *self.session.write() = Some(session);
             self.loaded.store(true, std::sync::atomic::Ordering::Relaxed);
 
             tracing::info!("ONNX model loaded successfully from {:?}", self.model_path);
@@ -149,16 +150,10 @@ mod onnx_impl {
                 return Vec::new();
             }
 
-            let mut session_guard = self.session.write().await;
-            let session = match session_guard.as_mut() {
-                Some(s) => s,
-                None => return Vec::new(),
-            };
-
             let input_text = if text.len() > MAX_INPUT_CHARS {
-                &text[..MAX_INPUT_CHARS]
+                text[..MAX_INPUT_CHARS].to_string()
             } else {
-                text
+                text.to_string()
             };
 
             let prompt = format!(
@@ -168,8 +163,24 @@ mod onnx_impl {
                 input_text
             );
 
-            match self.run_inference(session, &prompt).await {
-                Ok(output_text) => parse_detections(&output_text, text),
+            let text_for_parse = text.to_string();
+            let session = Arc::clone(&self.session);
+            let tokenizer_path = self.tokenizer_path.clone();
+
+            // Offload CPU-bound inference to background thread pool.
+            // The session lock is acquired inside the executor via blocking_write,
+            // which is safe because the executor thread is not a tokio thread.
+            let result = self.executor.spawn(move || {
+                let mut session_guard = session.write();
+                let session = match session_guard.as_mut() {
+                    Some(s) => s,
+                    None => return Err("Model not loaded".into()),
+                };
+                run_inference_sync(session, &tokenizer_path, &prompt)
+            }).await;
+
+            match result {
+                Ok(output_text) => parse_detections(&output_text, &text_for_parse),
                 Err(e) => {
                     tracing::warn!("ONNX inference failed: {}. Using heuristic fallback.", e);
                     Vec::new()
@@ -177,13 +188,15 @@ mod onnx_impl {
             }
         }
 
-        async fn run_inference(
-            &self,
-            session: &mut Session,
+        /// Synchronous inference function — runs on the background executor thread.
+        /// Separated from the async context so it can be called via `spawn()`.
+        fn run_inference_sync(
+            session: &Session,
+            tokenizer_path: &Path,
             prompt: &str,
         ) -> Result<String, String> {
             // Tokenize input
-            let tokenizer = tokenizers::Tokenizer::from_file(&self.tokenizer_path)
+            let tokenizer = tokenizers::Tokenizer::from_file(tokenizer_path)
                 .map_err(|e| format!("Failed to load tokenizer: {}", e))?;
 
             let encoding = tokenizer

@@ -25,6 +25,7 @@
 //! - 74 padding features (reserved for future use)
 
 pub mod downloader;
+pub mod executor;
 pub mod features;
 pub mod onnx_detect;
 

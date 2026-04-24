@@ -164,44 +164,77 @@ impl ClipboardMonitor {
 /// - Reads the system clipboard on an interval
 /// - On clipboard change, scans for PII
 pub async fn run_clipboard_poll(monitor: Arc<ClipboardMonitor>) {
-    // 1 second default — fast enough for UX, gentle on process spawn overhead.
     let mut interval = time::interval(Duration::from_secs(1));
     let mut last_content: Option<String> = None;
     let mut consecutive_errors: u32 = 0;
+    let mut consecutive_idle_ticks: u32 = 0;
+    let mut current_interval_secs: u64 = 1;
 
     loop {
         interval.tick().await;
 
         if !monitor.is_active() {
             consecutive_errors = 0;
+            consecutive_idle_ticks = 0;
+            current_interval_secs = 1;
+            interval = time::interval(Duration::from_secs(current_interval_secs));
             continue;
         }
 
-        // Read clipboard content
         match read_clipboard() {
             Ok(content) => {
                 consecutive_errors = 0;
-                // Only process if content changed (avoid cloning when possible)
-                let content_ref = if last_content.as_ref() == Some(&content) {
-                    // Content unchanged, use reference
-                    &content
-                } else {
-                    // Content changed, store new value
+
+                let changed = last_content.as_ref() != Some(&content);
+                if changed {
                     last_content = Some(content.clone());
-                    &content
-                };
-                monitor.scan_content(content_ref);
+                    consecutive_idle_ticks = 0;
+
+                    // Speed up after a change (user might be copying rapidly)
+                    if current_interval_secs > 1 {
+                        current_interval_secs = 1;
+                        interval = time::interval(Duration::from_secs(current_interval_secs));
+                    }
+
+                    monitor.scan_content(&content);
+                } else {
+                    consecutive_idle_ticks += 1;
+
+                    // Gradually slow down when idle: 1s → 2s → 4s → 8s → 15s → 30s
+                    let new_interval = if consecutive_idle_ticks > 300 {
+                        30 // 5 minutes idle → 30s polling
+                    } else if consecutive_idle_ticks > 120 {
+                        15 // 2 minutes idle
+                    } else if consecutive_idle_ticks > 60 {
+                        8 // 1 minute idle
+                    } else if consecutive_idle_ticks > 20 {
+                        4 // 20 seconds idle
+                    } else if consecutive_idle_ticks > 5 {
+                        2 // 5 seconds idle
+                    } else {
+                        1 // Active polling
+                    };
+
+                    if new_interval != current_interval_secs {
+                        current_interval_secs = new_interval;
+                        interval = time::interval(Duration::from_secs(current_interval_secs));
+                        tracing::debug!(
+                            "Clipboard poll interval adjusted to {}s ({} idle ticks)",
+                            current_interval_secs,
+                            consecutive_idle_ticks
+                        );
+                    }
+                }
             }
             Err(e) => {
                 consecutive_errors = consecutive_errors.saturating_add(1);
-                // Log the first few errors so the user knows something is wrong,
-                // then suppress to avoid log spam.
                 if consecutive_errors <= CLIPBOARD_ERROR_LOG_THRESHOLD {
                     tracing::warn!("Clipboard read failed: {}", e);
                 }
-                // Back off exponentially after repeated failures (max ~32s)
                 if consecutive_errors > CLIPBOARD_BACKOFF_ERROR_THRESHOLD {
-                    interval = time::interval(Duration::from_secs(1 << consecutive_errors.min(CLIPBOARD_BACKOFF_ERROR_THRESHOLD)));
+                    interval = time::interval(Duration::from_secs(
+                        1 << consecutive_errors.min(CLIPBOARD_BACKOFF_ERROR_THRESHOLD),
+                    ));
                 }
             }
         }

@@ -12,6 +12,7 @@
 
 /// The system prompt for PII detection. Instructs the model to output structured JSON
 /// with detected entities.
+#[allow(dead_code)]
 const PII_DETECTION_SYSTEM_PROMPT: &str = r#"You are a PII detection system. Analyze the given text and identify all personally identifiable information (PII) entities. For each entity, output a JSON array where each item has:
 - "type": one of Person, Email, PhoneNumber, IPAddress, Domain, APIKey, CreditCard, SSN, IBAN, Date, Location, Organization
 - "text": the exact text span
@@ -23,31 +24,38 @@ Output ONLY the JSON array, no other text. If no PII is found, output an empty a
 Do not flag example, test, placeholder, or obviously fake data (e.g., test@example.com, 000-00-0000)."#;
 
 /// The user prompt template.
+#[allow(dead_code)]
 const PII_DETECTION_USER_TEMPLATE: &str = "Analyze this text for PII entities:\n\n";
 
 /// Maximum text length to send to the model (characters). Text longer than this
 /// is truncated to avoid exceeding the model's context window.
+#[allow(dead_code)]
 const MAX_INPUT_CHARS: usize = 4000;
 
 /// Maximum tokens for the model to generate (output length budget).
+#[allow(dead_code)]
 const MAX_OUTPUT_TOKENS: usize = 512;
 
 /// Temperature for generation (0.0 = greedy, higher = more random).
 /// Lower values produce more deterministic output — good for structured JSON detection.
+#[allow(dead_code)]
 const GENERATION_TEMPERATURE: f32 = 0.3;
 
 /// Top-p (nucleus) sampling threshold. Only consider tokens whose cumulative
 /// probability falls within this threshold.
+#[allow(dead_code)]
 const GENERATION_TOP_P: f32 = 0.9;
 
 /// Early stopping: if no new non-whitespace content produced after this many
 /// tokens, stop generating (model is "stuck").
+#[allow(dead_code)]
 const GENERATION_STUCK_LIMIT: usize = 50;
 
 /// Default confidence threshold below which model detections are discarded.
 const DEFAULT_ONNX_CONFIDENCE: f64 = 0.4;
 
 /// EOS token ID for LFM2.5 (standard Llama tokenizer EOS).
+#[allow(dead_code)]
 const EOS_TOKEN_ID: i64 = 2;
 
 // ── ONNX Model Entity Types ──────────────────────────────────────────────────
@@ -391,6 +399,7 @@ impl OnnxModelService {
 // ── JSON Parsing (shared between onnx and stub) ──────────────────────────────
 
 /// Parse the model's JSON output into structured PII detections.
+#[allow(dead_code)]
 fn parse_detections(model_output: &str, original_text: &str, min_confidence: f64) -> Vec<OnnxDetection> {
     let json_start = match model_output.find('[') {
         Some(i) => i,
@@ -456,6 +465,7 @@ fn parse_detections(model_output: &str, original_text: &str, min_confidence: f64
 ///
 /// When temperature is 0.0, uses pure greedy decoding (argmax).
 /// Otherwise, applies temperature scaling → softmax → top-p filtering → random sample.
+#[allow(dead_code)]
 fn sample_next_token<R: rand::Rng>(
     logits: &[f32],
     rng: &mut R,

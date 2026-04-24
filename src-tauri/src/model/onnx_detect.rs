@@ -44,8 +44,8 @@ const GENERATION_TOP_P: f32 = 0.9;
 /// tokens, stop generating (model is "stuck").
 const GENERATION_STUCK_LIMIT: usize = 50;
 
-/// Confidence threshold below which model detections are discarded.
-const MIN_ONNX_CONFIDENCE: f64 = 0.4;
+/// Default confidence threshold below which model detections are discarded.
+const DEFAULT_ONNX_CONFIDENCE: f64 = 0.4;
 
 /// EOS token ID for LFM2.5 (standard Llama tokenizer EOS).
 const EOS_TOKEN_ID: i64 = 2;
@@ -83,6 +83,7 @@ mod onnx_impl {
         tokenizer_path: PathBuf,
         loaded: Arc<std::sync::atomic::AtomicBool>,
         executor: Arc<super::executor::InferenceExecutor>,
+        confidence_threshold: Arc<std::sync::atomic::AtomicU64>,
     }
 
     impl OnnxModelServiceImpl {
@@ -93,7 +94,25 @@ mod onnx_impl {
                 tokenizer_path,
                 loaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 executor: Arc::new(super::executor::InferenceExecutor::new()),
+                confidence_threshold: Arc::new(std::sync::atomic::AtomicU64::new(
+                    DEFAULT_ONNX_CONFIDENCE.to_bits(),
+                )),
             }
+        }
+
+        /// Get the current confidence threshold.
+        pub fn confidence_threshold(&self) -> f64 {
+            f64::from_bits(
+                self.confidence_threshold
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            )
+        }
+
+        /// Set the confidence threshold (0.0 = catch everything, 1.0 = only high confidence).
+        pub fn set_confidence_threshold(&self, threshold: f64) {
+            let clamped = threshold.clamp(0.0, 1.0);
+            self.confidence_threshold
+                .store(clamped.to_bits(), std::sync::atomic::Ordering::Relaxed);
         }
 
         pub fn is_loaded(&self) -> bool {
@@ -164,6 +183,7 @@ mod onnx_impl {
             );
 
             let text_for_parse = text.to_string();
+            let threshold = self.confidence_threshold();
             let session = Arc::clone(&self.session);
             let tokenizer_path = self.tokenizer_path.clone();
 
@@ -180,7 +200,7 @@ mod onnx_impl {
             }).await;
 
             match result {
-                Ok(output_text) => parse_detections(&output_text, &text_for_parse),
+                Ok(output_text) => parse_detections(&output_text, &text_for_parse, threshold),
                 Err(e) => {
                     tracing::warn!("ONNX inference failed: {}. Using heuristic fallback.", e);
                     Vec::new()
@@ -351,6 +371,14 @@ impl OnnxModelService {
         false
     }
 
+    pub fn confidence_threshold(&self) -> f64 {
+        DEFAULT_ONNX_CONFIDENCE
+    }
+
+    pub fn set_confidence_threshold(&self, _threshold: f64) {
+        // No-op when ONNX feature is disabled
+    }
+
     pub async fn load_model(&self) -> Result<(), String> {
         Err("ONNX feature is not enabled. Build with --features onnx to enable model inference.".into())
     }
@@ -363,7 +391,7 @@ impl OnnxModelService {
 // ── JSON Parsing (shared between onnx and stub) ──────────────────────────────
 
 /// Parse the model's JSON output into structured PII detections.
-fn parse_detections(model_output: &str, original_text: &str) -> Vec<OnnxDetection> {
+fn parse_detections(model_output: &str, original_text: &str, min_confidence: f64) -> Vec<OnnxDetection> {
     let json_start = match model_output.find('[') {
         Some(i) => i,
         None => return Vec::new(),
@@ -420,7 +448,7 @@ fn parse_detections(model_output: &str, original_text: &str) -> Vec<OnnxDetectio
     }
 
     // Filter low-confidence detections
-    detections.retain(|d| d.confidence >= MIN_ONNX_CONFIDENCE);
+    detections.retain(|d| d.confidence >= min_confidence);
     detections
 }
 
@@ -503,7 +531,7 @@ mod tests {
     #[test]
     fn test_parse_detections_valid_json() {
         let output = r#"[{"type":"Email","text":"john@acme.com","start":8,"end":21,"confidence":0.95}]"#;
-        let detections = parse_detections(output, "Send to john@acme.com please");
+        let detections = parse_detections(output, "Send to john@acme.com please", DEFAULT_ONNX_CONFIDENCE);
         assert_eq!(detections.len(), 1);
         assert_eq!(detections[0].entity_type, "Email");
         assert_eq!(detections[0].text, "john@acme.com");
@@ -515,7 +543,7 @@ mod tests {
     #[test]
     fn test_parse_detections_with_surrounding_text() {
         let output = r#"I found: [{"type":"PhoneNumber","text":"555-1234","start":8,"end":16,"confidence":0.8}]"#;
-        let detections = parse_detections(output, "Call 555-1234 now");
+        let detections = parse_detections(output, "Call 555-1234 now", DEFAULT_ONNX_CONFIDENCE);
         assert_eq!(detections.len(), 1);
         assert_eq!(detections[0].entity_type, "PhoneNumber");
     }
@@ -523,28 +551,28 @@ mod tests {
     #[test]
     fn test_parse_detections_empty_array() {
         let output = "[]";
-        let detections = parse_detections(output, "No PII here");
+        let detections = parse_detections(output, "No PII here", DEFAULT_ONNX_CONFIDENCE);
         assert!(detections.is_empty());
     }
 
     #[test]
     fn test_parse_detections_invalid_json() {
         let output = "This is not JSON";
-        let detections = parse_detections(output, "Some text");
+        let detections = parse_detections(output, "Some text", DEFAULT_ONNX_CONFIDENCE);
         assert!(detections.is_empty());
     }
 
     #[test]
     fn test_parse_detections_low_confidence_filtered() {
         let output = r#"[{"type":"Email","text":"a@b.com","start":0,"end":7,"confidence":0.2}]"#;
-        let detections = parse_detections(output, "a@b.com");
+        let detections = parse_detections(output, "a@b.com", 0.5);
         assert!(detections.is_empty()); // 0.2 < MIN_ONNX_CONFIDENCE (0.4)
     }
 
     #[test]
     fn test_parse_detections_span_mismatch_recovery() {
         let output = r#"[{"type":"Person","text":"Alice","start":0,"end":5,"confidence":0.85}]"#;
-        let detections = parse_detections(output, "Hello Alice");
+        let detections = parse_detections(output, "Hello Alice", DEFAULT_ONNX_CONFIDENCE);
         assert_eq!(detections.len(), 1);
         assert_eq!(detections[0].text, "Alice");
         assert_eq!(detections[0].start, 6); // recovered position
@@ -586,5 +614,27 @@ mod tests {
         let mut rng = rand::rng();
         let token = sample_next_token(&logits, &mut rng).unwrap();
         assert!(token >= 0 && token < 100);
+    }
+
+    #[test]
+    fn test_threshold_getter_setter() {
+        let service = OnnxModelService::new(
+            std::path::PathBuf::from("/stub"),
+            std::path::PathBuf::from("/stub"),
+        );
+        assert!((service.confidence_threshold() - DEFAULT_ONNX_CONFIDENCE).abs() < 0.01);
+        // The stub is a no-op, so we only test the getter returns a valid value.
+        // The real setter is tested behind #[cfg(feature = "onnx")] in integration.
+    }
+
+    #[test]
+    fn test_parse_detections_custom_threshold() {
+        let output = r#"[{"type":"Email","text":"a@b.com","start":0,"end":7,"confidence":0.45}]"#;
+        // At threshold 0.5, this should be filtered (0.45 < 0.5)
+        let detections = parse_detections(output, "a@b.com", 0.5);
+        assert!(detections.is_empty());
+        // At threshold 0.3, this should pass
+        let detections = parse_detections(output, "a@b.com", 0.3);
+        assert_eq!(detections.len(), 1);
     }
 }

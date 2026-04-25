@@ -1,0 +1,6 @@
+# Benchmark evaluation dependencies
+datasets>=2.14.0
+rich>=13.0.0
+requests>=2.28.0
+# Optional: seqeval for standard NER metrics (precision/recall/F1 w/ proper handling of O/B-/I- tags)
+# seqeval>=2.1.0

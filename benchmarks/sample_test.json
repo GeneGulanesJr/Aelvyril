@@ -1,0 +1,62 @@
+[
+  {
+    "text": "Alice works at Google and Microsoft",
+    "gold": [
+      {
+        "start": 0,
+        "end": 5,
+        "label": "PERSON"
+      },
+      {
+        "start": 15,
+        "end": 21,
+        "label": "ORGANIZATION"
+      },
+      {
+        "start": 26,
+        "end": 35,
+        "label": "ORGANIZATION"
+      }
+    ]
+  },
+  {
+    "text": "Contact john@example.com or call +1-555-234-5678",
+    "gold": [
+      {
+        "start": 8,
+        "end": 24,
+        "label": "EMAIL_ADDRESS"
+      },
+      {
+        "start": 33,
+        "end": 48,
+        "label": "PHONE_NUMBER"
+      }
+    ]
+  },
+  {
+    "text": "My API key is sk-proj-ABCDEFGHIJKLMNOPQRSTUVWX123456",
+    "gold": [
+      {
+        "start": 14,
+        "end": 52,
+        "label": "API_KEY"
+      }
+    ]
+  },
+  {
+    "text": "Meeting in New York on 2026-04-25",
+    "gold": [
+      {
+        "start": 11,
+        "end": 19,
+        "label": "LOCATION"
+      },
+      {
+        "start": 23,
+        "end": 33,
+        "label": "DATE_TIME"
+      }
+    ]
+  }
+]

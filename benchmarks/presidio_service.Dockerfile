@@ -3,11 +3,8 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install Presidio + Flask (service deps)
-RUN pip install --no-cache-dir --quiet \
-    presidio-analyzer \
-    flask \
-    && true
+# Install Presidio + Flask + spaCy model (single-line to avoid line-continuation issues)
+RUN pip install --no-cache-dir --quiet presidio-analyzer flask "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" && true
 
 # Copy the Presidio service wrapper
 COPY src-tauri/presidio_service.py /app/presidio_service.py

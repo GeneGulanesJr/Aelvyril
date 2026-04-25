@@ -22,6 +22,10 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Flask, Response, request, jsonify
+from presidio_analyzer import AnalyzerEngine, EntityRecognizer, RecognizerResult, Pattern
+from presidio_analyzer import PatternRecognizer
+from presidio_analyzer.predefined_recognizers import SpacyRecognizer, EmailRecognizer, IbanRecognizer, IpRecognizer
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,6 +103,7 @@ SUPPORTED_ENTITIES: List[str] = [
     "US_PASSPORT",
     "UK_NHS",
     "LOCATION",
+    "ORGANIZATION",  # <-- now supported via custom recognizer
     "DATE_TIME",
     "US_ZIP_CODE",
     "URL",
@@ -113,10 +118,9 @@ SUPPORTED_ENTITIES: List[str] = [
 def get_analyzer() -> Tuple[Optional[object], Optional[str]]:
     """Lazy-load the Presidio analyzer (supports graceful fallback).
 
-    Returns:
-        A tuple of (analyzer_instance_or_None, error_string_or_None).
-        On success the analyzer is cached; on failure the error is cached
-        so we don't retry on every request.
+    Uses the default AnalyzerEngine to get all built-in recognizers (Spacy for
+    PERSON/LOCATION/DATE_TIME, Email, IP, etc.), then injects our custom
+    recognizers into both the registry and the engine's active _recognizers list.
     """
     global _analyzer, _analyzer_error
 
@@ -127,6 +131,29 @@ def get_analyzer() -> Tuple[Optional[object], Optional[str]]:
         from presidio_analyzer import AnalyzerEngine
 
         _analyzer = AnalyzerEngine()
+        # Inject custom recognizers after engine is fully initialised
+        _register_custom_recognizers(_analyzer)
+        logger.info("Custom recognizers injected – proceeding to NLP config tweak")
+        logger.info(f"NLP engine type: {type(_analyzer.nlp_engine).__name__}")
+        if hasattr(_analyzer.nlp_engine, 'ner_model_configuration'):
+            cfg = _analyzer.nlp_engine.ner_model_configuration
+            logger.info(f"NLP config labels_to_ignore BEFORE: {cfg.labels_to_ignore}")
+            # Only modify if ORGANIZATION is in the ignore list
+            if 'ORGANIZATION' in cfg.labels_to_ignore:
+                cfg.labels_to_ignore = [lbl for lbl in cfg.labels_to_ignore if lbl != 'ORGANIZATION']
+                logger.info(f"Removed ORGANIZATION from ner_model_configuration.labels_to_ignore. Now: {cfg.labels_to_ignore}")
+            else:
+                logger.info("ORGANIZATION not in labels_to_ignore; no change needed")
+        else:
+            logger.warning("NLP engine has no ner_model_configuration attribute")
+        # Remove default SpacyRecognizer to prevent duplicate ORGANIZATION predictions
+        # Downgrade SpacyRecognizer: drop ORGANIZATION to avoid duplicate with CustomSpacyOrganizationRecognizer
+        for _r in getattr(_analyzer.registry, "recognizers", []):
+            if getattr(_r, "name", None) == "SpacyRecognizer":
+                _r.supported_entities = [e for e in getattr(_r, "supported_entities", []) if e != "ORGANIZATION"]
+        # DEBUG: log recognizers and their supported entities
+        for _r in _analyzer.registry.recognizers:
+            logger.info(f"Recognizer: {_r.name}, supported: {getattr(_r, 'supported_entities', None)}")
         recs = _analyzer.registry.get_recognizers(
             language="en", entities=SUPPORTED_ENTITIES
         )
@@ -169,7 +196,7 @@ def _presidio_results_to_matches(results: list) -> List[RecognizerMatch]:
     for r in results:
         recognizer_name: Optional[str] = None
         if hasattr(r, "recognition_metadata") and r.recognition_metadata:
-            recognizer_name = getattr(r.recognition_metadata, "recognizer_name", None)
+            recognizer_name = r.recognition_metadata.get("recognizer_name") if isinstance(r.recognition_metadata, dict) else getattr(r.recognition_metadata, "recognizer_name", None)
         matches.append(
             RecognizerMatch(
                 entity_type=r.entity_type,
@@ -272,6 +299,194 @@ def analyze() -> Tuple[Response, int]:
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Custom Aelvyril Recognizers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class CustomSpacyOrganizationRecognizer(EntityRecognizer):
+    """Extract ORGANIZATION entities using spaCy's NER.
+
+    The default ``SpacyRecognizer`` bundled with Presidio only exposes
+    ``DATE_TIME``, ``PERSON``, ``LOCATION`` and ``NRP``. This recognizer
+    explicitly adds support for ORG labels (e.g. Google, Microsoft).
+    """
+
+    def __init__(self, supported_language: str = "en", ner_strength: float = 0.85):
+        super().__init__(
+            supported_entities=["ORGANIZATION"],
+            name="CustomSpacyOrganizationRecognizer",
+            supported_language=supported_language,
+            version="0.0.1",
+            context=["company", "organization", "corp", "inc", "non-profit"],
+        )
+        self.ner_strength = ner_strength
+
+    def load(self) -> None:
+        # No explicit load — NLP artifacts are passed to analyze()
+        pass
+
+    def analyze(self, text: str, entities: List[str], nlp_artifacts: Any, language: str = "en", **kwargs) -> List[Any]:
+        from presidio_analyzer.nlp_engine import NlpArtifacts  # noqa: F401
+
+        results = []
+        # Denylist of short acronyms/terms spaCy often mis-tags as ORG but are not organizations
+        ORG_DENYLIST = {
+            "api", "cpu", "gpu", "ram", "sql", "html", "css", "json", "xml", "url", "uri",
+            "ipsum", "lorem", "etc", "ie", "eg", "vs", "via", "na", "faq", "sdk", "cli",
+        }
+        for ent in nlp_artifacts.entities:
+            if getattr(ent, 'label_', None) == "ORGANIZATION" and (entities is None or "ORGANIZATION" in entities):
+                span_text = ent.text.strip()
+                # Filter out pure short acronyms (≤4 chars) that are not real organizations
+                if len(span_text) <= 4 and span_text.lower() in ORG_DENYLIST:
+                    continue
+                results.append(RecognizerResult(
+                    entity_type="ORGANIZATION",
+                    start=ent.start_char,
+                    end=ent.end_char,
+                    score=self.ner_strength,
+                    recognition_metadata={"recognizer_name": self.name}
+                ))
+        return results
+
+
+class CustomPhoneNumberRecognizer(EntityRecognizer):
+    """Comprehensive PHONE_NUMBER detection with global formats.
+
+    Covers:
+      • US/CA: (###) ###-####  or  ###-###-####
+      • International: +<country-code> <number>
+      • Common separators: space / dash / dot / parentheses
+    """
+
+    PHONE_PATTERNS = [
+        # (NXX) NXX-XXXX  with optional country code
+        r"\(\+?1\)\s?\([2-9]\d{2}\)\s?[2-9]\d{2}-?\d{4}",
+        r"\+1\s?\([2-9]\d{2}\)\s?[2-9]\d{2}-?\d{4}",
+        r"\([2-9]\d{2}\)\s?[2-9]\d{2}-?\d{4}",
+        #  ###-###-####  (no parentheses, optional country code)
+        r"\+?1?[-.\s]?\(?[2-9]\d{2}\)?[-.\s]?[2-9]\d{2}[-.\s]?\d{4}",
+        # International: +CC NNNN NNNNNNN...
+        r"\+\d{1,3}(?:[-.\s]?\d+)+",
+        # Simple 10-digit: 555-123-4567 or 555.123.4567 or 5551234567
+        r"\b[2-9]\d{2}[-.\s]?[2-9]\d{2}[-.\s]?\d{4}\b",
+    ]
+
+    def __init__(self, supported_language: str = "en"):
+        super().__init__(
+            supported_entities=["PHONE_NUMBER"],
+            name="CustomPhoneNumberRecognizer",
+            supported_language=supported_language,
+            version="1.0.0",
+            context=["phone", "call", "mobile", "tel", "telephone"],
+        )
+
+    def load(self) -> None:
+        pass  # regex loaded on first analyze
+
+    def analyze(self, text: str, entities: List[str], nlp_artifacts: Any, language: str = "en", **kwargs) -> List[Any]:
+        import re
+        results = []
+        # entities=None means "all types are requested"
+        if entities is not None and "PHONE_NUMBER" not in entities:
+            return []
+
+        # Try each regex pattern
+        for pattern_str in self.PHONE_PATTERNS:
+            for m in re.finditer(pattern_str, text, re.IGNORECASE):
+                start, end = m.span()
+                results.append(
+                    RecognizerResult(
+                        entity_type="PHONE_NUMBER",
+                        start=start,
+                        end=end,
+                        score=0.85,
+                        recognition_metadata={"recognizer_name": self.name},
+                    )
+                )
+        return results
+
+
+class CustomApiKeyRecognizer(PatternRecognizer):
+    """Detect API keys using patterns aligned with Aelvyril's Rust recognizers.
+
+    Primary pattern (from Aelvyril's PUBLIC_API_KEY_RE):
+        \\b(sk|sk-|sk_|sk-p|sk-proj)-?[A-Za-z0-9]{20,}\\b
+
+    Extended with common provider prefixes (GitHub, Google, AWS, etc.).
+    """
+
+    DEFAULT_PATTERNS = [
+        Pattern(
+            name="openai_api_key",
+            score=0.99,
+            regex=r"\b(sk|sk-|sk_|sk-p|sk-proj)-?[A-Za-z0-9]{20,}\b",
+            
+        ),
+        Pattern(
+            name="github_pat",
+            score=0.98,
+            regex=r"\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{22,}\b",
+            
+        ),
+        Pattern(
+            name="google_api_key",
+            score=0.98,
+            regex=r"\bAIza[0-9A-Za-z\-_]{35,}\b",
+            
+        ),
+        Pattern(
+            name="aws_access_key",
+            score=0.99,
+            regex=r"\bAKIA[0-9A-Z]{16}\b",
+            
+        ),
+        Pattern(
+            name="generic_secret_float",
+            score=0.7,
+            regex=r"\b(?:api[_-]?key|apikey|secret|token)[\s:=]{1,3}[A-Za-z0-9\-_]{20,}\b",
+            
+        ),
+    ]
+
+    def __init__(self, supported_language: str = "en"):
+        super().__init__(
+            supported_entity="API_KEY",
+            name="CustomApiKeyRecognizer",
+            patterns=self.DEFAULT_PATTERNS,
+            supported_language=supported_language,
+            version="1.0.0",
+            context=["api", "key", "secret", "token"],
+        )
+
+
+def _register_custom_recognizers(analyzer) -> None:
+    """Add Aelvyril-specific recognizers to an already-initialised AnalyzerEngine.
+
+    Recognizers are injected into both the engine's registry and its internal
+    _recognizers list so they participate in analysis.
+    """
+    import logging
+
+    logger = logging.getLogger("presidio-service")
+    registry = analyzer.registry
+
+    # Add our custom recognizers (they will be picked up by get_recognizers)
+    api_key_rec = CustomApiKeyRecognizer()
+    registry.add_recognizer(api_key_rec)
+    logger.info("Registered CustomApiKeyRecognizer")
+
+    phone_rec = CustomPhoneNumberRecognizer()
+    registry.add_recognizer(phone_rec)
+    logger.info("Registered CustomPhoneNumberRecognizer")
+
+    org_rec = CustomSpacyOrganizationRecognizer()
+    registry.add_recognizer(org_rec)
+    logger.info("Registered CustomSpacyOrganizationRecognizer")
+
+
 
 
 if __name__ == "__main__":

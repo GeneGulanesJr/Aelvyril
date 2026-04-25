@@ -610,6 +610,17 @@
   flex-shrink: 0;
 }
 
+.qualityNote {
+  margin-top: 10px;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-tertiary, #888);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-style: italic;
+}
+
 /* ── Backward compat for other pages using .section ─── */
 .section,
 .panel {

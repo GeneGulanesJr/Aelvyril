@@ -1,6 +1,6 @@
 # TAB Anonymization Quality Report — Re-identification Risk Assessment
 
-**Generated:** 2026-04-24T07:17:00Z
+**Generated:** 2026-04-25T04:15:45Z
 **Benchmark:** TAB — Text Anonymization Benchmark (arxiv:2202.00443)
 **Documents:** 127 ECHR court cases
 **Source:** NorskRegnesentral/text-anonymization-benchmark
@@ -19,8 +19,8 @@ whether the system correctly identifies which personally identifiable spans
 
 | Metric | Value |
 |--------|-------|
-| **R_direct** (recall of must-mask) | 0.4849 |
-| **R_quasi** (recall of should-mask) | 0.0457 |
+| **R_direct** (recall of must-mask) | 0.6055 |
+| **R_quasi** (recall of should-mask) | 0.6793 |
 | **F1_direct** | 0.0000 |
 | **F1_quasi** | 0.0000 |
 | **Weighted F1** (DIRECT 2×, QUASI 1×) | 0.0000 |
@@ -38,19 +38,21 @@ whether the system correctly identifies which personally identifiable spans
 
 ❌ **HIGH RISK** — R_direct < 0.85: Significant risk of re-identification via direct identifiers.
 
-❌ **HIGH RISK** — R_quasi < 0.65: Quasi-identifiers can combine to enable re-identification.
+⚠️ **MODERATE RISK** — R_quasi between 0.65 and 0.80: Some quasi-identifiers may leak.
 
 ## Per-Entity Breakdown
 
 | Entity Type | R_direct | R_quasi | F1 | Direct | Quasi | Total |
 |-------------|----------|---------|-----|--------|-------|-------|
 | CODE | 0.0000 | 0.0000 | 0.0000 | 135 | 187 | 328 |
-| DATE_TIME | 1.0000 | 0.0000 | 0.0000 | 0 | 2488 | 2615 |
-| LOCATION | 1.0000 | 0.0000 | 0.0000 | 0 | 533 | 979 |
+| DATE_TIME | 1.0000 | 0.9699 | 0.9108 | 0 | 2488 | 2615 |
+| LOCATION | 1.0000 | 0.3940 | 0.4549 | 0 | 533 | 979 |
 | MISC | 1.0000 | 0.0000 | 0.0000 | 0 | 124 | 227 |
-| ORGANIZATION | 0.0000 | 0.0000 | 0.0000 | 4 | 557 | 1937 |
-| PERSON | 0.7832 | 0.2992 | 0.1881 | 226 | 732 | 1063 |
+| ORGANIZATION | 0.0000 | 0.0018 | 0.0028 | 4 | 557 | 1937 |
+| PERSON | 0.9779 | 0.8661 | 0.8362 | 226 | 732 | 1063 |
 | QUANTITY | 1.0000 | 0.0000 | 0.0000 | 0 | 175 | 222 |
+| URL | 1.0000 | 1.0000 | 0.0000 | 0 | 0 | 0 |
+| US_DRIVER_LICENSE | 1.0000 | 1.0000 | 0.0000 | 0 | 0 | 0 |
 
 ## Annotation Counts
 
@@ -59,7 +61,7 @@ whether the system correctly identifies which personally identifiable spans
 | Gold DIRECT (must mask) | 365 |
 | Gold QUASI (should mask) | 4796 |
 | Gold NO_MASK (keep) | 2210 |
-| Total predicted | 3254 |
+| Total predicted | 5111 |
 
 ## Methodology Notes
 

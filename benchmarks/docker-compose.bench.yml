@@ -24,13 +24,16 @@ version: "3.9"
 services:
   presidio:
     build:
-      context: .
+      context: ..
       dockerfile: benchmarks/presidio_service.Dockerfile
     container_name: aelvyril-presidio
     ports:
-      - "5000:5000"
+      - "5000:3000"
+    environment:
+      - AELVYRIL_PRESIDIO_HOST=0.0.0.0
+      - PRESIDIO_HOST=0.0.0.0
     volumes:
-      - ./benchmarks/data:/app/data:ro
+      - ./data:/app/data:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 5s
@@ -42,7 +45,7 @@ services:
 
   mock:
     build:
-      context: .
+      context: ..
       dockerfile: benchmarks/mock_service.Dockerfile
     container_name: aelvyril-mock
     ports:

@@ -3,11 +3,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install Presidio CLI + Flask (service deps)
-# Using pattern-only recognizers for vanilla baseline; no heavy NLP models.
+# Install Presidio + Flask (service deps)
 RUN pip install --no-cache-dir --quiet \
     presidio-analyzer \
-    presidio-analyzer-legacy \
     flask \
     && true
 

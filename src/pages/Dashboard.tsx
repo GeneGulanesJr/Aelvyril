@@ -420,6 +420,10 @@ function TokenUsagePanel({ stats }: {
           <span>{stats.suggestion}</span>
         </div>
       )}
+      <div className={styles.qualityNote}>
+        <AlertTriangle size={12} style={{ opacity: 0.6 }} />
+        <span>Lower token usage ≠ better results. Always check task success rates and output quality.</span>
+      </div>
     </div>
   );
 }

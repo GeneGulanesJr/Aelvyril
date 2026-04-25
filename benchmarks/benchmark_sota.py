@@ -231,12 +231,12 @@ def main():
         test_file = data_dir / "test.txt"
         if not test_file.exists():
             print("Downloading CoNLL-2003 dataset...")
-            import requests, tarfile, io
-            url = "https://www.clips.uantwerpen.be/conll2003/ner.tgz"
-            resp = requests.get(url, stream=True, timeout=60)
+            import requests, zipfile, io
+            url = "https://data.deepai.org/conll2003.zip"
+            resp = requests.get(url, timeout=60)
             resp.raise_for_status()
-            tgz = tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz")
-            tgz.extractall(path=data_dir)
+            z = zipfile.ZipFile(io.BytesIO(resp.content))
+            z.extractall(path=data_dir)
             print(f"Extracted to {data_dir}")
         else:
             print("CoNLL-2003 data already present.")

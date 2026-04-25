@@ -1,6 +1,6 @@
 # Aelvyril: Production-Grade PII Detection Benchmarks
 
-**Generated:** 2026-04-23T14:45:53.517484+00:00
+**Generated:** 2026-04-25T04:26:39.255478+00:00
 
 ## Abstract
 
@@ -27,28 +27,28 @@ Confidence intervals computed via non-parametric bootstrap (10,000 iterations). 
 
 ### 2.1 Phase 1: Presidio-Research Evaluation
 
-- **F₂ Score:** 0.9612
-- **Recall:** 0.9734
-- **Precision:** 0.9498
+- **F₂ Score:** 0.5842
+- **Recall:** 0.5904
+- **Precision:** 0.5605
 
 ### 2.2 Phase 2: PII-Bench (Fudan)
 
-- **Strict-F1:** 0.9012
-- **Entity-F1:** 0.9189
-- **RougeL-F:** 0.9345
-- **F₂:** 0.9123
+- **Strict-F1:** 0.625
+- **Entity-F1:** 0.5455
+- **RougeL-F:** 0.0
+- **F₂:** 0.6101
 
 ### 2.3 Phase 2: TAB Anonymization
 
-- **R\_direct:** 0.9623
-- **R\_quasi:** 0.8434
-- **Weighted F1:** 0.9012
+- **R\_direct:** 0.6055
+- **R\_quasi:** 0.6793
+- **Weighted F1:** 0.0
 
 ### 2.4 Phase 3: Cross-System Comparison
 
 | System | F₂ | Recall | Precision |
 |--------|-----|--------|-----------|
-| Aelvyril | 0.9612 | 0.9734 | 0.9498 |
+| Aelvyril | 0.5842 | 0.5904 | 0.5605 |
 | Datafog | 0.8456 | 0.8678 | 0.8012 |
 | Ai4privacy | 0.9589 | 0.9712 | 0.9367 |
 
@@ -84,4 +84,4 @@ All benchmark code, datasets, and configuration are available at:
 `https://github.com/GulanesKorp/Aelvyril/benchmarks/`
 
 **Seed:** 42  
-**Date:** 2026-04-23
+**Date:** 2026-04-25

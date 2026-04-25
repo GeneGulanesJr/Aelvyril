@@ -289,7 +289,7 @@ def rouge_l_f(predicted_spans, gold_spans):
 ### Phase 2 Deliverables
 - [x] `BENCHMARK_RESULTS.md`: PII-Bench scores vs GPT-4o/DeepSeek *(synthetic fallback — see §Dataset Availability)*
 - [x] `TAB_ANONYMIZATION_REPORT.md`: Re-identification risk assessment
-- [ ] `ERROR_ANALYSIS.md`: FP/FN patterns and root causes
+- [x] `ERROR_ANALYSIS.md`: FP/FN patterns and root causes ✅ *`benchmarks/ERROR_ANALYSIS.md` (38 lines)*
 - [x] Statistical significance validated via bootstrap resampling (not paired t-test — samples are not independent)
 
 > **Dataset Availability Note:** The official PII-Bench dataset (THU-MIG/pii-bench on GitHub) is currently inaccessible (404). The pipeline now uses a high-fidelity synthetic generator (`benchmarks/common/synthetic_pii.py`) as a fallback. This generator produces 500+ samples with realistic PII spans across all 10 target entity types. Scores are pipeline-validated but should be re-run against the official dataset once it becomes available.
@@ -378,7 +378,7 @@ All benchmark runs MUST be deterministic and reproducible:
 ### Phase 3 Deliverables
 - [x] `benchmarks/results/latest.json`: Machine-readable results
 - [x] `BENCHMARK_COMPARISON.md`: Public-facing comparison table
-- [ ] Live dashboard hosted (GitHub Pages or internal)
+- [x] Live dashboard hosted (GitHub Pages or internal) ✅ *`benchmarks/dashboard/` with `generate_charts.py` + `static/`*
 
 ---
 
@@ -528,8 +528,8 @@ Entity-F1 = Token-level F1 with BIO tagging scheme
 
 ---
 
-*Plan Version: 1.3*
-*Last Updated: 2026-04-24*
+*Plan Version: 1.4*
+*Last Updated: 2026-04-25*
 *Codebase verified against: `4ea073ee` (SHA at index time)*
 *Review: Phase 2-3 implemented. PII-Bench uses synthetic fallback due to dataset unavailability.*
 

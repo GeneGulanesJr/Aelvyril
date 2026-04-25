@@ -155,11 +155,11 @@ def _load_or_generate_samples(
 
     print(f"[INFO] Generating {num_samples} synthetic samples (seed={seed})...")
     gen = LLMPromptDataGenerator(seed=seed)
-    samples = gen.generate_samples(count=num_samples)
+    samples = gen.generate_dataset(num_samples=num_samples)
     texts = [s.text for s in samples]
     gold = [
-        [SpanMatch(entity_type=e.type, start=e.start, end=e.end, text=e.text)
-         for e in s.entities]
+        [SpanMatch(entity_type=e["entity_type"], start=e["start"], end=e["end"], text=e["text"])
+         for e in s.spans]
         for s in samples
     ]
     return texts, gold
@@ -187,7 +187,11 @@ def evaluate_ai4privacy(
             # Rate limit protection: sleep briefly every 50 requests
             time.sleep(0.5)
 
-    per_entity = evaluate_entity_types(predicted_samples, gold_spans, iou_threshold)
+    per_entity = evaluate_entity_types(
+        [s for sample in predicted_samples for s in sample],
+        [s for sample in gold_spans for s in sample],
+        iou_threshold,
+    )
     aggregate = compute_aggregate(per_entity, average="micro")
     return per_entity, aggregate, predicted_samples
 
@@ -215,7 +219,7 @@ def main() -> None:
     if evaluator.failure_rate > 0:
         print("[WARN] ai4privacy API health check failed. Skipping evaluation.")
         print("[HINT] Set --api-key if using authenticated tier, or check network.")
-        sys.exit(0)
+        return
     print(f"[OK] API responsive. Test detection found {len(test_spans)} spans.")
 
     texts, gold = _load_or_generate_samples(args.num_samples, args.seed, args.data)
@@ -237,7 +241,7 @@ def main() -> None:
     print("[INFO] Computing bootstrap confidence intervals...")
     sample_f2_scores: List[float] = []
     for pred, gold_sample in zip(predicted_samples, gold):
-        pe = evaluate_entity_types([pred], [gold_sample], args.iou_threshold)
+        pe = evaluate_entity_types(pred, gold_sample, args.iou_threshold)
         agg = compute_aggregate(pe, average="micro")
         sample_f2_scores.append(agg.f2)
 

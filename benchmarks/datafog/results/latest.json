@@ -1,0 +1,204 @@
+{
+  "aelvyril_version": "dev",
+  "timestamp": "2026-04-25T04:26:05.728055+00:00",
+  "aggregate": {
+    "entity_type": "AGGREGATE",
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "f2": 0.0,
+    "tp": 0,
+    "fp": 0,
+    "fn": 1406,
+    "gold_count": 1406,
+    "pred_count": 0
+  },
+  "per_entity": {
+    "API_KEY": {
+      "entity_type": "API_KEY",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 72,
+      "gold_count": 72,
+      "pred_count": 0
+    },
+    "CITY": {
+      "entity_type": "CITY",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 24,
+      "gold_count": 24,
+      "pred_count": 0
+    },
+    "CREDIT_CARD": {
+      "entity_type": "CREDIT_CARD",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 59,
+      "gold_count": 59,
+      "pred_count": 0
+    },
+    "DATE_TIME": {
+      "entity_type": "DATE_TIME",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 73,
+      "gold_count": 73,
+      "pred_count": 0
+    },
+    "EMAIL_ADDRESS": {
+      "entity_type": "EMAIL_ADDRESS",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 184,
+      "gold_count": 184,
+      "pred_count": 0
+    },
+    "IBAN_CODE": {
+      "entity_type": "IBAN_CODE",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 15,
+      "gold_count": 15,
+      "pred_count": 0
+    },
+    "IP_ADDRESS": {
+      "entity_type": "IP_ADDRESS",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 113,
+      "gold_count": 113,
+      "pred_count": 0
+    },
+    "LOCATION": {
+      "entity_type": "LOCATION",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 163,
+      "gold_count": 163,
+      "pred_count": 0
+    },
+    "ORGANIZATION": {
+      "entity_type": "ORGANIZATION",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 96,
+      "gold_count": 96,
+      "pred_count": 0
+    },
+    "PERSON": {
+      "entity_type": "PERSON",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 314,
+      "gold_count": 314,
+      "pred_count": 0
+    },
+    "PHONE_NUMBER": {
+      "entity_type": "PHONE_NUMBER",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 96,
+      "gold_count": 96,
+      "pred_count": 0
+    },
+    "STREET_ADDRESS": {
+      "entity_type": "STREET_ADDRESS",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 62,
+      "gold_count": 62,
+      "pred_count": 0
+    },
+    "US_SSN": {
+      "entity_type": "US_SSN",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 79,
+      "gold_count": 79,
+      "pred_count": 0
+    },
+    "US_ZIP_CODE": {
+      "entity_type": "US_ZIP_CODE",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 56,
+      "gold_count": 56,
+      "pred_count": 0
+    }
+  },
+  "meta": {
+    "benchmark": "datafog",
+    "num_samples": 500,
+    "iou_threshold": 0.5,
+    "elapsed_seconds": 0.016857624053955078,
+    "bootstrap": {
+      "metric": "bootstrap",
+      "observed": NaN,
+      "bootstrap_mean": NaN,
+      "bootstrap_std": NaN,
+      "ci_95": [
+        NaN,
+        NaN
+      ],
+      "ci_width": NaN,
+      "iterations": 10000
+    }
+  }
+}

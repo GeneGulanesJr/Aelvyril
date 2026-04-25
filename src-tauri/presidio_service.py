@@ -328,7 +328,7 @@ class CustomSpacyOrganizationRecognizer(EntityRecognizer):
         pass
 
     def analyze(self, text: str, entities: List[str], nlp_artifacts: Any, language: str = "en", **kwargs) -> List[Any]:
-        from presidio_analyzer.nlp_engine import NlpArtifacts  # noqa: F401
+        from presidio_analyzer import AnalysisExplanation
 
         results = []
         # Denylist of short acronyms/terms spaCy often mis-tags as ORG but are not organizations
@@ -342,12 +342,21 @@ class CustomSpacyOrganizationRecognizer(EntityRecognizer):
                 # Filter out pure short acronyms (≤4 chars) that are not real organizations
                 if len(span_text) <= 4 and span_text.lower() in ORG_DENYLIST:
                     continue
+                explanation = AnalysisExplanation(
+                    recognizer=self.name,
+                    original_score=self.ner_strength,
+                    textual_explanation=f"Identified as {ent.label_} by custom spaCy NER",
+                )
                 results.append(RecognizerResult(
                     entity_type="ORGANIZATION",
                     start=ent.start_char,
                     end=ent.end_char,
                     score=self.ner_strength,
-                    recognition_metadata={"recognizer_name": self.name}
+                    analysis_explanation=explanation,
+                    recognition_metadata={
+                        RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
+                        RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
+                    },
                 ))
         return results
 
@@ -388,6 +397,8 @@ class CustomPhoneNumberRecognizer(EntityRecognizer):
 
     def analyze(self, text: str, entities: List[str], nlp_artifacts: Any, language: str = "en", **kwargs) -> List[Any]:
         import re
+        from presidio_analyzer import AnalysisExplanation
+
         results = []
         # entities=None means "all types are requested"
         if entities is not None and "PHONE_NUMBER" not in entities:
@@ -397,13 +408,22 @@ class CustomPhoneNumberRecognizer(EntityRecognizer):
         for pattern_str in self.PHONE_PATTERNS:
             for m in re.finditer(pattern_str, text, re.IGNORECASE):
                 start, end = m.span()
+                explanation = AnalysisExplanation(
+                    recognizer=self.name,
+                    original_score=0.85,
+                    textual_explanation=f"Phone number detected by pattern",
+                )
                 results.append(
                     RecognizerResult(
                         entity_type="PHONE_NUMBER",
                         start=start,
                         end=end,
                         score=0.85,
-                        recognition_metadata={"recognizer_name": self.name},
+                        analysis_explanation=explanation,
+                        recognition_metadata={
+                            RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
+                            RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
+                        },
                     )
                 )
         return results

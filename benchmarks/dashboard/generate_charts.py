@@ -188,6 +188,10 @@ def collect_all_results(base_dir: str = "benchmarks") -> Dict[str, Any]:
     spacy_path = os.path.join(base_dir, "spacy", "results", "latest.json")
     results["spacy"] = load_result_file(spacy_path)
 
+    # Cross-lingual
+    cross_lingual_path = os.path.join(base_dir, "cross_lingual", "results", "latest.json")
+    results["cross_lingual"] = load_result_file(cross_lingual_path)
+
     return results
 
 
@@ -449,6 +453,27 @@ def generate_comparison_table(
         lines.append("_Adversarial robustness evaluation not yet run._")
     lines.append("")
 
+    # Cross-lingual results
+    cross_lingual = results.get("cross_lingual")
+    lines.append("### Cross-Lingual Detection")
+    lines.append("")
+    if cross_lingual:
+        agg = cross_lingual.get("aggregate", {})
+        lines.append(f"**Aggregate:** F₂={agg.get('f2', 0):.4f}, F₁={agg.get('f1', 0):.4f}, Recall={agg.get('recall', 0):.4f}")
+        lines.append("")
+        lines.append("| Locale | Samples | Precision | Recall | F₁ | F₂ |")
+        lines.append("|--------|---------|-----------|--------|-----|-----|")
+        for locale, data in cross_lingual.get("per_locale", {}).items():
+            lines.append(
+                f"| {locale} | {data.get('samples', 0)} | "
+                f"{data.get('precision', 0):.4f} | {data.get('recall', 0):.4f} | "
+                f"{data.get('f1', 0):.4f} | {data.get('f2', 0):.4f} |"
+            )
+        lines.append("")
+    else:
+        lines.append("_Cross-lingual evaluation not yet run._")
+    lines.append("")
+
     # ── Methodology ──────────────────────────────────────────────────────
     lines.append("## Methodology")
     lines.append("")
@@ -529,6 +554,21 @@ def generate_dashboard(
     with open(json_path, "w") as f:
         json.dump(latest_json, f, indent=2)
     print(f"Aggregated results saved → {json_path}")
+
+    # Record run for trend tracking
+    try:
+        from benchmarks.dashboard.trends import TrendTracker
+        tracker = TrendTracker(os.path.join(base_dir, "results"))
+        tracker.record_run(latest_json)
+        trends_md = tracker.generate_trends_report()
+
+        # Append trends to comparison markdown
+        with open(md_path, "a") as f:
+            f.write("\n---\n\n")
+            f.write(trends_md)
+        print(f"Trends appended to {md_path}")
+    except Exception as e:
+        print(f"[WARN] Could not generate trends: {e}")
 
     # Print console summary
     print(f"\n{'='*60}")

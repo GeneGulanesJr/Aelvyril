@@ -121,13 +121,15 @@ Examples:
             "phase1", "phase2", "phase3",
             "pii-bench", "tab", "spacy",
             "datafog", "ai4privacy", "adversarial",
+            "cross-lingual",
             "publication", "dashboard", "all",
         ],
         default="phase1",
         help=(
             "Benchmark suite to run (default: phase1). "
             "'phase2' runs both PII-Bench and TAB. "
-            "'phase3' runs DataFog, ai4privacy, adversarial, and publication. "
+            "'phase3' runs DataFog, ai4privacy, adversarial, cross-lingual, and publication. "
+            "'cross-lingual' evaluates PII detection across de_DE, fr_FR, es_MX. "
             "'publication' generates reports from existing results. "
             "'dashboard' generates comparison tables from existing results. "
             "'all' runs every phase."
@@ -209,6 +211,9 @@ Examples:
 
     if args.suite in ("phase3", "adversarial", "all"):
         _run_adversarial(args)
+
+    if args.suite in ("phase3", "cross-lingual", "all"):
+        _run_cross_lingual(args)
 
     if args.suite in ("phase3", "publication", "all"):
         _run_publication(args)
@@ -516,6 +521,23 @@ def _run_adversarial(args: argparse.Namespace) -> None:
         adversarial_main()
     finally:
         sys.argv = original_argv
+
+
+def _run_cross_lingual(args: argparse.Namespace) -> None:
+    """Run Phase 3: Cross-lingual PII detection evaluation."""
+    print("\n" + "=" * 60)
+    print("Phase 3: Cross-Lingual Evaluation")
+    print("=" * 60)
+
+    from benchmarks.cross_lingual import evaluate_cross_lingual
+
+    evaluate_cross_lingual(
+        service_url=args.service_url,
+        num_samples=min(args.num_samples, 200),
+        seed=args.seed,
+        output_dir="benchmarks/cross_lingual/results",
+    )
+
 
 
 def _run_publication(args: argparse.Namespace) -> None:

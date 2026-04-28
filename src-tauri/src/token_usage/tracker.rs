@@ -41,20 +41,15 @@ pub struct TokenUsageTracker {
     pub(crate) estimated_count: std::sync::atomic::AtomicU64,
     pub(crate) unavailable_count: std::sync::atomic::AtomicU64,
 
-    /// Duration samples for percentile calculation (global).
-    pub(crate) duration_samples: parking_lot::Mutex<std::collections::VecDeque<u64>>,
-
-    /// Per-tool duration samples for L2 percentile calculation.
-    pub(crate) tool_duration_samples: dashmap::DashMap<String, parking_lot::Mutex<std::collections::VecDeque<u64>>>,
-
-    /// Per-model duration samples for L2 percentile calculation.
-    pub(crate) model_duration_samples: dashmap::DashMap<String, parking_lot::Mutex<std::collections::VecDeque<u64>>>,
-
-    /// Per-session duration samples for L1 percentile calculation.
-    pub(crate) session_duration_samples: dashmap::DashMap<String, parking_lot::Mutex<std::collections::VecDeque<u64>>>,
-
-    /// Per-day duration samples for L3 percentile calculation.
-    pub(crate) daily_duration_samples: dashmap::DashMap<String, parking_lot::Mutex<std::collections::VecDeque<u64>>>,
+    /// Unified duration sample ring buffers, keyed by namespace:
+    ///   "_g" → global, "t:<tool>" → per-tool, "m:<model>" → per-model,
+    ///   "s:<session>" → per-session, "d:<date>" → per-day.
+    ///
+    /// Using a single DashMap instead of 5 separate Mutex<VecDeque> fields
+    /// eliminates sequential lock acquisitions on the hot path. Different keys
+    /// map to different DashMap shards, so concurrent requests for different
+    /// tools/models/sessions don't contend.
+    pub(crate) duration_samples: dashmap::DashMap<String, parking_lot::Mutex<std::collections::VecDeque<u64>>>,
 
     /// Max duration sample count.
     pub(crate) max_samples: usize,
@@ -179,13 +174,37 @@ impl TokenUsageTracker {
             api_reported_count: std::sync::atomic::AtomicU64::new(0),
             estimated_count: std::sync::atomic::AtomicU64::new(0),
             unavailable_count: std::sync::atomic::AtomicU64::new(0),
-            duration_samples: parking_lot::Mutex::new(std::collections::VecDeque::with_capacity(10000)),
-            tool_duration_samples: dashmap::DashMap::new(),
-            model_duration_samples: dashmap::DashMap::new(),
-            session_duration_samples: dashmap::DashMap::new(),
-            daily_duration_samples: dashmap::DashMap::new(),
+            duration_samples: dashmap::DashMap::new(),
             max_samples: 10000,
             store,
+        }
+    }
+
+    /// Push a duration sample into the unified ring buffer map.
+    ///
+    /// Lock hold time is minimal — just a pop_front + push_back on the
+    /// VecDeque. Different keys (tool/model/session) hit different DashMap
+    /// shards, so concurrent requests are not serialized.
+    fn push_duration_sample(&self, key: &str, duration_ms: u64, max: usize) {
+        let samples = self.duration_samples
+            .entry(key.to_string())
+            .or_insert_with(|| parking_lot::Mutex::new(std::collections::VecDeque::with_capacity(max)));
+        let mut buf = samples.lock();
+        if buf.len() >= max {
+            buf.pop_front();
+        }
+        buf.push_back(duration_ms);
+    }
+
+    /// Read duration percentiles from the unified sample map.
+    /// Returns (avg, p50, p99) or (0.0, 0.0, 0.0) if no samples exist.
+    pub(crate) fn get_duration_percentiles(&self, key: &str) -> (f64, f64, f64) {
+        match self.duration_samples.get(key) {
+            Some(samples) => {
+                let s = samples.lock();
+                compute_duration_percentiles(&s)
+            }
+            None => (0.0, 0.0, 0.0),
         }
     }
 
@@ -333,67 +352,14 @@ impl TokenUsageTracker {
             }
         }
 
-        // ── Duration samples (global) ──
-        {
-            let mut samples = self.duration_samples.lock();
-            if samples.len() >= self.max_samples {
-                // Ring buffer: pop front (O(1))
-                samples.pop_front();
-            }
-            samples.push_back(event.duration_ms);
-        }
-
-        // ── Per-tool duration samples ──
-        {
-            let tool_key_for_samples = event.tool_name.clone();
-            let entry = self.tool_duration_samples
-                .entry(tool_key_for_samples)
-                .or_insert_with(|| parking_lot::Mutex::new(std::collections::VecDeque::with_capacity(1000)));
-            let mut samples = entry.lock();
-            if samples.len() >= 1000 {
-                samples.pop_front();
-            }
-            samples.push_back(event.duration_ms);
-        }
-
-        // ── Per-model duration samples ──
-        {
-            let model_key_for_samples = event.model_id.clone();
-            let entry = self.model_duration_samples
-                .entry(model_key_for_samples)
-                .or_insert_with(|| parking_lot::Mutex::new(std::collections::VecDeque::with_capacity(1000)));
-            let mut samples = entry.lock();
-            if samples.len() >= 1000 {
-                samples.pop_front();
-            }
-            samples.push_back(event.duration_ms);
-        }
-
-        // ── Per-session duration samples ──
-        {
-            let session_key_for_samples = event.session_id.clone();
-            let entry = self.session_duration_samples
-                .entry(session_key_for_samples)
-                .or_insert_with(|| parking_lot::Mutex::new(std::collections::VecDeque::with_capacity(1000)));
-            let mut samples = entry.lock();
-            if samples.len() >= 1000 {
-                samples.pop_front();
-            }
-            samples.push_back(event.duration_ms);
-        }
-
-        // ── Per-day duration samples ──
-        {
-            let day_key_for_samples = day_key.clone();
-            let entry = self.daily_duration_samples
-                .entry(day_key_for_samples)
-                .or_insert_with(|| parking_lot::Mutex::new(std::collections::VecDeque::with_capacity(1000)));
-            let mut samples = entry.lock();
-            if samples.len() >= 1000 {
-                samples.pop_front();
-            }
-            samples.push_back(event.duration_ms);
-        }
+        // ── Duration samples (unified ring buffers) ──
+        // Uses a single DashMap with namespace prefixes so different
+        // tools/models/sessions never contend on the same lock.
+        self.push_duration_sample("_g", event.duration_ms, self.max_samples);
+        self.push_duration_sample(&format!("t:{}", event.tool_name), event.duration_ms, 1000);
+        self.push_duration_sample(&format!("m:{}", event.model_id), event.duration_ms, 1000);
+        self.push_duration_sample(&format!("s:{}", event.session_id), event.duration_ms, 1000);
+        self.push_duration_sample(&format!("d:{}", day_key), event.duration_ms, 1000);
 
         // ── Persist to SQLite store (if wired) ──
         if let Some(ref store) = self.store {
@@ -471,11 +437,17 @@ impl TokenUsageTracker {
         };
 
         let avg_duration_ms = {
-            let samples = self.duration_samples.lock();
-            if samples.is_empty() {
-                0.0
-            } else {
-                samples.iter().sum::<u64>() as f64 / samples.len() as f64
+            let buf = self.duration_samples.get("_g");
+            match buf {
+                Some(samples) => {
+                    let s = samples.lock();
+                    if s.is_empty() {
+                        0.0
+                    } else {
+                        s.iter().sum::<u64>() as f64 / s.len() as f64
+                    }
+                }
+                None => 0.0,
             }
         };
 
@@ -531,13 +503,9 @@ impl TokenUsageTracker {
     pub fn session_stats(&self, session_id: &str) -> Option<super::SessionTokenStats> {
         self.session_stats.get(session_id).map(|s| {
             let mut stats = s.to_stats();
-            let (avg, p50, p99) = self.session_duration_samples
-                .get(session_id)
-                .map(|samples| {
-                    let s = samples.lock();
-                    compute_duration_percentiles(&s)
-                })
-                .unwrap_or((0.0, 0.0, 0.0));
+            let (avg, p50, p99) = self.get_duration_percentiles(
+                &format!("s:{}", session_id),
+            );
             stats.avg_duration_ms = avg;
             stats.p50_duration_ms = p50;
             stats.p99_duration_ms = p99;
@@ -551,13 +519,9 @@ impl TokenUsageTracker {
             .iter()
             .map(|s| {
                 let mut stats = s.value().to_stats();
-                let (avg, p50, p99) = self.session_duration_samples
-                    .get(s.key())
-                    .map(|samples| {
-                        let s = samples.lock();
-                        compute_duration_percentiles(&s)
-                    })
-                    .unwrap_or((0.0, 0.0, 0.0));
+                let (avg, p50, p99) = self.get_duration_percentiles(
+                    &format!("s:{}", s.key()),
+                );
                 stats.avg_duration_ms = avg;
                 stats.p50_duration_ms = p50;
                 stats.p99_duration_ms = p99;
@@ -586,13 +550,9 @@ impl TokenUsageTracker {
                     0.0
                 };
                 let mut stats = counters_to_tool_stats(&tool, &s, pct_of_total);
-                let (avg, p50, p99) = self.tool_duration_samples
-                    .get(&tool)
-                    .map(|samples| {
-                        let s = samples.lock();
-                        compute_duration_percentiles(&s)
-                    })
-                    .unwrap_or((0.0, 0.0, 0.0));
+                let (avg, p50, p99) = self.get_duration_percentiles(
+                    &format!("t:{}", tool),
+                );
                 stats.avg_duration_ms = avg;
                 stats.p50_duration_ms = p50;
                 stats.p99_duration_ms = p99;
@@ -609,13 +569,9 @@ impl TokenUsageTracker {
                 let model_id = entry.key().clone();
                 let s = entry.value().snapshot();
                 let mut stats = counters_to_model_stats(&model_id, &s);
-                let (avg, p50, p99) = self.model_duration_samples
-                    .get(&model_id)
-                    .map(|samples| {
-                        let s = samples.lock();
-                        compute_duration_percentiles(&s)
-                    })
-                    .unwrap_or((0.0, 0.0, 0.0));
+                let (avg, p50, p99) = self.get_duration_percentiles(
+                    &format!("m:{}", model_id),
+                );
                 stats.avg_duration_ms = avg;
                 stats.p50_duration_ms = p50;
                 stats.p99_duration_ms = p99;
@@ -654,13 +610,9 @@ impl TokenUsageTracker {
         for tool_entry in self.tool_counters.iter() {
             let tool = tool_entry.key().clone();
             let s = tool_entry.value().snapshot();
-            let (avg, _p50, _p99) = self.tool_duration_samples
-                .get(&tool)
-                .map(|samples| {
-                    let s = samples.lock();
-                    compute_duration_percentiles(&s)
-                })
-                .unwrap_or((0.0, 0.0, 0.0));
+            let (avg, _p50, _p99) = self.get_duration_percentiles(
+                &format!("t:{}", tool),
+            );
 
             trends.push(super::ToolTrendPoint {
                 date: Utc::now().format("%Y-%m-%d").to_string(),
@@ -691,13 +643,9 @@ impl TokenUsageTracker {
         for model_entry in self.model_counters.iter() {
             let model_id = model_entry.key().clone();
             let s = model_entry.value().snapshot();
-            let (avg, _p50, _p99) = self.model_duration_samples
-                .get(&model_id)
-                .map(|samples| {
-                    let s = samples.lock();
-                    compute_duration_percentiles(&s)
-                })
-                .unwrap_or((0.0, 0.0, 0.0));
+            let (avg, _p50, _p99) = self.get_duration_percentiles(
+                &format!("m:{}", model_id),
+            );
 
             let actual_cost_cents = if s.actual_cost_cents_count > 0 {
                 Some(s.actual_cost_cents)
@@ -784,8 +732,12 @@ impl TokenUsageTracker {
     /// Returns the number of sessions that were trimmed.
     pub fn enforce_event_cap(&self) -> usize {
         let mut trimmed = 0;
-        for entry in self.session_duration_samples.iter() {
-            let mut samples = entry.lock();
+        // Iterate only session-prefixed entries ("s:<session_id>").
+        for entry in self.duration_samples.iter() {
+            if !entry.key().starts_with("s:") {
+                continue;
+            }
+            let mut samples = entry.value().lock();
             if samples.len() > MAX_EVENTS_PER_SESSION {
                 // Keep only the most recent MAX_EVENTS_PER_SESSION samples
                 let drain_count = samples.len() - MAX_EVENTS_PER_SESSION;
@@ -809,13 +761,9 @@ impl TokenUsageTracker {
         self.session_stats.get(session_id).and_then(|s| {
             if s.tenant_id == tenant_id || tenant_id == DEFAULT_TENANT_ID {
                 let mut stats = s.to_stats();
-                let (avg, p50, p99) = self.session_duration_samples
-                    .get(session_id)
-                    .map(|samples| {
-                        let s = samples.lock();
-                        compute_duration_percentiles(&s)
-                    })
-                    .unwrap_or((0.0, 0.0, 0.0));
+                let (avg, p50, p99) = self.get_duration_percentiles(
+                    &format!("s:{}", session_id),
+                );
                 stats.avg_duration_ms = avg;
                 stats.p50_duration_ms = p50;
                 stats.p99_duration_ms = p99;
@@ -861,13 +809,9 @@ impl TokenUsageTracker {
             })
             .map(|s| {
                 let mut stats = s.value().to_stats();
-                let (avg, p50, p99) = self.session_duration_samples
-                    .get(s.key())
-                    .map(|samples| {
-                        let s = samples.lock();
-                        compute_duration_percentiles(&s)
-                    })
-                    .unwrap_or((0.0, 0.0, 0.0));
+                let (avg, p50, p99) = self.get_duration_percentiles(
+                    &format!("s:{}", s.key()),
+                );
                 stats.avg_duration_ms = avg;
                 stats.p50_duration_ms = p50;
                 stats.p99_duration_ms = p99;
@@ -895,7 +839,7 @@ impl TokenUsageTracker {
     /// Aggregated counters (global, tool, model, daily) retain the data.
     pub fn close_session(&self, session_id: &str) {
         self.session_stats.remove(session_id);
-        self.session_duration_samples.remove(session_id);
+        self.duration_samples.remove(&format!("s:{}", session_id));
     }
 
     /// Clear all stats (for testing or reset).
@@ -904,11 +848,7 @@ impl TokenUsageTracker {
         self.tool_counters.clear();
         self.model_counters.clear();
         self.daily_counters.clear();
-        self.duration_samples.lock().clear();
-        self.tool_duration_samples.clear();
-        self.model_duration_samples.clear();
-        self.session_duration_samples.clear();
-        self.daily_duration_samples.clear();
+        self.duration_samples.clear();
         // Reset global atomics
         let g = &self.global;
         for atomic in &[

@@ -4,6 +4,7 @@ use tauri::Manager;
 
 use crate::clipboard::{ClipboardAction, ClipboardEvent, ClipboardResponse};
 use crate::clipboard::monitor::ClipboardMonitor;
+use crate::pii::PiiEngine;
 use crate::state::SharedState;
 
 // ── Presidio Health Check Constants ──
@@ -19,6 +20,9 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let presidio_url = start_presidio(app);
     spawn_presidio_healthcheck(app, presidio_url);
+
+    #[cfg(feature = "llama")]
+    spawn_llama_init(app);
 
     spawn_gateway(handle);
     spawn_clipboard_poll(app);
@@ -101,6 +105,54 @@ fn spawn_presidio_healthcheck(app: &mut tauri::App, presidio_url: String) {
             }
         }
     });
+}
+
+/// Attempt to initialize the LLM PII backend during startup.
+/// Looks for a GGUF model at standard locations and loads it.
+/// Failures are non-fatal — the engine degrades to Presidio + regex.
+#[cfg(feature = "llama")]
+fn spawn_llama_init(app: &mut tauri::App) {
+    let state = app.state::<SharedState>().inner().clone();
+
+    tauri::async_runtime::spawn(async move {
+        let gguf_path = find_gguf_model();
+        let Some(gguf_path) = gguf_path else {
+            tracing::info!("No GGUF PII model found — LLM backend disabled");
+            return;
+        };
+
+        let gguf_str = gguf_path.to_str().unwrap_or("").to_string();
+        match PiiEngine::init_llama(&gguf_str).await {
+            Ok(detector) => {
+                let s = state.read().await;
+                s.pii_engine.write().await.set_llama_detector(detector);
+                tracing::info!(path = %gguf_path.display(), "LLM PII backend loaded");
+            }
+            Err(e) => tracing::warn!(path = %gguf_path.display(), "Failed to init LLM backend: {}", e),
+        }
+    });
+}
+
+/// Search standard locations for the PII GGUF model.
+#[cfg(feature = "llama")]
+fn find_gguf_model() -> Option<std::path::PathBuf> {
+    let candidates = [
+        // XDG data dir (Linux/macOS)
+        dirs::data_dir().map(|d| d.join("aelvyril").join("models").join("pii-q4_k_m.gguf")),
+        // App bundle resource (Tauri)
+        Some(std::path::PathBuf::from("resources/models/pii-q4_k_m.gguf")),
+        // Home directory fallback
+        dirs::home_dir().map(|d| d.join(".aelvyril").join("models").join("pii-q4_k_m.gguf")),
+        // Current working directory
+        Some(std::path::PathBuf::from("model-q4_k_m.gguf")),
+    ];
+
+    for candidate in candidates.into_iter().flatten() {
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn spawn_gateway(handle: tauri::AppHandle) {

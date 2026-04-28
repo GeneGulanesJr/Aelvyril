@@ -1,0 +1,253 @@
+{
+  "aelvyril_version": "dev",
+  "timestamp": "2026-04-25T11:33:03.884385+00:00",
+  "aggregate": {
+    "entity_type": "AGGREGATE",
+    "precision": 0.5436,
+    "recall": 0.8557,
+    "f1": 0.6648,
+    "f2": 0.7676,
+    "tp": 605,
+    "fp": 508,
+    "fn": 102,
+    "gold_count": 707,
+    "pred_count": 1113
+  },
+  "per_entity": {
+    "API_Key": {
+      "entity_type": "API_Key",
+      "precision": 0.9388,
+      "recall": 1.0,
+      "f1": 0.9684,
+      "f2": 0.9871,
+      "tp": 46,
+      "fp": 3,
+      "fn": 0,
+      "gold_count": 46,
+      "pred_count": 49
+    },
+    "Credit_Card": {
+      "entity_type": "Credit_Card",
+      "precision": 1.0,
+      "recall": 0.8333,
+      "f1": 0.9091,
+      "f2": 0.8621,
+      "tp": 25,
+      "fp": 0,
+      "fn": 5,
+      "gold_count": 30,
+      "pred_count": 25
+    },
+    "Date": {
+      "entity_type": "Date",
+      "precision": 0.5926,
+      "recall": 1.0,
+      "f1": 0.7442,
+      "f2": 0.8791,
+      "tp": 32,
+      "fp": 22,
+      "fn": 0,
+      "gold_count": 32,
+      "pred_count": 54
+    },
+    "Domain": {
+      "entity_type": "Domain",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 182,
+      "fn": 0,
+      "gold_count": 0,
+      "pred_count": 182
+    },
+    "Email": {
+      "entity_type": "Email",
+      "precision": 0.9899,
+      "recall": 0.9899,
+      "f1": 0.9899,
+      "f2": 0.9899,
+      "tp": 98,
+      "fp": 1,
+      "fn": 1,
+      "gold_count": 99,
+      "pred_count": 99
+    },
+    "IBAN": {
+      "entity_type": "IBAN",
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "f2": 1.0,
+      "tp": 13,
+      "fp": 0,
+      "fn": 0,
+      "gold_count": 13,
+      "pred_count": 13
+    },
+    "IP_Address": {
+      "entity_type": "IP_Address",
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "f2": 1.0,
+      "tp": 65,
+      "fp": 0,
+      "fn": 0,
+      "gold_count": 65,
+      "pred_count": 65
+    },
+    "Location": {
+      "entity_type": "Location",
+      "precision": 0.7234,
+      "recall": 0.6126,
+      "f1": 0.6634,
+      "f2": 0.632,
+      "tp": 68,
+      "fp": 26,
+      "fn": 43,
+      "gold_count": 111,
+      "pred_count": 94
+    },
+    "Organization": {
+      "entity_type": "Organization",
+      "precision": 0.5862,
+      "recall": 1.0,
+      "f1": 0.7391,
+      "f2": 0.8763,
+      "tp": 51,
+      "fp": 36,
+      "fn": 0,
+      "gold_count": 51,
+      "pred_count": 87
+    },
+    "Person": {
+      "entity_type": "Person",
+      "precision": 0.7049,
+      "recall": 0.7914,
+      "f1": 0.7457,
+      "f2": 0.7725,
+      "tp": 129,
+      "fp": 54,
+      "fn": 34,
+      "gold_count": 163,
+      "pred_count": 183
+    },
+    "Phone": {
+      "entity_type": "Phone",
+      "precision": 0.2103,
+      "recall": 0.98,
+      "f1": 0.3463,
+      "f2": 0.5658,
+      "tp": 49,
+      "fp": 184,
+      "fn": 1,
+      "gold_count": 50,
+      "pred_count": 233
+    },
+    "SSN": {
+      "entity_type": "SSN",
+      "precision": 1.0,
+      "recall": 0.9667,
+      "f1": 0.9831,
+      "f2": 0.9732,
+      "tp": 29,
+      "fp": 0,
+      "fn": 1,
+      "gold_count": 30,
+      "pred_count": 29
+    },
+    "Zip_Code": {
+      "entity_type": "Zip_Code",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "f2": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 17,
+      "gold_count": 17,
+      "pred_count": 0
+    }
+  },
+  "meta": {
+    "baseline": {
+      "API_Key": {
+        "f2": 0.0,
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "Credit_Card": {
+        "f2": 0.12195121951219513,
+        "recall": 0.1,
+        "precision": 1.0
+      },
+      "Date": {
+        "f2": 0.8333333333333334,
+        "recall": 1.0,
+        "precision": 0.5
+      },
+      "Domain": {
+        "f2": 0.0,
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "Email": {
+        "f2": 0.8987603305785123,
+        "recall": 0.8787878787878788,
+        "precision": 0.9886363636363636
+      },
+      "IBAN": {
+        "f2": 0.3571428571428572,
+        "recall": 0.3076923076923077,
+        "precision": 1.0
+      },
+      "IP_Address": {
+        "f2": 1.0,
+        "recall": 1.0,
+        "precision": 1.0
+      },
+      "Location": {
+        "f2": 0.6319702602230483,
+        "recall": 0.6126126126126126,
+        "precision": 0.723404255319149
+      },
+      "Organization": {
+        "f2": 0.07246376811594203,
+        "recall": 0.058823529411764705,
+        "precision": 1.0
+      },
+      "Person": {
+        "f2": 0.769689737470167,
+        "recall": 0.7914110429447853,
+        "precision": 0.6935483870967742
+      },
+      "Phone": {
+        "f2": 0.7081545064377682,
+        "recall": 0.66,
+        "precision": 1.0
+      },
+      "SSN": {
+        "f2": 1.0,
+        "recall": 1.0,
+        "precision": 1.0
+      },
+      "UK_NHS": {
+        "f2": 0.0,
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "US_ITIN": {
+        "f2": 0.0,
+        "recall": 0.0,
+        "precision": 0.0
+      },
+      "Zip_Code": {
+        "f2": 0.0,
+        "recall": 0.0,
+        "precision": 0.0
+      }
+    }
+  }
+}

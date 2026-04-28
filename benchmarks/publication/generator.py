@@ -99,7 +99,7 @@ def generate_arxiv_markdown(
         "",
         "This report presents comprehensive benchmark results for Aelvyril, a privacy gateway "
         "for AI workflows. We evaluate PII detection accuracy across multiple datasets "
-        "(Presidio-Research, PII-Bench, TAB), compare against baseline systems (DataFog, ai4privacy), "
+        "(Presidio-Research, Nemotron-PII, TAB), compare against baseline systems (DataFog, ai4privacy), "
         "and measure adversarial robustness against character-level and contextual perturbations.",
         "",
         "## 1. Methodology",
@@ -112,9 +112,9 @@ def generate_arxiv_markdown(
         "",
         "### 1.2 Metrics",
         "",
-        "- **Secondary**: Strict-F1, Entity-F1, RougeL-F (for PII-Bench); R\\_direct, R\\_quasi (for TAB).",
+        "- **Secondary**: Strict-F1, Entity-F1, RougeL-F (for Nemotron-PII); R\\_direct, R\\_quasi (for TAB).",
         "missed PII is worse than over-redaction.",
-        "- **Secondary**: Strict-F1, Entity-F1, RougeL-F (for PII-Bench); R\\_direct, R\\_quasi (for TAB).",
+        "- **Secondary**: Strict-F1, Entity-F1, RougeL-F (for Nemotron-PII); R\\_direct, R\\_quasi (for TAB).",
         "",
         "### 1.3 Statistical Testing",
         "",
@@ -141,7 +141,7 @@ def generate_arxiv_markdown(
     # Phase 2 results
     if "pii_bench" in results:
         lines.extend([
-            "### 2.2 Phase 2: PII-Bench (Fudan)",
+            "### 2.2 Phase 2: Nemotron-PII (NVIDIA)",
             "",
         ])
         pb = results["pii_bench"].get("benchmarks", {}).get("pii_bench", {})
@@ -279,7 +279,7 @@ def generate_benchmark_results_md(
     if "pii_bench" in results:
         pb = results["pii_bench"].get("benchmarks", {}).get("pii_bench", {})
         lines.extend([
-            "### PII-Bench (Fudan)",
+            "### Nemotron-PII (NVIDIA)",
             "",
             f"- Strict-F1: {pb.get('strict_f1', 'N/A')}",
             f"- Entity-F1: {pb.get('entity_f1', 'N/A')}",
@@ -406,7 +406,7 @@ def generate_error_analysis_md(
         lines.append("")
 
     lines.extend([
-        "## 2. PII-Bench (Real-World)",
+        "## 2. Nemotron-PII (NVIDIA)",
         "",
     ])
     pb = results.get("pii_bench", {})
@@ -427,7 +427,7 @@ def generate_error_analysis_md(
                 lines.append(f"| {cat} | {strict_f1:.4f} | {entity_f1:.4f} | {mode} |")
             lines.append("")
     else:
-        lines.append("_No PII-Bench results available._")
+        lines.append("_No Nemotron-PII results available._")
         lines.append("")
 
     lines.extend([

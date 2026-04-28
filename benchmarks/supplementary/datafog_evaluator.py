@@ -47,32 +47,60 @@ from benchmarks.common.reporting import (
 from benchmarks.common.utils import set_seeds
 from benchmarks.presidio_research.aelvyril_evaluator import (
     AelvyrilEvaluator,
-    PRESIDIO_TO_AELVYRIL,
+    DISPLAY_NAMES,
+    AelvyrilEvaluator,
 )
 
 
 # ── DataFog entity type mapping ─────────────────────────────────────────────────
 
+# DataFog entity type → benchmark canonical namespace.
+# Same design principles as DATAFOG_TO_CANONICAL in benchmarks/datafog/evaluator.py.
+# Fine-grained NER types kept distinct; unknown types pass through unchanged.
+
 DATAFOG_ENTITY_MAP: Dict[str, str] = {
-    "PER": "PERSON",
-    "PERSON": "PERSON",
-    "LOC": "LOCATION",
-    "LOCATION": "LOCATION",
-    "ORG": "ORGANIZATION",
-    "ORGANIZATION": "ORGANIZATION",
+    # Core PII
     "EMAIL": "EMAIL_ADDRESS",
     "EMAIL_ADDRESS": "EMAIL_ADDRESS",
     "PHONE": "PHONE_NUMBER",
     "PHONE_NUMBER": "PHONE_NUMBER",
-    "DATE": "DATE_TIME",
-    "DATE_TIME": "DATE_TIME",
-    "ADDRESS": "LOCATION",
     "SSN": "US_SSN",
     "CREDIT_CARD": "CREDIT_CARD",
     "IP": "IP_ADDRESS",
     "IP_ADDRESS": "IP_ADDRESS",
     "IBAN": "IBAN_CODE",
     "IBAN_CODE": "IBAN_CODE",
+    "API_KEY": "API_KEY",
+    "CRYPTO": "API_KEY",
+    "US_ZIP_CODE": "US_ZIP_CODE",
+    "ZIP_CODE": "US_ZIP_CODE",
+    "URL": "URL",
+    # NER (fine-grained, no collapsing)
+    "PER": "PERSON",
+    "PERSON": "PERSON",
+    "LOC": "LOCATION",
+    "LOCATION": "LOCATION",
+    "CITY": "CITY",
+    "US_STATE": "US_STATE",
+    "STREET_ADDRESS": "STREET_ADDRESS",
+    "COUNTRY": "COUNTRY",
+    "ORG": "ORGANIZATION",
+    "ORGANIZATION": "ORGANIZATION",
+    "NRP": "ORGANIZATION",
+    # Other
+    "DATE": "DATE_TIME",
+    "DATE_TIME": "DATE_TIME",
+    "AGE": "AGE",
+    "TITLE": "TITLE",
+    "NATIONALITY": "NATIONALITY",
+    "MEDICAL_RECORD": "MEDICAL_RECORD",
+    "SWIFT_CODE": "SWIFT_CODE",
+    "US_BANK_NUMBER": "US_BANK_NUMBER",
+    "US_PASSPORT": "US_PASSPORT",
+    "US_DRIVER_LICENSE": "US_DRIVER_LICENSE",
+    # Deprecated aliases (pass through)
+    "ADDRESS": "STREET_ADDRESS",
+    # Unknown → keep as-is
 }
 
 
@@ -235,7 +263,12 @@ def generate_test_dataset(
     num_samples: int = 500,
     seed: int = 42,
 ) -> List[dict]:
-    """Generate a shared test dataset for head-to-head comparison.
+    """Generate a synthetic test dataset for head-to-head comparison.
+
+    **WARNING:** This data is entirely synthetic (Faker templates). It is NOT
+    an external benchmark — it compares two systems on the same synthetic
+    patterns. Results are useful for relative comparison only (System A vs
+    System B on the same templates), NOT for absolute accuracy claims.
 
     Uses Faker with fixed seed for reproducibility.
     """
@@ -313,7 +346,7 @@ def generate_test_dataset(
 
 
 def run_datafog_comparison(
-    service_url: str = "http://localhost:3000/analyze",
+    service_url: str | None = None,
     num_samples: int = 500,
     seed: int = 42,
     output_dir: str = "benchmarks/supplementary/results",
@@ -379,7 +412,7 @@ def run_datafog_comparison(
         datafog_detected = datafog.predict(text)
         datafog_pred = [
             SpanMatch(
-                entity_type=PRESIDIO_TO_AELVYRIL.get(d.entity_type, d.entity_type),
+                entity_type=d.entity_type,
                 start=d.start,
                 end=d.end,
                 score=d.score,
@@ -443,6 +476,7 @@ def run_datafog_comparison(
         "aelvyril_version": "dev",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "comparison": "aelvyril_vs_datafog",
+        "data_source": "synthetic (Faker templates — NOT an external benchmark)",
         "datafog_model": DataFogEvaluator.MODEL_NAME,
         "results": result.to_dict(),
         "config": {"num_samples": num_samples, "seed": seed},

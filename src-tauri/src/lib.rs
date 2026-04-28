@@ -4,6 +4,7 @@ pub mod clipboard;
 pub mod config;
 pub mod gateway;
 pub mod keychain;
+pub mod llama;
 pub mod lists;
 pub mod perf;
 pub mod pii;

@@ -42,30 +42,58 @@ class AI4PrivacySpan:
     score: float = 1.0
 
 
-# ai4privacy entity type -> canonical benchmark type
+# ai4privacy entity type -> benchmark canonical namespace.
+#
+# Design principles (matching NEMOTRON_ENTITY_MAP):
+#   1. One-to-one: each ai4privacy type maps to exactly one canonical type.
+#   2. No collapsing: CITY stays CITY, STREET_ADDRESS stays STREET_ADDRESS.
+#   3. Fine-grained NER types kept distinct — they match Presidio's output.
+#   4. Unknown types kept as-is so scoring shows "unrecognized" transparently.
+
 AI4P_TO_CANONICAL: Dict[str, str] = {
+    # Core PII
     "EMAIL": "EMAIL_ADDRESS",
     "PHONE": "PHONE_NUMBER",
+    "PHONE_NUMBER": "PHONE_NUMBER",
     "CREDIT_CARD": "CREDIT_CARD",
     "SSN": "US_SSN",
     "IP_ADDRESS": "IP_ADDRESS",
     "IBAN": "IBAN_CODE",
-    "PERSON": "PERSON",
-    "LOCATION": "LOCATION",
-    "ORG": "ORGANIZATION",
-    "ORGANIZATION": "ORGANIZATION",
-    "DATE": "DATE_TIME",
-    "URL": "DOMAIN_NAME",
-    "DOMAIN": "DOMAIN_NAME",
     "API_KEY": "API_KEY",
     "CRYPTO": "API_KEY",
+    "US_ZIP_CODE": "US_ZIP_CODE",
     "ZIP_CODE": "US_ZIP_CODE",
-    "ADDRESS": "LOCATION",
-    "PASSPORT": "API_KEY",
-    "DRIVER_LICENSE": "API_KEY",
-    "MEDICAL_RECORD": "API_KEY",
-    "TAX_ID": "API_KEY",
-    "NATIONAL_ID": "API_KEY",
+    "URL": "URL",
+    # NER types (fine-grained, no collapsing)
+    "PERSON": "PERSON",
+    "PER": "PERSON",
+    "LOCATION": "LOCATION",
+    "CITY": "CITY",
+    "US_STATE": "US_STATE",
+    "STREET_ADDRESS": "STREET_ADDRESS",
+    "COUNTRY": "COUNTRY",
+    "ORGANIZATION": "ORGANIZATION",
+    "ORG": "ORGANIZATION",
+    "NRP": "ORGANIZATION",
+    # Financial / government identifiers
+    "SWIFT_CODE": "SWIFT_CODE",
+    "SWIFT_BIC": "SWIFT_CODE",
+    "US_BANK_NUMBER": "US_BANK_NUMBER",
+    "BANK_ACCOUNT": "US_BANK_NUMBER",
+    "US_PASSPORT": "US_PASSPORT",
+    "PASSPORT": "US_PASSPORT",
+    "US_DRIVER_LICENSE": "US_DRIVER_LICENSE",
+    "DRIVER_LICENSE": "US_DRIVER_LICENSE",
+    "NATIONAL_ID": "US_SSN",
+    "TAX_ID": "US_SSN",
+    # Other / demographics
+    "DATE": "DATE_TIME",
+    "DATETIME": "DATE_TIME",
+    "AGE": "AGE",
+    "TITLE": "TITLE",
+    "NATIONALITY": "NATIONALITY",
+    "MEDICAL_RECORD": "MEDICAL_RECORD",
+    "MEDICAL_LICENSE": "MEDICAL_RECORD",
 }
 
 

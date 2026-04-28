@@ -10,7 +10,7 @@
 
 use axum::{
     extract::{Json, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{any, get, post},
     Router,
@@ -111,6 +111,56 @@ pub async fn start_server(
 
     Ok(())
 }
+
+/// Run the gateway HTTP server with a pre-built GatewayState.
+/// This is the headless/benchmark entrypoint.
+pub async fn run_gateway(
+    state: GatewayState,
+    host: String,
+    port: u16,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let host_ip: std::net::IpAddr = host
+        .parse()
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    let addr = std::net::SocketAddr::from((host_ip, port));
+    tracing::info!("🛡️  Aelvyril gateway listening on http://{}", addr);
+
+    let api_routes = Router::new()
+        .route("/v1/chat/completions", post(handle_chat_completions))
+        .route("/v1/{*path}", any(handle_passthrough))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            super::auth::rate_limit_middleware,
+        ));
+
+    let ws_routes = crate::bridge::ws_router();
+
+    let app = Router::new()
+        .merge(api_routes)
+        .merge(ws_routes)
+        .route(
+            "/health",
+            get(|| async { Json(serde_json::json!({"status": "ok"})) }),
+        )
+        .layer(
+            CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::OPTIONS,
+                ])
+                .allow_headers(tower_http::cors::Any),
+        )
+        .layer(TraceLayer::new_for_http())
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
 
 // ── Token Usage Recording ────────────────────────────────────────────────────
 
@@ -267,6 +317,64 @@ async fn handle_chat_completions(
 ) -> Response {
     let request_start = std::time::Instant::now();
 
+    // ── Benchmark Mode (raw detection) — checked FIRST ──────────────────────
+    // If X-Benchmark-Mode: raw-detections is present, skip auth and provider
+    // resolution entirely. The benchmark suite doesn't need an upstream LLM;
+    // it only needs PII detection results.
+    let is_benchmark = headers
+        .get("x-benchmark-mode")
+        .is_some_and(|h| h.to_str().ok() == Some("raw-detections"));
+
+    if is_benchmark {
+        // Still verify the gateway key for basic access control
+        let app_state_guard = gw.app_state.read().await;
+        if let Some(ref key) = app_state_guard.gateway_key {
+            let auth_ok = headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|a| a.strip_prefix("Bearer ") == Some(key.as_str()));
+            if !auth_ok {
+                drop(app_state_guard);
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({ "error": "Invalid gateway API key" })),
+                )
+                    .into_response();
+            }
+        }
+        drop(app_state_guard);
+
+        // Detect PII only (no upstream, no pseudonymization)
+        let mut latency = LatencyBuilder::new();
+        latency.auth_done();
+        let text_content = body::extract_text_from_body(&body);
+        let matches = super::pii_handler::detect_pii(&gw, &mut latency, &text_content).await;
+        latency.pii_done();
+
+        let session_id = derive_session_id(&headers);
+        let pii_spans: Vec<serde_json::Value> = matches
+            .iter()
+            .map(|m| serde_json::json!({
+                "entity_type": m.pii_type.to_string(),
+                "text": m.text.clone(),
+                "start": m.start,
+                "end": m.end,
+                "score": m.confidence,
+            }))
+            .collect();
+
+        let resp_body = serde_json::json!({
+            "pii_spans": pii_spans,
+            "pseudonymized_text": text_content,
+            "session_id": session_id,
+            "model": "benchmark-mode",
+        });
+
+        return (StatusCode::OK, Json(resp_body)).into_response();
+    }
+
+    // ── Normal request path ─────────────────────────────────────────────────
+
     // 1. Authenticate + resolve provider
     let app_state_guard = gw.app_state.read().await;
     let ctx = match super::auth::authenticate_and_resolve(&app_state_guard, &headers, &body).await {
@@ -295,6 +403,12 @@ async fn handle_chat_completions(
         &text_content,
         &matches,
     );
+
+    // Release the read lock early — we don't need it for the remaining pipeline
+    drop(app_state_guard);
+
+    // ── Normal streaming/non-streaming path (re-acquire read lock) ───────────
+    let app_state_guard = gw.app_state.read().await;
 
     // 4. Record the request in the session
     app_state_guard.session_manager.record_request(

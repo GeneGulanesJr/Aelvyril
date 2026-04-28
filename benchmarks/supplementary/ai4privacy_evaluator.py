@@ -45,69 +45,75 @@ from benchmarks.common.reporting import (
 from benchmarks.common.utils import set_seeds
 from benchmarks.presidio_research.aelvyril_evaluator import (
     AelvyrilEvaluator,
-    PRESIDIO_TO_AELVYRIL,
+    DISPLAY_NAMES,
+    AelvyrilEvaluator,
 )
 
 
 # ── ai4privacy entity type mapping ──────────────────────────────────────────────
 
 AI4PRIVACY_ENTITY_MAP: Dict[str, str] = {
-    # Names
+    # ── Names ─────────────────────────────────────────────────────────────
     "FIRSTNAME": "PERSON",
     "LASTNAME": "PERSON",
     "MIDDLENAME": "PERSON",
     "NAME": "PERSON",
-    # Contact
+    "PER": "PERSON",
+    # ── Contact ───────────────────────────────────────────────────────────
     "EMAIL": "EMAIL_ADDRESS",
     "EMAILADDRESS": "EMAIL_ADDRESS",
     "PHONENUMBER": "PHONE_NUMBER",
     "TELEPHONENUMBER": "PHONE_NUMBER",
     "TELEPHONENUM": "PHONE_NUMBER",
     "MOBILEPHONENUMBER": "PHONE_NUMBER",
-    # ID numbers
+    # ── Government / ID numbers ───────────────────────────────────────────
     "SOCIALNUM": "US_SSN",
     "SSN": "US_SSN",
     "NATIONALID": "US_SSN",
-    "PASSPORTNUM": "US_SSN",
-    "DRIVERLICENSENUM": "US_SSN",
+    "PASSPORTNUM": "US_PASSPORT",
+    "DRIVERLICENSENUM": "US_DRIVER_LICENSE",
     "TAXNUM": "US_SSN",
-    # Financial
+    # ── Financial ─────────────────────────────────────────────────────────
     "CREDITCARDNUMBER": "CREDIT_CARD",
     "CREDITCARD": "CREDIT_CARD",
     "IBAN": "IBAN_CODE",
-    "BANKACCOUNTNUM": "IBAN_CODE",
-    "SWIFTCODE": "IBAN_CODE",
-    # Location
-    "CITY": "LOCATION",
-    "STATE": "LOCATION",
+    "BANKACCOUNTNUM": "US_BANK_NUMBER",
+    "SWIFTCODE": "SWIFT_CODE",
+    # ── Location (fine-grained, no collapsing) ───────────────────────────
+    "CITY": "CITY",
+    "US_STATE": "US_STATE",
+    "STATE": "US_STATE",
+    "STREET_ADDRESS": "STREET_ADDRESS",
+    "STREET": "STREET_ADDRESS",
+    "ADDRESS": "STREET_ADDRESS",
     "COUNTY": "LOCATION",
-    "COUNTRY": "LOCATION",
-    "STREET": "LOCATION",
-    "ADDRESS": "LOCATION",
+    "COUNTRY": "COUNTRY",
     "ZIPCODE": "US_ZIP_CODE",
     "POSTALCODE": "US_ZIP_CODE",
-    # Digital
+    # ── Digital / credentials ──────────────────────────────────────────────
     "IPADDRESS": "IP_ADDRESS",
     "IP": "IP_ADDRESS",
-    "URL": "Domain",
-    "DOMAIN": "Domain",
+    "URL": "URL",
+    "DOMAIN": "URL",
     "USERNAME": "PERSON",
-    "PASSWORD": "API_Key",
-    "APIKEY": "API_Key",
-    # Time
+    "PASSWORD": "API_KEY",       # credentials → API_KEY, not "API_Key"
+    "APIKEY": "API_KEY",         # must match uppercase benchmark namespace
+    # ── Time / demographics ───────────────────────────────────────────────
     "DATEOFBIRTH": "DATE_TIME",
     "DATE": "DATE_TIME",
     "TIME": "DATE_TIME",
     "DATETIME": "DATE_TIME",
-    "AGE": "DATE_TIME",
-    # Other
+    "AGE": "AGE",               # not DATE_TIME — AGE is a distinct type
+    "OCCUPATION": "TITLE",      # job title ≠ organization
+    "JOBTITLE": "TITLE",
+    "GENDER": "NRP",
+    "NATIONALITY": "NATIONALITY", # not LOCATION — nationality ≠ location
+    # ── Organizations ────────────────────────────────────────────────────
     "COMPANYNAME": "ORGANIZATION",
     "COMPANY": "ORGANIZATION",
     "ORGANIZATION": "ORGANIZATION",
-    "OCCUPATION": "ORGANIZATION",
-    "JOBTITLE": "ORGANIZATION",
-    "GENDER": "Person",
-    "NATIONALITY": "Location",
+    "ORG": "ORGANIZATION",
+    "NRP": "ORGANIZATION",
 }
 
 
@@ -220,103 +226,24 @@ def load_ai4privacy_subset(
             return samples
 
     except ImportError:
-        print("[WARN] HuggingFace datasets not installed — generating synthetic subset")
+        pass  # Will be caught by the empty-samples check below
     except Exception as e:
-        print(f"[WARN] Could not load ai4privacy dataset: {e} — generating synthetic subset")
+        print(f"[WARN] Could not load ai4privacy dataset: {e}")
 
-    # Fallback: generate synthetic data in ai4privacy format
-    return _generate_synthetic_ai4privacy(num_samples, seed, data_dir)
-
-
-def _generate_synthetic_ai4privacy(
-    num_samples: int,
-    seed: int,
-    data_dir: str,
-) -> List[dict]:
-    """Generate synthetic data matching ai4privacy format for pipeline validation."""
-    import random
-    from faker import Faker
-
-    Faker.seed(seed)
-    fake = Faker("en_US")
-    random.seed(seed)
-
-    templates = [
-        ("My name is {name}, email: {email}, phone: {phone}.", [
-            ("{name}", "PERSON"), ("{email}", "EMAIL_ADDRESS"), ("{phone}", "PHONE_NUMBER"),
-        ]),
-        ("Patient {name}, DOB: {dob}, SSN: {ssn}, at {city} General Hospital.", [
-            ("{name}", "PERSON"), ("{dob}", "DATE_TIME"), ("{ssn}", "US_SSN"), ("{city}", "LOCATION"),
-        ]),
-        ("Card {card} for {name}, billing address: {address}, {city} {zip}.", [
-            ("{card}", "CREDIT_CARD"), ("{name}", "PERSON"), ("{address}", "LOCATION"),
-            ("{city}", "LOCATION"), ("{zip}", "US_ZIP_CODE"),
-        ]),
-        ("Server {ip} — admin {name} ({email}) from {org}.", [
-            ("{ip}", "IP_ADDRESS"), ("{name}", "PERSON"), ("{email}", "EMAIL_ADDRESS"),
-            ("{org}", "ORGANIZATION"),
-        ]),
-        ("Transfer {amount} to IBAN {iban} — beneficiary: {name}, {city}.", [
-            ("{iban}", "IBAN_CODE"), ("{name}", "PERSON"), ("{city}", "LOCATION"),
-        ]),
-    ]
-
-    samples: List[dict] = []
-    for i in range(num_samples):
-        tmpl, entities = random.choice(templates)
-
-        name = fake.name()
-        email = fake.email()
-        phone = fake.phone_number()
-        dob = fake.date()
-        ssn = fake.ssn()
-        city = fake.city()
-        card = fake.credit_card_number()
-        address = fake.street_address()
-        zip_code = fake.zipcode()
-        ip = fake.ipv4_public()
-        org = fake.company()
-        iban = f"GB{random.randint(10, 99)}{''.join([str(random.randint(0, 9)) for _ in range(22)])}"
-        amount = f"${random.randint(100, 50000):,}"
-
-        values = {
-            "{name}": name, "{email}": email, "{phone}": phone,
-            "{dob}": dob, "{ssn}": ssn, "{city}": city, "{card}": card,
-            "{address}": address, "{zip}": zip_code, "{ip}": ip,
-            "{org}": org, "{iban}": iban, "{amount}": amount,
-        }
-
-        text = tmpl
-        spans: List[dict] = []
-
-        for placeholder, entity_type in entities:
-            value = values.get(placeholder, "")
-            idx = text.find(placeholder)
-            text = text.replace(placeholder, value, 1)
-            if idx >= 0:
-                # Recompute after replacement
-                actual_idx = text.find(value)
-                if actual_idx >= 0:
-                    spans.append({
-                        "entity_type": entity_type,
-                        "start": actual_idx,
-                        "end": actual_idx + len(value),
-                        "text": value,
-                    })
-
-        samples.append({"text": text, "spans": spans})
-
-    # Cache
-    cache_path = os.path.join(data_dir, f"subset_en_{num_samples}.json")
-    with open(cache_path, "w") as f:
-        json.dump(samples, f, indent=2)
-
-    print(f"[OK] Generated {len(samples)} synthetic ai4privacy samples → {cache_path}")
+    # No synthetic fallback — if we don't have real data, fail explicitly
+    if not samples:
+        raise RuntimeError(
+            "ai4privacy dataset is not available. Install the HuggingFace datasets "
+            "library and ensure access, or provide data manually.\n"
+            "  pip install datasets\n"
+            "  huggingface-cli login\n"
+            "Or place data files in the cache directory."
+        )
     return samples
 
 
 def run_ai4privacy_evaluation(
-    service_url: str = "http://localhost:3000/analyze",
+    service_url: str | None = None,
     num_samples: int = 2000,
     language: str = "en",
     seed: int = 42,

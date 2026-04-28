@@ -39,8 +39,7 @@ from benchmarks.common.reporting import generate_run_manifest
 from benchmarks.common.utils import set_seeds
 from benchmarks.presidio_research.aelvyril_evaluator import (
     AelvyrilEvaluator,
-    AELVYRIL_TO_PRESIDIO,
-    PRESIDIO_TO_AELVYRIL,
+    DISPLAY_NAMES,
 )
 from benchmarks.tab.downloader import (
     download_tab,
@@ -385,7 +384,7 @@ def aggregate_tab_metrics(metrics_list: List[TabMetrics]) -> TabMetrics:
 
 
 def run_tab_evaluation(
-    service_url: str = "http://localhost:3000/analyze",
+    service_url: str | None = None,
     splits: Optional[List[str]] = None,
     max_documents: Optional[int] = None,
     iou_threshold: float = 0.5,
@@ -437,7 +436,7 @@ def run_tab_evaluation(
         # Convert to TabSpan objects
         pred_spans = [
             TabSpan(
-                entity_type=AELVYRIL_TO_PRESIDIO.get(d.entity_type, d.entity_type),
+                entity_type=d.entity_type,
                 start=d.start,
                 end=d.end,
                 text=d.text,
@@ -469,6 +468,11 @@ def run_tab_evaluation(
     # Step 4: Aggregate metrics
     aggregated = aggregate_tab_metrics(all_metrics)
 
+    # Collect per-document metric arrays for bootstrap CI
+    per_sample_recall_direct = [m.recall_direct for m in all_metrics]
+    per_sample_recall_quasi = [m.recall_quasi for m in all_metrics]
+    per_sample_weighted_f1 = [m.weighted_f1 for m in all_metrics]
+
     # Step 5: Health check
     if not evaluator.is_healthy():
         print(f"[ERROR] Evaluator failure rate: {evaluator.failure_rate:.2%}")
@@ -480,6 +484,11 @@ def run_tab_evaluation(
         "aelvyril_version": "dev",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "tab_evaluation": aggregated.to_dict(),
+        "per_sample": {
+            "recall_direct": per_sample_recall_direct,
+            "recall_quasi": per_sample_recall_quasi,
+            "weighted_f1": per_sample_weighted_f1,
+        },
         "config": {
             "iou_threshold": iou_threshold,
             "splits": splits,

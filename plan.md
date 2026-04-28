@@ -173,13 +173,15 @@
 - The only hard part to port is spaCy NER for contextual understanding — but the heuristic classifier already handles that semantic pass.
 - Result: zero external dependencies, fully native, fast.
 
-### 2. LFM2.5-350M Runtime → ONNX Runtime via `ort` Crate
-**Decision**: Use `LiquidAI/LFM2.5-350M-ONNX` from HuggingFace with the `ort` Rust crate.
+### 2. LFM2.5-350M Runtime → llama.cpp + GGUF Quantization
+
+**Decision**: Use `LiquidAI/LFM2.5-350M` quantized to GGUF Q4_K_M via `llama.cpp` with a Python helper for chat templating.
+
 **Rationale**:
-- Official Liquid AI ONNX export available with multiple quantization levels.
-- `q4f16` variant at ~255 MB offers the best size-to-quality ratio for CPU-only inference.
-- `ort` crate (v2.0, 8.3M downloads) is the most mature Rust ONNX Runtime wrapper, supporting all three platforms.
-- ONNX Runtime is optimized for CPU (SIMD: AVX2/NEON) with consistent performance across macOS/Windows/Linux.
+- LFM2.5-350M uses a custom Jinja chat template (not ChatML). The `tokenizers` library's `apply_chat_template()` handles this correctly.
+- `llama.cpp` + GGUF provides CPU-only inference with strong cross-platform support and no GPU driver dependencies.
+- Python helper (`prompt_helper.py`) applies the HF tokenizer's template at runtime; Rust calls it synchronously with a ChatML fallback if the helper fails or env var `SYSTEM_PROMPT` is missing.
+- Model stored locally; no external ONNX export dependency.
 
 ### 3. Browser Extension Communication → Local WebSocket Bridge
 **Decision**: Run a WebSocket server on the Tauri app; the extension connects to `ws://localhost:<port>`.

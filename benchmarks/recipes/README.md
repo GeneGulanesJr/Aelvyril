@@ -89,7 +89,7 @@ Key design decisions:
 | Suite | Description | Dataset |
 |-------|-------------|---------|
 | Phase 1 (Presidio-Research) | F₂ vs vanilla Presidio | Synthetic (stdlib-only generator) |
-| Phase 2 (PII-Bench) | Strict-F1 vs GPT-4o/DeepSeek | Synthetic fallback (official dataset 404) |
+| Phase 2 (Nemotron-PII) | Strict-F1 vs GPT-4o/DeepSeek | Real dataset from HuggingFace (CC BY 4.0) |
 | Phase 2 (TAB) | Anonymization quality (R_direct, R_quasi) | 127 ECHR court cases |
 | Phase 3 (Adversarial) | Robustness against obfuscation | Synthetic adversarial samples |
 | Phase 3 (DataFog) | Head-to-head vs open-source PII-NER | Synthetic |

@@ -99,6 +99,8 @@ SUPPORTED_ENTITIES: List[str] = [
     "IP_ADDRESS",
     "CREDIT_CARD",
     "IBAN_CODE",
+    "US_ZIP_CODE",
+    "DOMAIN_NAME",
     "US_BANK_NUMBER",
     "US_PASSPORT",
     "UK_NHS",
@@ -121,36 +123,49 @@ def get_analyzer() -> Tuple[Optional[object], Optional[str]]:
     Uses the default AnalyzerEngine to get all built-in recognizers (Spacy for
     PERSON/LOCATION/DATE_TIME, Email, IP, etc.), then injects our custom
     recognizers into both the registry and the engine's active _recognizers list.
+    
+    Mode control:
+      AELVYRIL_MODE=vanilla  — vanilla Presidio only (skip custom recognizers)
+      AELVYRIL_MODE=enhanced — full Aelvyril pipeline with custom recognizers (default)
     """
     global _analyzer, _analyzer_error
 
     if _analyzer is not None or _analyzer_error is not None:
         return _analyzer, _analyzer_error
 
+    # Determine mode
+    mode = os.environ.get("AELVYRIL_MODE", "enhanced").lower()
+    enable_custom = mode != "vanilla"
+    logger.info(f"Aelvyril mode: {mode} (custom recognizers {'enabled' if enable_custom else 'disabled'})")
+
     try:
         from presidio_analyzer import AnalyzerEngine
 
         _analyzer = AnalyzerEngine()
         # Inject custom recognizers after engine is fully initialised
-        _register_custom_recognizers(_analyzer)
-        logger.info("Custom recognizers injected – proceeding to NLP config tweak")
-        logger.info(f"NLP engine type: {type(_analyzer.nlp_engine).__name__}")
-        if hasattr(_analyzer.nlp_engine, 'ner_model_configuration'):
-            cfg = _analyzer.nlp_engine.ner_model_configuration
-            logger.info(f"NLP config labels_to_ignore BEFORE: {cfg.labels_to_ignore}")
-            # Only modify if ORGANIZATION is in the ignore list
-            if 'ORGANIZATION' in cfg.labels_to_ignore:
-                cfg.labels_to_ignore = [lbl for lbl in cfg.labels_to_ignore if lbl != 'ORGANIZATION']
-                logger.info(f"Removed ORGANIZATION from ner_model_configuration.labels_to_ignore. Now: {cfg.labels_to_ignore}")
-            else:
-                logger.info("ORGANIZATION not in labels_to_ignore; no change needed")
+        if enable_custom:
+            _register_custom_recognizers(_analyzer)
+            logger.info("Custom recognizers injected – proceeding to NLP config tweak")
         else:
-            logger.warning("NLP engine has no ner_model_configuration attribute")
-        # Remove default SpacyRecognizer to prevent duplicate ORGANIZATION predictions
-        # Downgrade SpacyRecognizer: drop ORGANIZATION to avoid duplicate with CustomSpacyOrganizationRecognizer
-        for _r in getattr(_analyzer.registry, "recognizers", []):
-            if getattr(_r, "name", None) == "SpacyRecognizer":
-                _r.supported_entities = [e for e in getattr(_r, "supported_entities", []) if e != "ORGANIZATION"]
+            logger.info("Vanilla mode — skipping custom recognizers")
+        logger.info(f"NLP engine type: {type(_analyzer.nlp_engine).__name__}")
+        if enable_custom:
+            if hasattr(_analyzer.nlp_engine, 'ner_model_configuration'):
+                cfg = _analyzer.nlp_engine.ner_model_configuration
+                logger.info(f"NLP config labels_to_ignore BEFORE: {cfg.labels_to_ignore}")
+                # Only modify if ORGANIZATION is in the ignore list
+                if 'ORGANIZATION' in cfg.labels_to_ignore:
+                    cfg.labels_to_ignore = [lbl for lbl in cfg.labels_to_ignore if lbl != 'ORGANIZATION']
+                    logger.info(f"Removed ORGANIZATION from ner_model_configuration.labels_to_ignore. Now: {cfg.labels_to_ignore}")
+                else:
+                    logger.info("ORGANIZATION not in labels_to_ignore; no change needed")
+            else:
+                logger.warning("NLP engine has no ner_model_configuration attribute")
+            # Remove default SpacyRecognizer to prevent duplicate ORGANIZATION predictions
+            # Downgrade SpacyRecognizer: drop ORGANIZATION to avoid duplicate with CustomSpacyOrganizationRecognizer
+            for _r in getattr(_analyzer.registry, "recognizers", []):
+                if getattr(_r, "name", None) == "SpacyRecognizer":
+                    _r.supported_entities = [e for e in getattr(_r, "supported_entities", []) if e != "ORGANIZATION"]
         # DEBUG: log recognizers and their supported entities
         for _r in _analyzer.registry.recognizers:
             logger.info(f"Recognizer: {_r.name}, supported: {getattr(_r, 'supported_entities', None)}")
@@ -507,6 +522,30 @@ def _register_custom_recognizers(analyzer) -> None:
     logger.info("Registered CustomSpacyOrganizationRecognizer")
 
 
+# ── PyO3 / Direct Call Entry Point ──────────────────────────────────────────────
+def analyze(
+    text: str,
+    language: str = "en",
+    entities: list[str] | None = None,
+    score_threshold: float = 0.5,
+) -> list[dict]:
+    """
+    Direct callable entry point for embedding consumers (PyO3).
+
+    Mirrors Flask /analyze endpoint but returns raw Python objects.
+    """
+    analyzer = get_analyzer()
+    if analyzer is None:
+        raise RuntimeError("Presidio analyzer failed to initialise")
+
+    results = analyzer.analyze(
+        text=text,
+        language=language,
+        entities=entities,
+        score_threshold=score_threshold,
+    )
+    # Convert RecognizerResult objects to plain dicts
+    return [r.to_dict() for r in results]
 
 
 if __name__ == "__main__":

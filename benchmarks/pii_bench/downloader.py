@@ -1,101 +1,184 @@
 """
-PII-Bench dataset downloader and loader.
+NVIDIA Nemotron-PII dataset downloader and loader.
 
-Downloads the PII-Bench dataset from the official GitHub release,
-validates integrity, and provides a unified loading interface.
+Downloads the Nemotron-PII test split from HuggingFace, validates integrity,
+and provides a unified loading interface.
 
-PII-Bench comprises 2,842 test samples across 7 PII types with 55
-fine-grained subcategories, featuring:
-    - PII-single: Single-subject descriptions
-    - PII-multi: Complex multi-party interactions
-    - PII-hard: Challenging obfuscated PII
-    - PII-distract: Distractor-heavy samples
+Nemotron-PII contains 50,000 test samples with span-level annotations for
+55 PII/PHI entity types, generated with NVIDIA NeMo Data Designer using
+synthetic personas grounded in U.S. Census data.
 
-Paper: https://arxiv.org/abs/2502.18545
+Source: https://huggingface.co/datasets/nvidia/Nemotron-PII
+License: CC BY 4.0
+Paper: NVIDIA NeMo Data Designer (2025)
 
 Dataset format (per sample):
     {
-        "id": str,
-        "user_query": str,
-        "context_description": str,    # The text containing PII
-        "standard_answer": [           # Ground-truth PII annotations
+        "uid": str,                        # UUID
+        "domain": str,                     # Industry domain
+        "document_type": str,              # e.g., "visa application", "invoice"
+        "document_description": str,       # Description of the document
+        "document_format": str,            # "structured" | "unstructured"
+        "locale": str,                     # "us" | "intl"
+        "text": str,                       # The full text containing PII
+        "spans": [                         # Ground-truth PII annotations
             {
-                "pii_type": str,       # e.g., "person_name", "phone_number"
-                "pii_value": str,      # The PII text
-                "start": int,          # Character offset start
-                "end": int             # Character offset end
+                "start": int,             # Character offset start
+                "end": int,               # Character offset end
+                "text": str,              # The PII text
+                "label": str              # e.g., "first_name", "ssn"
             }
         ],
-        "pii_category": str,           # Fine-grained category
-        "split": str                   # "single" | "multi" | "hard" | "distract"
+        "text_tagged": str                 # Inline tagged version
     }
 """
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
 import urllib.request
-import zipfile
 from typing import Dict, List, Optional
 
-# PII-Bench dataset source
-PII_BENCH_REPO = "https://raw.githubusercontent.com/THU-MIG/PII-Bench/main"
-PII_BENCH_RELEASE_URL = (
-    "https://github.com/THU-MIG/PII-Bench/releases/download/v1.0/pii_bench_dataset.zip"
+# Nemotron-PII dataset source (HuggingFace)
+NEMOTRON_PII_URL = (
+    "https://huggingface.co/datasets/nvidia/Nemotron-PII/"
+    "resolve/main/data/test-00000-of-00001.parquet"
 )
 
-# Alternative: direct JSON from repo
-PII_BENCH_DATA_FILES = {
-    "pii_single": f"{PII_BENCH_REPO}/data/pii_single.json",
-    "pii_multi": f"{PII_BENCH_REPO}/data/pii_multi.json",
-    "pii_hard": f"{PII_BENCH_REPO}/data/pii_hard.json",
-    "pii_distract": f"{PII_BENCH_REPO}/data/pii_distract.json",
-}
+# Known SHA256 of the test parquet (for integrity verification)
+NEMOTRON_PII_TEST_SHA256 = None  # Populated on first verified download
 
-# Known SHA256 of the dataset (for integrity verification)
-# Will be populated after first verified download
-DATASET_SHA256: Optional[str] = None
+# Nemotron-PII entity label → Presidio entity type mapping
+#
+# Design principles:
+#   1. One-to-one: each Nemotron label maps to exactly one Presidio type.
+#   2. No collapsing: CITY stays CITY, STREET_ADDRESS stays STREET_ADDRESS.
+#      Different concepts are never merged into the same bucket.
+#   3. Presidio namespace: all types are Presidio entity types, which is
+#      what the Aelvyril gateway outputs. Both sides of the comparison
+#      use the same namespace for direct string matching.
+#   4. Best-effort: some Nemotron types have no exact Presidio equivalent.
+#      These are mapped to the closest standard type with a comment.
+#
+# For display names (reports), use DISPLAY_NAMES in aelvyril_evaluator.py.
 
-# PII-Bench entity type to Aelvyril/Presidio entity type mapping
-PII_BENCH_ENTITY_MAP: Dict[str, str] = {
-    "person_name": "PERSON",
-    "phone_number": "PHONE_NUMBER",
-    "email_address": "EMAIL_ADDRESS",
-    "id_card_number": "US_SSN",  # Closest analogue; context-dependent
-    "bank_account_number": "IBAN_CODE",  # Closest analogue
-    "location": "LOCATION",
-    "date_time": "DATE_TIME",
-    # Fine-grained subcategories
-    "name": "PERSON",
-    "phone": "PHONE_NUMBER",
+NEMOTRON_ENTITY_MAP: Dict[str, str] = {
+    # ── Person identifiers ────────────────────────────────────────────────
+    "first_name": "PERSON",
+    "last_name": "PERSON",
+    "user_name": "PERSON",
+
+    # ── Contact info ──────────────────────────────────────────────────────
     "email": "EMAIL_ADDRESS",
-    "id_number": "US_SSN",
-    "bank_account": "IBAN_CODE",
-    "address": "LOCATION",
-    "date": "DATE_TIME",
-    "time": "DATE_TIME",
-    "credit_card": "CREDIT_CARD",
+    "phone_number": "PHONE_NUMBER",
+    "fax_number": "PHONE_NUMBER",
+
+    # ── Government/legal IDs ──────────────────────────────────────────────
     "ssn": "US_SSN",
-    "passport": "US_SSN",
-    "ip_address": "IP_ADDRESS",
+    "national_id": "US_SSN",              # best-effort: country-agnostic → US_SSN
+    "passport_number": "US_PASSPORT",     # not a standard Presidio type but granular
+    "license_plate": "US_DRIVER_LICENSE",
+    "certificate_license_number": "US_DRIVER_LICENSE",
+    "tax_id": "US_SSN",                  # best-effort
+
+    # ── Financial ─────────────────────────────────────────────────────────
+    "credit_debit_card": "CREDIT_CARD",
+    "cvv": "CREDIT_CARD",                # CVV is a card sub-field
+    "bank_routing_number": "US_BANK_NUMBER",
+    "account_number": "US_BANK_NUMBER",
+    "swift_bic": "SWIFT_CODE",
+    "pin": "US_BANK_NUMBER",
+
+    # ── Location (fine-grained — no collapsing) ───────────────────────────
+    "street_address": "STREET_ADDRESS",
+    "city": "CITY",
+    "state": "US_STATE",
+    "country": "COUNTRY",                # not standard Presidio but semantically distinct
+    "county": "LOCATION",                # no specific Presidio type
+    "postcode": "US_ZIP_CODE",
+    "coordinate": "LOCATION",             # GPS coordinates
+
+    # ── Medical/health ────────────────────────────────────────────────────
+    "medical_record_number": "MEDICAL_RECORD",
+    "health_plan_beneficiary_number": "MEDICAL_RECORD",
+    "blood_type": "MEDICAL_RECORD",
+    "biometric_identifier": "MEDICAL_RECORD",
+
+    # ── Dates/times ───────────────────────────────────────────────────────
+    "date": "DATE_TIME",
+    "date_of_birth": "DATE_TIME",
+    "date_time": "DATE_TIME",
+    "time": "DATE_TIME",
+    "age": "AGE",
+
+    # ── Digital/technical ─────────────────────────────────────────────────
+    "ipv4": "IP_ADDRESS",
+    "ipv6": "IP_ADDRESS",
+    "url": "URL",
+    "domain": "URL",               # matches PiiType::Domain → Display("URL")
+    "mac_address": "IP_ADDRESS",          # best-effort: network identifier
+    "api_key": "API_KEY",
+    "http_cookie": "API_KEY",             # best-effort: credential-like
+    "password": "API_KEY",                # best-effort: credential-like
+    "device_identifier": "ID",
+    "unique_id": "ID",
+    "customer_id": "ID",
+    "employee_id": "ID",
+
+    # ── Organization ──────────────────────────────────────────────────────
+    "company_name": "ORGANIZATION",
+
+    # ── Demographics ──────────────────────────────────────────────────────
+    "gender": "NRP",
+    "race_ethnicity": "NRP",
+    "religious_belief": "NRP",
+    "political_view": "NRP",
+    "sexuality": "NRP",
+    "occupation": "TITLE",
+    "education_level": "TITLE",
+    "employment_status": "TITLE",
+    "language": "NATIONALITY",
+
+    # ── Other ─────────────────────────────────────────────────────────────
+    "vehicle_identifier": "ID",
 }
 
+# Labels that have no meaningful Presidio/Aelvyril equivalent and are
+# excluded from evaluation.
+#
+# NRP (Not Relevant PII): demographic attributes that are not personally
+# identifying information — gender, race, religion, politics, sexuality.
+# These are semantic attributes about a person, not PII that needs
+# redaction. Including them as gold ORGANIZATION (the old bug) inflated
+# that entity’s totals by 33k spans (3.9% of Nemotron gold).
+NON_PII_DEMOGRAPHIC_LABELS: set = {
+    "gender",
+    "race_ethnicity",
+    "religious_belief",
+    "political_view",
+    "sexuality",
+}
 
-def get_data_dir(output_dir: str = "benchmarks/data/pii-bench") -> str:
-    """Get or create the data directory for PII-Bench."""
+EXCLUDED_LABELS: set = NON_PII_DEMOGRAPHIC_LABELS | set()
+
+
+def get_data_dir(output_dir: str = "benchmarks/data/nemotron-pii") -> str:
+    """Get or create the data directory for Nemotron-PII."""
     os.makedirs(output_dir, exist_ok=True)
     return output_dir
 
 
-def download_pii_bench(
-    output_dir: str = "benchmarks/data/pii-bench",
+def download_nemotron_pii(
+    output_dir: str = "benchmarks/data/nemotron-pii",
     force: bool = False,
 ) -> str:
-    """Download PII-Bench dataset.
+    """Download Nemotron-PII test split from HuggingFace.
 
-    Attempts GitHub release ZIP first, falls back to individual JSON files.
+    Downloads the test parquet file (50,000 samples). Conversion to JSON
+    happens at load time to keep the download small and verifiable.
 
     Args:
         output_dir: Directory to store downloaded data.
@@ -103,173 +186,202 @@ def download_pii_bench(
 
     Returns:
         Path to the data directory.
+
+    Raises:
+        RuntimeError: If download fails.
     """
     data_dir = get_data_dir(output_dir)
     manifest_path = os.path.join(data_dir, "download_manifest.json")
+    parquet_path = os.path.join(data_dir, "test.parquet")
 
     # Check if already downloaded
     if not force and os.path.exists(manifest_path):
         with open(manifest_path) as f:
             manifest = json.load(f)
-        if manifest.get("status") == "complete":
-            print(f"[OK] PII-Bench dataset already downloaded at {data_dir}")
+        if manifest.get("status") == "complete" and os.path.exists(parquet_path):
+            print(f"[OK] Nemotron-PII dataset already downloaded at {data_dir}")
             return data_dir
 
-    print(f"[INFO] Downloading PII-Bench dataset to {data_dir}...")
+    print(f"[INFO] Downloading Nemotron-PII test split to {data_dir}...")
 
-    # Strategy 1: Try individual JSON files from repo
-    downloaded_files: List[str] = []
-    all_samples: List[dict] = []
+    try:
+        urllib.request.urlretrieve(NEMOTRON_PII_URL, parquet_path)
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to download Nemotron-PII dataset: {e}\n\n"
+            f"Manual fallback:\n"
+            f"  1. Download {NEMOTRON_PII_URL}\n"
+            f"  2. Place the file at {parquet_path}\n"
+            f"  3. Re-run the benchmark."
+        ) from e
 
-    for split_name, url in PII_BENCH_DATA_FILES.items():
-        target = os.path.join(data_dir, f"{split_name}.json")
-        try:
-            print(f"  Downloading {split_name}...")
-            urllib.request.urlretrieve(url, target)
-            downloaded_files.append(target)
+    # Verify download is valid parquet
+    try:
+        import pyarrow.parquet as pq
+        table = pq.read_table(parquet_path)
+        num_rows = table.num_rows
+    except Exception as e:
+        # Remove corrupt file
+        if os.path.exists(parquet_path):
+            os.remove(parquet_path)
+        raise RuntimeError(
+            f"Downloaded file is not valid Parquet: {e}"
+        ) from e
 
-            # Load and tag with split name
-            with open(target) as f:
-                data = json.load(f)
-            for sample in data:
-                sample["_split"] = split_name
-            all_samples.extend(data)
-            print(f"    → {len(data)} samples")
+    # Compute SHA256
+    sha256 = _compute_file_hash(parquet_path)
 
-        except Exception as e:
-            print(f"  [WARN] Failed to download {split_name}: {e}")
-            # Generate placeholder if download fails
-            continue
-
-    if not all_samples:
-        # Strategy 2: Generate synthetic PII-Bench-compatible data for testing
-        print("[WARN] Could not download PII-Bench dataset. Generating synthetic test data...")
-        all_samples = _generate_synthetic_pii_bench()
-        synthetic_path = os.path.join(data_dir, "synthetic_pii_bench.json")
-        with open(synthetic_path, "w") as f:
-            json.dump(all_samples, f, indent=2, ensure_ascii=False)
-        downloaded_files.append(synthetic_path)
-        print(f"    → {len(all_samples)} synthetic samples")
-
-    # Combine all into a unified file
-    combined_path = os.path.join(data_dir, "pii_bench_combined.json")
-    with open(combined_path, "w") as f:
-        json.dump(all_samples, f, indent=2, ensure_ascii=False)
-
-    # Compute SHA256 of combined file
-    sha256 = _compute_file_hash(combined_path)
-
-    # Write download manifest
+    # Write manifest
     manifest = {
         "status": "complete",
-        "total_samples": len(all_samples),
-        "files": [os.path.basename(f) for f in downloaded_files],
-        "combined_file": "pii_bench_combined.json",
+        "source": "NVIDIA Nemotron-PII (HuggingFace, CC BY 4.0)",
+        "url": NEMOTRON_PII_URL,
+        "total_samples": num_rows,
+        "parquet_file": "test.parquet",
         "sha256": sha256,
-        "source": "PII-Bench (arxiv:2502.18545)",
+        "data_source": "real",
     }
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
-    print(f"[OK] PII-Bench dataset ready: {len(all_samples)} samples in {data_dir}")
+    print(f"[OK] Nemotron-PII test split ready: {num_rows:,} samples in {data_dir}")
     return data_dir
 
 
-def load_pii_bench(
-    data_dir: str = "benchmarks/data/pii-bench",
+def load_nemotron_pii(
+    data_dir: str = "benchmarks/data/nemotron-pii",
     splits: Optional[List[str]] = None,
+    max_samples: Optional[int] = None,
+    domains: Optional[List[str]] = None,
+    document_formats: Optional[List[str]] = None,
 ) -> List[dict]:
-    """Load PII-Bench dataset from disk.
+    """Load Nemotron-PII test split from disk.
+
+    Reads the Parquet file, parses spans from Python-literal strings,
+    and returns a list of normalized sample dicts.
 
     Args:
         data_dir: Directory containing downloaded data.
-        splits: Optional filter by split name ("pii_single", "pii_multi",
-                "pii_hard", "pii_distract"). None = load all.
+        splits: Ignored (Nemotron-PII has no sub-splits). Kept for API compat.
+        max_samples: Limit number of samples loaded (None = all 50,000).
+        domains: Filter by domain (e.g., ["Healthcare Providers", "Banking"]).
+        document_formats: Filter by format ("structured", "unstructured").
 
     Returns:
         List of sample dicts with ground-truth annotations.
     """
-    combined_path = os.path.join(data_dir, "pii_bench_combined.json")
+    import pyarrow.parquet as pq
 
-    if not os.path.exists(combined_path):
-        # Try loading individual files
-        all_samples: List[dict] = []
-        for split_name in ["pii_single", "pii_multi", "pii_hard", "pii_distract"]:
-            split_path = os.path.join(data_dir, f"{split_name}.json")
-            if os.path.exists(split_path):
-                with open(split_path) as f:
-                    data = json.load(f)
-                for s in data:
-                    s["_split"] = split_name
-                all_samples.extend(data)
+    parquet_path = os.path.join(data_dir, "test.parquet")
+    if not os.path.exists(parquet_path):
+        raise FileNotFoundError(
+            f"Nemotron-PII dataset not found at {parquet_path}. "
+            "Run download_nemotron_pii() first."
+        )
 
-        if not all_samples:
-            raise FileNotFoundError(
-                f"PII-Bench dataset not found at {data_dir}. "
-                "Run download_pii_bench() first."
-            )
-    else:
-        with open(combined_path) as f:
-            all_samples = json.load(f)
+    table = pq.read_table(parquet_path)
+    total = table.num_rows
 
-    # Filter by splits if specified
-    if splits:
-        all_samples = [s for s in all_samples if s.get("_split") in splits]
+    # Apply max_samples limit
+    if max_samples and max_samples < total:
+        table = table.slice(0, max_samples)
 
-    return all_samples
+    samples: List[dict] = []
+    for i in range(table.num_rows):
+        domain = table.column("domain")[i].as_py()
+        doc_format = table.column("document_format")[i].as_py()
+
+        # Apply filters
+        if domains and domain not in domains:
+            continue
+        if document_formats and doc_format not in document_formats:
+            continue
+
+        # Parse spans from Python-literal string
+        spans_raw = table.column("spans")[i].as_py()
+        try:
+            spans = ast.literal_eval(spans_raw) if isinstance(spans_raw, str) else spans_raw
+        except (ValueError, SyntaxError):
+            spans = []
+
+        samples.append({
+            "uid": table.column("uid")[i].as_py(),
+            "domain": domain,
+            "document_type": table.column("document_type")[i].as_py(),
+            "document_description": table.column("document_description")[i].as_py(),
+            "document_format": doc_format,
+            "locale": table.column("locale")[i].as_py(),
+            "text": table.column("text")[i].as_py(),
+            "spans": spans,
+            "text_tagged": table.column("text_tagged")[i].as_py(),
+        })
+
+    print(f"[INFO] Loaded {len(samples)} Nemotron-PII samples"
+          + (f" (max_samples={max_samples})" if max_samples else "")
+          + (f" (domains={domains})" if domains else "")
+          + (f" (formats={document_formats})" if document_formats else ""))
+    return samples
 
 
-def normalize_pii_bench_sample(sample: dict) -> dict:
-    """Normalize a PII-Bench sample to a unified format.
+def normalize_sample(sample: dict) -> dict:
+    """Normalize a Nemotron-PII sample to the internal span format.
 
-    Converts PII-Bench's native format into the internal span format
-    used by the evaluation pipeline.
+    Converts Nemotron-PII's native format into the format used by the
+    evaluation pipeline.
 
     Returns:
         {
             "id": str,
-            "text": str,               # The context_description field
-            "spans": [                  # Ground-truth spans
+            "text": str,
+            "spans": [
                 {
-                    "entity_type": str, # Mapped to Presidio/Aelvyril type
+                    "entity_type": str,  # Mapped to Presidio/Aelvyril type
                     "start": int,
                     "end": int,
                     "text": str,
-                    "pii_category": str  # Original fine-grained category
+                    "label": str,        # Original Nemotron label
                 }
             ],
-            "split": str,
-            "user_query": str
+            "domain": str,
+            "document_type": str,
+            "document_format": str,
         }
     """
-    # Determine the text field (PII-Bench uses "context_description")
-    text = sample.get("context_description", sample.get("text", ""))
-
-    # Normalize spans from standard_answer format
-    raw_spans = sample.get("standard_answer", sample.get("spans", []))
     spans: List[dict] = []
-
-    for span in raw_spans:
-        pii_type = span.get("pii_type", span.get("entity_type", "UNKNOWN"))
-        mapped_type = PII_BENCH_ENTITY_MAP.get(
-            pii_type.lower(), pii_type.upper()
-        )
+    for span in sample.get("spans", []):
+        label = span.get("label", "UNKNOWN")
+        if label in EXCLUDED_LABELS:
+            continue
+        mapped_type = NEMOTRON_ENTITY_MAP.get(label, label.upper())
 
         spans.append({
             "entity_type": mapped_type,
-            "start": span.get("start", span.get("start_offset", 0)),
-            "end": span.get("end", span.get("end_offset", 0)),
-            "text": span.get("pii_value", span.get("text", span.get("span_text", ""))),
-            "pii_category": pii_type,
+            "start": span.get("start", 0),
+            "end": span.get("end", 0),
+            "text": str(span.get("text", "")),
+            "label": label,
         })
 
     return {
-        "id": sample.get("id", ""),
-        "text": text,
+        "id": sample.get("uid", ""),
+        "text": sample.get("text", ""),
         "spans": spans,
-        "split": sample.get("_split", sample.get("split", "unknown")),
-        "user_query": sample.get("user_query", ""),
+        "domain": sample.get("domain", ""),
+        "document_type": sample.get("document_type", ""),
+        "document_format": sample.get("document_format", ""),
     }
+
+
+# ── Backward-compatible aliases ────────────────────────────────────────────────
+# These allow existing code (run.py, dashboard, etc.) to continue working
+# with minimal changes while the internal implementation uses Nemotron-PII.
+
+download_pii_bench = download_nemotron_pii
+load_pii_bench = load_nemotron_pii
+normalize_pii_bench_sample = normalize_sample
+
+
+# ── Internal utilities ────────────────────────────────────────────────────────
 
 
 def _compute_file_hash(filepath: str) -> str:
@@ -279,128 +391,3 @@ def _compute_file_hash(filepath: str) -> str:
         for chunk in iter(lambda: f.read(8192), b""):
             h.update(chunk)
     return h.hexdigest()
-
-
-def _generate_synthetic_pii_bench() -> List[dict]:
-    """Generate synthetic PII-Bench-compatible test data.
-
-    Used when the official dataset is not available (offline mode, CI).
-    This is NOT a substitute for the real benchmark — it only validates
-    the evaluation pipeline.
-    """
-    import random
-
-    from faker import Faker
-
-    Faker.seed(42)
-    fake = Faker("en_US")
-    random.seed(42)
-
-    templates = [
-        {
-            "template": "My name is {person} and my SSN is {ssn}.",
-            "spans": [
-                ("{person}", "person_name", "PERSON"),
-                ("{ssn}", "id_card_number", "US_SSN"),
-            ],
-        },
-        {
-            "template": "Call me at {phone} or email {email}.",
-            "spans": [
-                ("{phone}", "phone_number", "PHONE_NUMBER"),
-                ("{email}", "email_address", "EMAIL_ADDRESS"),
-            ],
-        },
-        {
-            "template": "I live at {address} in {city}.",
-            "spans": [
-                ("{address}", "location", "LOCATION"),
-                ("{city}", "location", "LOCATION"),
-            ],
-        },
-        {
-            "template": "My bank account is {iban} and my card is {card}.",
-            "spans": [
-                ("{iban}", "bank_account_number", "IBAN_CODE"),
-                ("{card}", "credit_card", "CREDIT_CARD"),
-            ],
-        },
-        {
-            "template": "I was born on {date} and my IP is {ip}.",
-            "spans": [
-                ("{date}", "date_time", "DATE_TIME"),
-                ("{ip}", "ip_address", "IP_ADDRESS"),
-            ],
-        },
-        {
-            "template": "Contact {person} at {phone} regarding the meeting on {date}.",
-            "spans": [
-                ("{person}", "person_name", "PERSON"),
-                ("{phone}", "phone_number", "PHONE_NUMBER"),
-                ("{date}", "date_time", "DATE_TIME"),
-            ],
-        },
-        {
-            "template": "Patient {person} (DOB: {date}) can be reached at {email} or {phone}.",
-            "spans": [
-                ("{person}", "person_name", "PERSON"),
-                ("{date}", "date_time", "DATE_TIME"),
-                ("{email}", "email_address", "EMAIL_ADDRESS"),
-                ("{phone}", "phone_number", "PHONE_NUMBER"),
-            ],
-        },
-        {
-            "template": "Wire transfer from {person} at {org}: account {iban}, routing to {city}.",
-            "spans": [
-                ("{person}", "person_name", "PERSON"),
-                ("{org}", "organization", "ORGANIZATION"),
-                ("{iban}", "bank_account_number", "IBAN_CODE"),
-                ("{city}", "location", "LOCATION"),
-            ],
-        },
-    ]
-
-    generators = {
-        "person": lambda: fake.name(),
-        "ssn": lambda: fake.ssn(),
-        "phone": lambda: fake.phone_number(),
-        "email": lambda: fake.email(),
-        "address": lambda: fake.street_address(),
-        "city": lambda: fake.city(),
-        "iban": lambda: f"GB{random.randint(10,99)}{''.join([str(random.randint(0,9)) for _ in range(22)])}",
-        "card": lambda: fake.credit_card_number(),
-        "date": lambda: fake.date(),
-        "ip": lambda: fake.ipv4_public(),
-        "org": lambda: fake.company(),
-    }
-
-    samples: List[dict] = []
-    splits = ["pii_single", "pii_multi", "pii_hard", "pii_distract"]
-
-    for i in range(500):
-        tmpl = random.choice(templates)
-        text = tmpl["template"]
-        spans_data: List[dict] = []
-
-        for placeholder, pii_cat, entity_type in tmpl["spans"]:
-            gen_key = placeholder.strip("{}")
-            value = generators[gen_key]()
-            idx = text.find(placeholder)
-            text = text.replace(placeholder, value, 1)
-            spans_data.append({
-                "pii_type": pii_cat,
-                "pii_value": value,
-                "start": idx,
-                "end": idx + len(value),
-            })
-
-        samples.append({
-            "id": f"synth_{i:04d}",
-            "user_query": "Please help me with my information.",
-            "context_description": text,
-            "standard_answer": spans_data,
-            "pii_category": random.choice(spans_data).get("pii_type", "unknown") if spans_data else "unknown",
-            "_split": random.choice(splits),
-        })
-
-    return samples

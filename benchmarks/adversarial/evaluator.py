@@ -59,21 +59,26 @@ class RobustnessResult:
 class AelvyrilClient:
     """HTTP client for Aelvyril /analyze endpoint."""
 
-    def __init__(self, service_url: str = "http://localhost:3000/analyze"):
+    def __init__(self, service_url: str = "http://localhost:4242/v1/chat/completions"):
         self.service_url = service_url
 
     def detect(self, text: str) -> List[SpanMatch]:
         try:
             resp = requests.post(
                 self.service_url,
-                json={"text": text, "language": "en"},
+                json={"messages": [{"role": "user", "content": text}], "model": "none"},
+                headers={
+                    "Authorization": "Bearer aelvyril-benchmark-key",
+                    "X-Benchmark-Mode": "raw-detections",
+                },
                 timeout=10,
             )
             resp.raise_for_status()
             data = resp.json()
-            results = data.get("result", data) if isinstance(data, dict) else data
+            # X-Benchmark-Mode: raw-detections always returns {pii_spans, ...}
+            spans_raw = data.get("pii_spans", [])
             spans = []
-            for m in results:
+            for m in spans_raw:
                 spans.append(SpanMatch(
                     entity_type=m.get("entity_type", "UNKNOWN"),
                     start=m.get("start", 0),
@@ -252,7 +257,7 @@ def main() -> None:
     parser.add_argument("--num-samples", type=int, default=500)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--data", type=str, default=None)
-    parser.add_argument("--service-url", type=str, default="http://localhost:3000/analyze")
+    parser.add_argument("--service-url", type=str, default="http://localhost:4242/v1/chat/completions")
     parser.add_argument("--attacks", type=str, default=None,
                         help="Comma-separated attack names (default: all)")
     parser.add_argument("--output-dir", type=str, default="benchmarks/adversarial/results")

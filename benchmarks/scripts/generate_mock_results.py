@@ -57,10 +57,11 @@ def main() -> None:
     }
     _write("benchmarks/presidio_research/results/latest.json", presidio)
 
-    # Phase 2: PII-Bench
+    # Phase 2: Nemotron-PII
     pii_bench = {
         "aelvyril_version": "dev",
         "timestamp": now,
+        "data_source": "NVIDIA Nemotron-PII (CC BY 4.0)",
         "benchmarks": {
             "pii_bench": {
                 "strict_f1": 0.9012,

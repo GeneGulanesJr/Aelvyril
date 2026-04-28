@@ -313,10 +313,16 @@ pub async fn spawn_pi_executor(
                 changed_result = cancel_fut => {
                     if changed_result.is_ok() && *cancel_rx.borrow() {
                         tracing::info!("Cancellation received, killing pi subprocess");
-                        let _ = send_abort(&mut child).await;
+                        if let Err(e) = send_abort(&mut child).await {
+                            tracing::warn!("Failed to send abort command: {e}");
+                        }
                         tokio::time::sleep(Duration::from_millis(300)).await;
-                        let _ = child.start_kill();
-                        let _ = child.wait().await;
+                        if let Err(e) = child.start_kill() {
+                            tracing::warn!("Failed to kill pi subprocess: {e}");
+                        }
+                        if let Err(e) = child.wait().await {
+                            tracing::debug!("Failed to wait for killed pi subprocess: {e}");
+                        }
                         return Err(OrchestratorError::ExecutorCrashed(
                             "Cancelled by user".into(),
                         ));
@@ -348,9 +354,13 @@ pub async fn spawn_pi_executor(
                             tool_calls,
                             config.max_tool_calls
                         );
-                        let _ = send_abort(&mut child).await;
+                        if let Err(e) = send_abort(&mut child).await {
+                            tracing::warn!("Failed to send abort on tool limit: {e}");
+                        }
                         tokio::time::sleep(Duration::from_millis(500)).await;
-                        let _ = child.start_kill();
+                        if let Err(e) = child.start_kill() {
+                            tracing::warn!("Failed to kill pi after tool limit: {e}");
+                        }
                         return Err(OrchestratorError::ToolCallLimit(tool_calls));
                     }
                     if let Some(file) = extract_file_from_tool_event(&event) {
@@ -459,17 +469,27 @@ pub async fn spawn_pi_executor(
         }
         Ok(Err(e)) => {
             // Internal error from event processing
-            let _ = child.start_kill();
-            let _ = child.wait().await;
+            if let Err(kill_err) = child.start_kill() {
+                tracing::warn!("Failed to kill pi after internal error: {kill_err}");
+            }
+            if let Err(wait_err) = child.wait().await {
+                tracing::debug!("Failed to wait for killed pi: {wait_err}");
+            }
             Err(e)
         }
         Err(_elapsed) => {
             // Timeout
             tracing::warn!("pi executor timed out after {}s", config.executor_timeout_secs);
-            let _ = send_abort(&mut child).await;
+            if let Err(e) = send_abort(&mut child).await {
+                tracing::warn!("Failed to send abort on timeout: {e}");
+            }
             tokio::time::sleep(Duration::from_millis(500)).await;
-            let _ = child.start_kill();
-            let _ = child.wait().await;
+            if let Err(e) = child.start_kill() {
+                tracing::warn!("Failed to kill pi after timeout: {e}");
+            }
+            if let Err(e) = child.wait().await {
+                tracing::debug!("Failed to wait for killed pi after timeout: {e}");
+            }
             Err(OrchestratorError::ExecutorTimeout(config.executor_timeout_secs))
         }
     }

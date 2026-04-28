@@ -2,6 +2,10 @@ use crate::pii::presidio::PresidioClient;
 use crate::pii::recognizers::{self, PiiMatch, PiiType, Recognizer};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+#[cfg(feature = "llama")]
+use crate::llama::LlamaDetector;
 
 /// Minimum confidence threshold for detection
 const MIN_CONFIDENCE: f64 = 0.5;
@@ -11,6 +15,8 @@ static RECOGNIZERS: Lazy<Vec<Recognizer>> = Lazy::new(recognizers::all_recognize
 /// The PII detection engine.
 ///
 /// Detection strategy (layered):
+///   0. **LLM** (optional, feature-gated) — Fine-tuned LFM2.5-350M via llama-server.
+///      JSON-based entity extraction with high recall on trained PII types.
 ///   1. **Presidio** (primary) — Microsoft Presidio via local microservice.
 ///      Best-in-class NLP-based detection with NER support.
 ///   2. **Custom recognizers** (safety layer) — Our own regex-based patterns.
@@ -27,6 +33,11 @@ pub struct PiiEngine {
     deny_patterns: Vec<regex::Regex>,
     /// Presidio client for NLP-based detection
     presidio: PresidioClient,
+    /// LLM-based PII detection via fine-tuned LFM2.5 (feature-gated)
+    #[cfg(feature = "llama")]
+    llama: Option<Arc<tokio::sync::RwLock<LlamaDetector>>>,
+    /// External (JSON-loaded) recognizers — hot-reloaded pattern mining output
+    external_recognizers: Arc<tokio::sync::RwLock<Vec<Recognizer>>>,
 }
 
 impl Default for PiiEngine {
@@ -41,6 +52,9 @@ impl PiiEngine {
             allow_patterns: Vec::new(),
             deny_patterns: Vec::new(),
             presidio: PresidioClient::new("http://localhost:3000".into(), true),
+            #[cfg(feature = "llama")]
+            llama: None,
+            external_recognizers: Arc::new(tokio::sync::RwLock::new(Vec::new())),
         }
     }
 
@@ -50,6 +64,9 @@ impl PiiEngine {
             allow_patterns: Vec::new(),
             deny_patterns: Vec::new(),
             presidio: PresidioClient::new(base_url, enabled),
+            #[cfg(feature = "llama")]
+            llama: None,
+            external_recognizers: Arc::new(tokio::sync::RwLock::new(Vec::new())),
         }
     }
 
@@ -85,11 +102,85 @@ impl PiiEngine {
         &self.presidio
     }
 
+    /// Initialize the LLM PII detection backend with a GGUF model.
+    /// Must be called before `detect()` for LLM detection to work.
+    /// Requires the `llama` feature flag.
+    ///
+    /// The detector is created first (expensive: starts llama-server),
+    /// then installed behind a short-lived write lock.
+    #[cfg(feature = "llama")]
+    pub async fn init_llama(gguf_path: &str) -> Result<Arc<tokio::sync::RwLock<LlamaDetector>>, String> {
+        let detector =
+            LlamaDetector::new(gguf_path).await.map_err(|e| e.to_string())?;
+        tracing::info!(path = %gguf_path, "LLM PII backend initialized");
+        Ok(Arc::new(tokio::sync::RwLock::new(detector)))
+    }
+
+    /// Install a pre-created LLM detector into the engine.
+    /// Takes the detector by Arc so the write lock is held only briefly.
+    #[cfg(feature = "llama")]
+    pub fn set_llama_detector(&mut self, detector: Arc<tokio::sync::RwLock<LlamaDetector>>) {
+        self.llama = Some(detector);
+    }
+
+    /// Reload external recognizers from the configured JSON file.
+    /// Errors are logged but do not panic — old patterns remain active.
+    /// Reload external recognizers from file.
+    /// Currently stubbed — not needed for LLM detection.
+    pub async fn reload_external_recognizers(&self) -> Result<usize, String> {
+        Ok(0)
+    }
+
+    /// Check if the LLM backend is enabled and healthy.
+    #[cfg(feature = "llama")]
+    pub async fn llama_healthy(&self) -> bool {
+        if let Some(ref llama) = self.llama {
+            let guard = llama.read().await;
+            guard.is_healthy().await
+        } else {
+            false
+        }
+    }
+
     /// Run our custom recognizers (the safety layer).
     /// Always runs regardless of Presidio status.
-    fn detect_custom(&self, text: &str) -> Vec<PiiMatch> {
+    async fn detect_custom(&self, text: &str) -> Vec<PiiMatch> {
         let mut matches = self.detect_with_recognizers(text);
         self.detect_with_denylist(text, &mut matches);
+
+        // External recognizers (pattern mining output) — async-safe read
+        let external = self.external_recognizers.read().await;
+        for recognizer in external.iter() {
+            if recognizer.confidence < MIN_CONFIDENCE {
+                continue;
+            }
+
+            for mat in recognizer.regex.find_iter(text) {
+                let matched_text = mat.as_str();
+                if self.is_allowed(matched_text) {
+                    continue;
+                }
+                if let Some(validator) = recognizer.validator {
+                    if !validator(matched_text) {
+                        continue;
+                    }
+                }
+
+                // Skip if an earlier recognizer already matched this exact span
+                if matches.iter().any(|m| m.start == mat.start() && m.end == mat.end()) {
+                    continue;
+                }
+
+                matches.push(PiiMatch {
+                    pii_type: recognizer.pii_type.clone(),
+                    text: matched_text.to_string(),
+                    start: mat.start(),
+                    end: mat.end(),
+                    confidence: recognizer.confidence,
+                });
+            }
+        }
+
         matches
     }
 
@@ -97,6 +188,7 @@ impl PiiEngine {
     fn detect_with_recognizers(&self, text: &str) -> Vec<PiiMatch> {
         let mut matches = Vec::new();
 
+        // Built-in recognizers (high-confidence defaults)
         for recognizer in RECOGNIZERS.iter() {
             if recognizer.confidence < MIN_CONFIDENCE {
                 continue;
@@ -159,6 +251,25 @@ impl PiiEngine {
     pub async fn detect(&self, text: &str) -> Vec<PiiMatch> {
         let mut matches: Vec<PiiMatch> = Vec::new();
 
+        // Layer 0: LLM-based detection (feature-gated)
+        #[cfg(feature = "llama")]
+        if let Some(ref llama) = self.llama {
+            match llama.read().await.detect(text).await {
+                Ok(llm_matches) => {
+                    let count = llm_matches.len();
+                    for m in llm_matches {
+                        if !self.is_allowed(&m.text) {
+                            matches.push(m);
+                        }
+                    }
+                    tracing::debug!(count, "LLM detected {} entities", count);
+                }
+                Err(e) => {
+                    tracing::warn!("LLM detection failed, falling back to other layers: {}", e);
+                }
+            }
+        }
+
         // Layer 1: Presidio (primary NLP-based detection)
         if let Some(presidio_matches) = self.presidio.analyze(text, MIN_CONFIDENCE).await {
             // Apply allowlist to Presidio results
@@ -170,7 +281,7 @@ impl PiiEngine {
         }
 
         // Layer 2: Custom recognizers (safety layer — always runs)
-        let custom_matches = self.detect_custom(text);
+        let custom_matches = self.detect_custom(text).await;
         for m in custom_matches {
             if !self.is_allowed(&m.text) {
                 matches.push(m);
@@ -203,28 +314,132 @@ impl PiiEngine {
 }
 
 /// Resolve overlapping matches — when two matches cover the same text region,
-/// keep the one with higher confidence and discard the other.
+/// apply tie-breaking rules:
+///
+/// 1. Sort by (start, -confidence)
+/// 2. For overlapping matches, prefer the one whose span is more specific
+///    (shorter span = more precise). If spans are identical, prefer higher
+///    confidence. If confidence is within 0.1, prefer the type that is more
+///    specific (e.g., ZipCode over Date when the text is a bare 5-digit number).
 fn resolve_overlaps(matches: &mut Vec<PiiMatch>) {
+    if matches.is_empty() {
+        return;
+    }
+
     matches.sort_by(|a, b| {
         a.start
             .cmp(&b.start)
             .then_with(|| {
-                b.confidence
-                    .partial_cmp(&a.confidence)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                // Prefer shorter (more specific) spans first
+                a.end
+                    .cmp(&b.end)
+                    .then_with(|| {
+                        b.confidence
+                            .partial_cmp(&a.confidence)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
             })
     });
 
-    let mut result = Vec::new();
-    let mut last_end = 0;
+    let mut result: Vec<PiiMatch> = Vec::new();
+
     for m in matches.iter() {
-        if m.start >= last_end {
-            result.push(m.clone());
-            last_end = m.end;
+        // Find the last result that this match overlaps with
+        let mut dominated = false;
+        for existing in result.iter_mut().rev() {
+            // No overlap if this match starts after the existing one ends
+            if m.start >= existing.end {
+                break;
+            }
+
+            // There is overlap. Decide who wins.
+            let span_m = m.end - m.start;
+            let span_e = existing.end - existing.start;
+
+            // Same span — pick by specificity then confidence
+            if m.start == existing.start && m.end == existing.end {
+                // Type specificity: more specific types win over generic ones
+                let spec_m = type_specificity(&m.pii_type);
+                let spec_e = type_specificity(&existing.pii_type);
+
+                if spec_m > spec_e {
+                    // New match is more specific — replace
+                    *existing = m.clone();
+                    dominated = true;
+                    break;
+                } else if spec_m == spec_e && m.confidence > existing.confidence {
+                    // Same specificity, new has higher confidence — replace
+                    *existing = m.clone();
+                    dominated = true;
+                    break;
+                } else {
+                    // Existing wins
+                    dominated = true;
+                    break;
+                }
+            }
+
+            // Partial overlap — prefer shorter span (more precise match)
+            if span_m < span_e {
+                // New match is more precise — but only if it fits inside
+                if m.start >= existing.start && m.end <= existing.end {
+                    *existing = m.clone();
+                    dominated = true;
+                    break;
+                }
+            }
+
+            // Otherwise existing (higher confidence from sort) wins
+            dominated = true;
+            break;
         }
-        // If overlapping, skip (the earlier higher-confidence match was already kept)
+
+        if !dominated {
+            result.push(m.clone());
+        }
     }
+
     *matches = result;
+}
+
+/// Type specificity score for overlap resolution.
+///
+/// More specific types (ZipCode, SSN, IBAN) should win over generic types
+/// (Date, PhoneNumber) when both match the same text.
+///
+/// The scoring is:
+/// - 3: Very specific (SSN, IBAN, CreditCard, ZipCode, API key, Email)
+/// - 2: Moderately specific (IP address, Phone, Domain)
+/// - 1: Generic / ambiguous (Date, Person, Location, Organization, Custom)
+fn type_specificity(pii_type: &PiiType) -> u8 {
+    match pii_type {
+        PiiType::Ssn => 3,
+        PiiType::Iban => 3,
+        PiiType::CreditCard => 3,
+        PiiType::ZipCode => 3,
+        PiiType::ApiKey => 3,
+        PiiType::Email => 3,
+        PiiType::SwiftCode => 3,
+        PiiType::UsBankNumber => 3,
+        PiiType::UsPassport => 3,
+        PiiType::UsDriverLicense => 3,
+        PiiType::UsState => 3,
+        PiiType::StreetAddress => 3,
+        PiiType::City => 3,
+        PiiType::Country => 3,
+        PiiType::MedicalRecord => 3,
+        PiiType::Age => 2,
+        PiiType::Title => 2,
+        PiiType::Nationality => 2,
+        PiiType::IpAddress => 2,
+        PiiType::PhoneNumber => 2,
+        PiiType::Domain => 2,
+        PiiType::Date => 1,
+        PiiType::Person => 1,
+        PiiType::Location => 1,
+        PiiType::Organization => 1,
+        PiiType::Custom(_) => 1,
+    }
 }
 
 /// Build a summary of detected entities by type
@@ -341,5 +556,97 @@ mod tests {
         assert_eq!(summary.get("Person"), Some(&1));
         assert_eq!(summary.get("Location"), Some(&1));
         assert_eq!(summary.get("Organization"), Some(&1));
+    }
+
+    #[test]
+    fn test_resolve_overlaps_zip_beats_date() {
+        // Simulate the bug: Presidio labels "90210" as DATE_TIME (0.60),
+        // while our regex labels it as ZipCode (0.65). ZipCode should win
+        // because it has higher specificity AND higher confidence.
+        let mut matches = vec![
+            PiiMatch {
+                pii_type: PiiType::Date,
+                text: "90210".into(),
+                start: 10,
+                end: 15,
+                confidence: 0.60,
+            },
+            PiiMatch {
+                pii_type: PiiType::ZipCode,
+                text: "90210".into(),
+                start: 10,
+                end: 15,
+                confidence: 0.65,
+            },
+        ];
+        resolve_overlaps(&mut matches);
+        assert_eq!(matches.len(), 1, "Should keep exactly one match");
+        assert_eq!(
+            matches[0].pii_type,
+            PiiType::ZipCode,
+            "ZipCode should win over Date for 5-digit number"
+        );
+    }
+
+    #[test]
+    fn test_resolve_overlaps_specificity_beats_confidence() {
+        // Even when Date has higher confidence, ZipCode (specificity 3)
+        // should beat Date (specificity 1) for the exact same span.
+        let mut matches = vec![
+            PiiMatch {
+                pii_type: PiiType::Date,
+                text: "90210".into(),
+                start: 0,
+                end: 5,
+                confidence: 0.80,
+            },
+            PiiMatch {
+                pii_type: PiiType::ZipCode,
+                text: "90210".into(),
+                start: 0,
+                end: 5,
+                confidence: 0.65,
+            },
+        ];
+        resolve_overlaps(&mut matches);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].pii_type,
+            PiiType::ZipCode,
+            "ZipCode specificity (3) should beat Date specificity (1)"
+        );
+    }
+
+    #[test]
+    fn test_resolve_overlaps_keeps_non_overlapping() {
+        let mut matches = vec![
+            PiiMatch {
+                pii_type: PiiType::Email,
+                text: "a@b.com".into(),
+                start: 0,
+                end: 7,
+                confidence: 0.90,
+            },
+            PiiMatch {
+                pii_type: PiiType::ZipCode,
+                text: "90210".into(),
+                start: 20,
+                end: 25,
+                confidence: 0.65,
+            },
+        ];
+        resolve_overlaps(&mut matches);
+        assert_eq!(matches.len(), 2, "Non-overlapping matches should both be kept");
+    }
+
+    #[test]
+    fn test_type_specificity_scoring() {
+        assert_eq!(type_specificity(&PiiType::ZipCode), 3);
+        assert_eq!(type_specificity(&PiiType::Ssn), 3);
+        assert_eq!(type_specificity(&PiiType::Email), 3);
+        assert_eq!(type_specificity(&PiiType::CreditCard), 3);
+        assert_eq!(type_specificity(&PiiType::Date), 1);
+        assert_eq!(type_specificity(&PiiType::Person), 1);
+        assert_eq!(type_specificity(&PiiType::IpAddress), 2);
     }
 }

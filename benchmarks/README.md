@@ -10,7 +10,7 @@ Reproducible benchmark suite for evaluating Aelvyril's PII detection accuracy ag
 # Phase 1: Presidio-Research baseline (default)
 python -m benchmarks.run
 
-# Phase 2: Academic benchmarks (PII-Bench + TAB)
+# Phase 2: Academic benchmarks (Nemotron-PII + TAB)
 python -m benchmarks.run --suite phase2
 
 # Phase 3: Supplementary benchmarks + dashboard
@@ -61,16 +61,16 @@ Established academic benchmarks with published baselines.
 
 | Benchmark | Source | Samples | Metrics |
 |-----------|--------|---------|---------|
-| **PII-Bench** | arxiv:2502.18545 | 2,842 | Strict-F1, Entity-F1, RougeL-F |
+| **Nemotron-PII** | NVIDIA (CC BY 4.0) | 50,000 test | Strict-F1, Entity-F1, RougeL-F |
 | **TAB** | NorskRegnesentral | 1,268 ECHR cases | R_direct, R_quasi, Weighted F1 |
 
-**PII-Bench** evaluates detection accuracy against published GPT-4o/DeepSeek/Claude baselines.
+**Nemotron-PII** (from NVIDIA) provides 50,000 production-quality test samples across 55 entity types and 50+ industry domains.
 
 **TAB** goes beyond detection — it evaluates anonymization quality and re-identification risk.
 
 #### Phase 2 Deliverables
 
-- `BENCHMARK_RESULTS.md` — PII-Bench scores vs GPT-4o/DeepSeek
+- `BENCHMARK_RESULTS.md` — Nemotron-PII scores and per-entity breakdown
 - `TAB_ANONYMIZATION_REPORT.md` — Re-identification risk assessment
 - `ERROR_ANALYSIS.md` — FP/FN patterns and root causes
 - `benchmarks/CROSS_BENCHMARK_MATRIX.md` — Cross-benchmark comparison
@@ -117,7 +117,7 @@ benchmarks/
 │   ├── evaluate.py                 # Phase 1 evaluation script
 │   └── results/
 │
-├── pii_bench/                      # Phase 2a: PII-Bench (Fudan)
+├── pii_bench/                      # Phase 2a: Nemotron-PII (NVIDIA)
 │   ├── downloader.py               # Dataset acquisition
 │   ├── evaluator.py                # Full evaluation pipeline
 │   ├── metrics.py                  # Strict-F1, Entity-F1, RougeL-F
@@ -148,7 +148,7 @@ benchmarks/
 │   └── utils.py                    # Seeds, data loading
 │
 └── data/                           # Downloaded datasets (gitignored)
-    ├── pii-bench/
+    ├── nemotron-pii/
     ├── tab/
     └── ai4privacy/
 ```
@@ -163,15 +163,18 @@ All benchmark runs are deterministic:
 - **Run manifest:** Each run writes `run_manifest.json` with full environment capture
 - **Bootstrap resampling:** 10,000 iterations for 95% confidence intervals
 
-## Published Baselines (PII-Bench)
+## Dataset: Nemotron-PII (NVIDIA)
 
-| System | Strict-F1 | Entity-F1 | RougeL-F |
-|--------|-----------|-----------|----------|
-| GPT-4o | 0.893 | 0.912 | 0.935 |
-| Claude-3.5 | 0.876 | 0.898 | 0.921 |
-| DeepSeek | 0.841 | 0.867 | 0.891 |
+| Detail | Value |
+|--------|-------|
+| Source | https://huggingface.co/datasets/nvidia/Nemotron-PII |
+| License | CC BY 4.0 |
+| Test samples | 50,000 |
+| Entity types | 55 |
+| Domains | 50+ industries |
+| Formats | Structured + unstructured |
 
-*Source: arxiv:2502.18545*
+*Previously used PII-Bench (THU-MIG) was removed from GitHub; replaced 2026-04-28.*
 
 ## Documentation
 

@@ -30,6 +30,7 @@ from benchmarks.common.synthetic_pii import (
     _random_ssn,
     _random_username,
     _random_zipcode,
+    _random_iban,
 )
 from benchmarks.common.utils import set_seeds
 
@@ -113,10 +114,7 @@ class LLMPromptDataGenerator:
         return _random_credit_card(self.rng), "CREDIT_CARD"
 
     def _gen_iban(self) -> tuple[str, str]:
-        country = self.rng.choice(["GB", "DE", "FR", "ES", "IT"])
-        check = f"{self.rng.randint(10, 99)}"
-        bban = "".join([str(self.rng.randint(0, 9)) for _ in range(self.rng.randint(14, 30))])
-        return f"{country}{check}{bban}", "IBAN_CODE"
+        return _random_iban(self.rng), "IBAN_CODE"
 
     def _gen_person(self) -> tuple[str, str]:
         return _random_name(self.rng), "PERSON"
@@ -204,31 +202,57 @@ class LLMPromptDataGenerator:
         if template is None:
             template = self.rng.choice(LLM_PROMPT_TEMPLATES)
 
-        text = template
-        spans: List[Dict] = []
+        # Find all placeholder positions in the original template
+        placeholders: List[tuple[str, int, int]] = []
+        for placeholder in self._template_pii_map:
+            start = 0
+            while True:
+                idx = template.find(placeholder, start)
+                if idx == -1:
+                    break
+                placeholders.append((placeholder, idx, idx + len(placeholder)))
+                start = idx + 1
 
-        # Find all placeholders and replace them
-        for placeholder, gen_fn in self._template_pii_map.items():
-            if placeholder not in text:
-                continue
+        # Sort by start position to preserve order
+        placeholders.sort(key=lambda x: x[1])
 
-            value, entity_type = gen_fn()
-            # Skip non-PII types for span tracking
-            if entity_type == "TEXT":
-                text = text.replace(placeholder, value, 1)
-                continue
-
-            # Replace and track span
-            idx = text.find(placeholder)
-            text = text.replace(placeholder, value, 1)
-            spans.append({
+        # Generate replacement values
+        replacements = []
+        for placeholder, p_start, p_end in placeholders:
+            value, entity_type = self._template_pii_map[placeholder]()
+            replacements.append({
+                "start": p_start,
+                "end": p_end,
+                "value": value,
                 "entity_type": entity_type,
-                "start": idx,
-                "end": idx + len(value),
-                "text": value,
             })
 
-        return SyntheticSample(text=text, spans=spans)
+        # Build final text and compute spans with correct offsets
+        final_parts: List[str] = []
+        last_idx = 0
+        spans: List[Dict] = []
+
+        for rep in replacements:
+            # Append text before this placeholder
+            final_parts.append(template[last_idx:rep["start"]])
+            # Compute span start in final text
+            span_start = sum(len(part) for part in final_parts)
+            final_parts.append(rep["value"])
+            span_end = span_start + len(rep["value"])
+            if rep["entity_type"] != "TEXT":
+                spans.append({
+                    "entity_type": rep["entity_type"],
+                    "start": span_start,
+                    "end": span_end,
+                    "text": rep["value"],
+                })
+            last_idx = rep["end"]
+
+        # Append remainder
+        final_parts.append(template[last_idx:])
+        final_text = "".join(final_parts)
+
+        return SyntheticSample(text=final_text, spans=spans)
 
     def generate_dataset(
         self,

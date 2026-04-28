@@ -180,10 +180,10 @@ def main() -> None:
         with open(data_path) as f:
             samples = json.load(f)
     elif args.suite == "pii-bench":
-        from benchmarks.pii_bench.downloader import download_pii_bench, load_pii_bench, normalize_pii_bench_sample
-        download_pii_bench()
-        raw = load_pii_bench()
-        samples = [normalize_pii_bench_sample(r) for r in raw]
+        from benchmarks.pii_bench.downloader import download_nemotron_pii, load_nemotron_pii, normalize_sample
+        download_nemotron_pii()
+        raw = load_nemotron_pii()
+        samples = [normalize_sample(r) for r in raw]
     elif args.suite == "tab":
         from benchmarks.tab.downloader import download_tab, load_tab, normalize_tab_document
         download_tab()

@@ -3,7 +3,13 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Type of PII entity detected
+/// Type of PII entity detected.
+///
+/// Each variant maps to a Presidio-compatible UPPER_SNAKE_CASE string via `Display`.
+/// The enum intentionally includes fine-grained types (CITY, US_STATE, STREET_ADDRESS, etc.)
+/// so that the benchmark scoring namespace (all uppercase) aligns exactly with the
+/// gold annotation namespace — preventing entity type collapses that would drive
+/// precision/recall to zero.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PiiType {
     Email,
@@ -16,30 +22,93 @@ pub enum PiiType {
     Domain,
     Date,
     ZipCode,
-    /// Person name — NER-driven via Presidio (spaCy/transformer)
+    Custom(String),
     Person,
-    /// Physical location — NER-driven via Presidio
     Location,
-    /// Organization name — NER-driven via Presidio
     Organization,
+    /// Fine-grained NER types (keep distinct from Location/Org for scoring)
+    City,
+    UsState,
+    StreetAddress,
+    Country,
+    Nationality,
+    Title,
+    MedicalRecord,
+    Age,
+    SwiftCode,
+    UsBankNumber,
+    UsPassport,
+    UsDriverLicense,
 }
 
 impl fmt::Display for PiiType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PiiType::Email => write!(f, "Email"),
-            PiiType::PhoneNumber => write!(f, "Phone"),
-            PiiType::IpAddress => write!(f, "IP_Address"),
-            PiiType::CreditCard => write!(f, "Credit_Card"),
-            PiiType::Ssn => write!(f, "SSN"),
-            PiiType::Iban => write!(f, "IBAN"),
-            PiiType::ApiKey => write!(f, "API_Key"),
-            PiiType::Domain => write!(f, "Domain"),
-            PiiType::Date => write!(f, "Date"),
-            PiiType::ZipCode => write!(f, "Zip_Code"),
-            PiiType::Person => write!(f, "Person"),
-            PiiType::Location => write!(f, "Location"),
-            PiiType::Organization => write!(f, "Organization"),
+            PiiType::Email => write!(f, "EMAIL_ADDRESS"),
+            PiiType::PhoneNumber => write!(f, "PHONE_NUMBER"),
+            PiiType::IpAddress => write!(f, "IP_ADDRESS"),
+            PiiType::CreditCard => write!(f, "CREDIT_CARD"),
+            PiiType::Ssn => write!(f, "US_SSN"),
+            PiiType::Iban => write!(f, "IBAN_CODE"),
+            PiiType::ApiKey => write!(f, "API_KEY"),
+            PiiType::Domain => write!(f, "URL"),
+            PiiType::Date => write!(f, "DATE_TIME"),
+            PiiType::ZipCode => write!(f, "US_ZIP_CODE"),
+            PiiType::Custom(ref s) => write!(f, "{}", s),
+            PiiType::Person => write!(f, "PERSON"),
+            PiiType::Location => write!(f, "LOCATION"),
+            PiiType::Organization => write!(f, "ORGANIZATION"),
+            PiiType::City => write!(f, "CITY"),
+            PiiType::UsState => write!(f, "US_STATE"),
+            PiiType::StreetAddress => write!(f, "STREET_ADDRESS"),
+            PiiType::Country => write!(f, "COUNTRY"),
+            PiiType::Nationality => write!(f, "NATIONALITY"),
+            PiiType::Title => write!(f, "TITLE"),
+            PiiType::MedicalRecord => write!(f, "MEDICAL_RECORD"),
+            PiiType::Age => write!(f, "AGE"),
+            PiiType::SwiftCode => write!(f, "SWIFT_CODE"),
+            PiiType::UsBankNumber => write!(f, "US_BANK_NUMBER"),
+            PiiType::UsPassport => write!(f, "US_PASSPORT"),
+            PiiType::UsDriverLicense => write!(f, "US_DRIVER_LICENSE"),
+        }
+    }
+}
+
+impl PiiType {
+    /// Parse from a string label (e.g., from JSON config or external recognizer).
+    /// Returns a known variant or `Custom` for unrecognized types.
+    ///
+    /// Accepts both Presidio uppercase names (EMAIL_ADDRESS, CITY, US_STATE) and
+    /// legacy Aelvyril display names (Email, City, US_State) for backward compat.
+    pub fn from_str(s: &str) -> PiiType {
+        match s {
+            // Presidio / benchmark namespace
+            "EMAIL_ADDRESS" | "Email" => PiiType::Email,
+            "PHONE_NUMBER" | "Phone" => PiiType::PhoneNumber,
+            "IP_ADDRESS" | "IP_Address" => PiiType::IpAddress,
+            "CREDIT_CARD" | "Credit_Card" => PiiType::CreditCard,
+            "US_SSN" | "SSN" => PiiType::Ssn,
+            "IBAN_CODE" | "IBAN" => PiiType::Iban,
+            "API_KEY" | "API_Key" => PiiType::ApiKey,
+            "URL" | "DOMAIN_NAME" | "Domain" => PiiType::Domain,
+            "DATE_TIME" | "DATE" | "Date" => PiiType::Date,
+            "US_ZIP_CODE" | "ZIP_CODE" | "Zip_Code" => PiiType::ZipCode,
+            "PERSON" | "PER" | "Person" => PiiType::Person,
+            "LOCATION" | "LOC" => PiiType::Location,
+            "ORGANIZATION" | "ORG" | "NRP" => PiiType::Organization,
+            "CITY" | "City" => PiiType::City,
+            "US_STATE" | "US_State" => PiiType::UsState,
+            "STREET_ADDRESS" | "Street_Address" => PiiType::StreetAddress,
+            "COUNTRY" | "Country" => PiiType::Country,
+            "NATIONALITY" | "Nationality" => PiiType::Nationality,
+            "TITLE" | "Title" => PiiType::Title,
+            "MEDICAL_RECORD" | "Medical_Record" => PiiType::MedicalRecord,
+            "AGE" | "Age" => PiiType::Age,
+            "SWIFT_CODE" | "SWIFT" => PiiType::SwiftCode,
+            "US_BANK_NUMBER" => PiiType::UsBankNumber,
+            "US_PASSPORT" => PiiType::UsPassport,
+            "US_DRIVER_LICENSE" => PiiType::UsDriverLicense,
+            _ => PiiType::Custom(s.to_string()),
         }
     }
 }
@@ -230,11 +299,13 @@ pub fn all_recognizers() -> Vec<Recognizer> {
             confidence: 0.60,
             validator: None,
         },
-        // ZIP codes
+        // ZIP codes — moderate-high confidence for standalone 5-digit numbers.
+        // Higher than Date (0.60) so ZIP wins overlap resolution when both
+        // Presidio and regex match the same text.
         Recognizer {
             pii_type: PiiType::ZipCode,
             regex: ZIP_RE.clone(),
-            confidence: 0.40,
+            confidence: 0.65,
             validator: None,
         },
     ]
@@ -319,8 +390,47 @@ mod tests {
 
     #[test]
     fn test_display_person_location_organization() {
-        assert_eq!(PiiType::Person.to_string(), "Person");
-        assert_eq!(PiiType::Location.to_string(), "Location");
-        assert_eq!(PiiType::Organization.to_string(), "Organization");
+        // PiiType::Display now emits UPPER_SNAKE_CASE to match the benchmark
+        // scoring namespace (gold annotations use PRESIDIO-style uppercase).
+        assert_eq!(PiiType::Person.to_string(), "PERSON");
+        assert_eq!(PiiType::Location.to_string(), "LOCATION");
+        assert_eq!(PiiType::Organization.to_string(), "ORGANIZATION");
+    }
+
+    #[test]
+    fn test_display_fine_grained_types() {
+        assert_eq!(PiiType::City.to_string(), "CITY");
+        assert_eq!(PiiType::UsState.to_string(), "US_STATE");
+        assert_eq!(PiiType::StreetAddress.to_string(), "STREET_ADDRESS");
+        assert_eq!(PiiType::Country.to_string(), "COUNTRY");
+        assert_eq!(PiiType::Age.to_string(), "AGE");
+        assert_eq!(PiiType::Title.to_string(), "TITLE");
+        assert_eq!(PiiType::SwiftCode.to_string(), "SWIFT_CODE");
+        assert_eq!(PiiType::UsBankNumber.to_string(), "US_BANK_NUMBER");
+        assert_eq!(PiiType::UsPassport.to_string(), "US_PASSPORT");
+        assert_eq!(PiiType::UsDriverLicense.to_string(), "US_DRIVER_LICENSE");
+        assert_eq!(PiiType::MedicalRecord.to_string(), "MEDICAL_RECORD");
+        assert_eq!(PiiType::Nationality.to_string(), "NATIONALITY");
+    }
+
+    #[test]
+    fn test_from_str_bidirectional() {
+        // Both display names and uppercase Presidio names should parse correctly
+        assert_eq!(PiiType::from_str("PERSON"), PiiType::Person);
+        assert_eq!(PiiType::from_str("Person"), PiiType::Person);
+        assert_eq!(PiiType::from_str("CITY"), PiiType::City);
+        assert_eq!(PiiType::from_str("City"), PiiType::City);
+        assert_eq!(PiiType::from_str("US_SSN"), PiiType::Ssn);
+        assert_eq!(PiiType::from_str("SSN"), PiiType::Ssn);
+        assert_eq!(PiiType::from_str("SWIFT_CODE"), PiiType::SwiftCode);
+        assert_eq!(PiiType::from_str("US_ZIP_CODE"), PiiType::ZipCode);
+        assert_eq!(PiiType::from_str("EMAIL_ADDRESS"), PiiType::Email);
+        // Unknown types become Custom so no information is lost
+        let custom = PiiType::from_str("MY_CUSTOM_TYPE");
+        if let PiiType::Custom(s) = custom {
+            assert_eq!(s, "MY_CUSTOM_TYPE");
+        } else {
+            panic!("Expected Custom variant, got {:?}", custom);
+        }
     }
 }

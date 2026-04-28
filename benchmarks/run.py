@@ -70,20 +70,28 @@ def check_prerequisites() -> bool:
 
 
 def check_service(url: str) -> bool:
-    """Check if the Presidio service is reachable."""
+    """Check if the Presidio service is reachable by querying its /health endpoint."""
     import requests
+    from urllib.parse import urlparse, urlunparse
 
-    health_url = url.replace("/analyze", "/health")
+    # Derive the base URL by stripping any endpoint path (e.g. /analyze or /v1/chat/completions)
+    parsed = urlparse(url)
+    health_url = urlunparse((parsed.scheme, parsed.netloc, "/health", "", "", ""))
+
     try:
         resp = requests.get(health_url, timeout=5)
         if resp.status_code == 200:
             data = resp.json()
-            presidio_ok = data.get("presidio", False)
-            if presidio_ok:
+            # Accept both health response formats:
+            #   Aelvyril gateway: {"status": "ok"}
+            #   Flask Presidio:  {"status": "healthy", "presidio": true}
+            presidio_ok = data.get("presidio", True)          # True if field missing
+            status = data.get("status", "")
+            if presidio_ok and status in ("ok", "healthy", ""):
                 print(f"[OK] Presidio service healthy at {health_url}")
                 return True
             else:
-                print(f"[WARN] Service reachable but Presidio not initialized: {data}")
+                print(f"[WARN] Service reachable but not fully initialized: {data}")
                 return False
         else:
             print(f"[ERROR] Service returned status {resp.status_code}")
@@ -141,14 +149,26 @@ Examples:
     parser.add_argument(
         "--service-url",
         type=str,
-        default="http://localhost:3000/analyze",
+        default="http://localhost:4242/v1/chat/completions",
     )
+    parser.add_argument(
+        "--baseline-url",
+        type=str,
+        default=None,
+        help="Separate service URL for vanilla Presidio baseline (default: derived by swapping ports 4242→4243 in --service-url)",
+    )
+
     parser.add_argument("--aelvyril-only", action="store_true")
     parser.add_argument("--generate-only", action="store_true")
     parser.add_argument(
         "--clear-cache",
         action="store_true",
         help="Clear detection cache before running benchmarks",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Start Aelvyril gateway in headless mode before benchmarking",
     )
     parser.add_argument(
         "--output-dir",
@@ -172,7 +192,7 @@ Examples:
         print("\n[INFO] Clearing detection cache...")
         try:
             import requests
-            cache_url = args.service_url.replace("/analyze", "/cache/clear")
+            cache_url = args.service_url.replace("/v1/chat/completions", "/cache/clear")
             resp = requests.post(cache_url, timeout=5)
             if resp.status_code == 200:
                 print("[OK] Detection cache cleared")
@@ -181,10 +201,91 @@ Examples:
         except Exception as e:
             print(f"[WARN] Could not clear cache: {e}")
 
+    # ── Headless gateway management ──────────────────────────────────────────
+    if args.headless:
+        print("[INFO] Starting Aelvyril gateway in headless mode...")
+        import subprocess
+        import atexit
+        import time
+
+        # Start enhanced Aelvyril gateway (port 4242) — includes custom recognizers
+        gateway_cmd = [
+            "cargo", "run", "--bin", "aelvyril-headless",
+            "--", "--port", "4242", "--address", "127.0.0.1"
+        ]
+        proc = subprocess.Popen(
+            gateway_cmd,
+            cwd=os.path.join(os.path.dirname(__file__), "..", "src-tauri"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        atexit.register(lambda: proc.terminate())
+        proc_aelvyril = proc
+
+        # Wait for Aelvyril gateway to become healthy
+        time.sleep(3)
+        health_url = "http://127.0.0.1:4242/health"
+        for _ in range(20):
+            try:
+                import requests
+                resp = requests.get(health_url, timeout=2)
+                if resp.status_code == 200:
+                    print(f"[OK] Aelvyril gateway healthy at {health_url}")
+                    break
+            except Exception:
+                time.sleep(1)
+        else:
+            print(f"[WARN] Aelvyril gateway did not become healthy within timeout")
+
+        # For Phase 1, also start a vanilla Presidio Python service (no custom recognizers)
+        # Used as the baseline comparison. Runs on a separate port to avoid conflict.
+        if args.suite in ("phase1", "all"):
+            print("[INFO] Starting vanilla Presidio service on port 3001...")
+            vanilla_cmd = [
+                "/home/genegulanesjr/.hermes/hermes-agent/venv/bin/python3",
+                "src-tauri/presidio_service.py",
+            ]
+            env = os.environ.copy()
+            env["AELVYRIL_MODE"] = "vanilla"
+            env["PRESIDIO_PORT"] = "3001"
+            env["AELVYRIL_PRESIDIO_PORT"] = "3001"
+            proc_v = subprocess.Popen(
+                vanilla_cmd,
+                cwd=os.path.join(os.path.dirname(__file__), ".."),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+            )
+            atexit.register(lambda: proc_v.terminate())
+            proc_vanilla = proc_v
+
+            # Wait for vanilla Presidio to become healthy
+            time.sleep(2)
+            vanilla_health = "http://127.0.0.1:3001/health"
+            healthy = False
+            for _ in range(20):
+                try:
+                    import requests
+                    resp = requests.get(vanilla_health, timeout=2)
+                    if resp.status_code == 200:
+                        print(f"[OK] Vanilla Presidio service healthy at {vanilla_health}")
+                        healthy = True
+                        break
+                except Exception:
+                    time.sleep(1)
+            if not healthy:
+                print(f"[ERROR] Vanilla Presidio service failed to start on port 3001")
+                sys.exit(1)
+
     # ── Service health check ────────────────────────────────────────────────
     if not args.generate_only:
+        # Always check the primary service
         if not check_service(args.service_url):
-            print("\n[ABORT] Service not available. Start Presidio first.")
+            print("\n[ABORT] Primary service not available. Start Presidio first.")
+            sys.exit(1)
+        # If a separate baseline URL is configured, check it too
+        if args.baseline_url and not check_service(args.baseline_url):
+            print("\n[ABORT] Baseline service not available at " + args.baseline_url)
             sys.exit(1)
 
     # ── Route to appropriate evaluation suite ──────────────────────────────
@@ -237,6 +338,23 @@ def _run_phase1(args: argparse.Namespace) -> None:
         "--service-url", args.service_url,
         "--output-dir", args.output_dir,
     ]
+    if args.headless:
+        eval_args.extend(["--gateway-key", "aelvyril-benchmark-key"])
+    # Baseline URL handling:
+    # - Explicit --baseline-url overrides auto-detection
+    # - Auto-detect for headless phase1: vanilla Presidio runs on port 3001
+    if args.baseline_url:
+        eval_args.extend(["--baseline-url", args.baseline_url])
+    elif args.headless and args.suite in ("phase1", "all"):
+        base = args.service_url.rstrip("/")
+        if ":4242" in base:
+            # Aelvyril gateway → swap port AND endpoint to match vanilla Presidio
+            baseline_url = base.replace(":4242", ":3001").replace(
+                "/v1/chat/completions", "/analyze"
+            )
+        else:
+            baseline_url = base.replace("/v1/chat/completions", "/analyze")
+        eval_args.extend(["--baseline-url", baseline_url])
     if args.data:
         eval_args.extend(["--data", args.data])
     if args.aelvyril_only:
@@ -254,16 +372,18 @@ def _run_phase1(args: argparse.Namespace) -> None:
         sys.argv = original_argv
 
 
+
 def _run_pii_bench(args: argparse.Namespace) -> None:
-    """Run Phase 2: PII-Bench (Fudan) academic benchmark."""
+    """Run Phase 2: Nemotron-PII benchmark."""
     print("\n" + "=" * 60)
-    print("Phase 2: PII-Bench Evaluation")
+    print("Phase 2: Nemotron-PII Evaluation")
     print("=" * 60)
 
     eval_args = [
         "--service-url", args.service_url,
         "--seed", str(args.seed),
         "--output-dir", "benchmarks/pii_bench/results",
+        "--skip-download",
     ]
 
     from benchmarks.pii_bench.evaluator import main as pii_bench_main
@@ -286,6 +406,7 @@ def _run_tab(args: argparse.Namespace) -> None:
         "--service-url", args.service_url,
         "--seed", str(args.seed),
         "--output-dir", "benchmarks/tab/results",
+        "--skip-download",
     ]
 
     from benchmarks.tab.evaluator import main as tab_main
@@ -331,30 +452,40 @@ def _run_consolidation(args: argparse.Namespace) -> None:
     # Cross-benchmark comparison matrix
     _generate_cross_benchmark_report(results, args)
 
-    # Statistical significance (bootstrap)
+    # Statistical significance (bootstrap) using real per-sample metric distributions
     bootstrap_results = {}
 
     if results["pii_bench"]:
         pb = results["pii_bench"].get("benchmarks", {}).get("pii_bench", {})
+        per_sample = results["pii_bench"].get("per_sample", {})
         for metric in ["strict_f1", "entity_f1", "rouge_l_f"]:
             value = pb.get(metric, 0)
-            if value > 0:
-                # Simulate per-sample distribution for bootstrap
-                # In production, this would use actual per-sample scores
-                simulated = [value + np.random.normal(0, 0.02) for _ in range(100)]
-                bootstrap_results[f"pii_bench_{metric}"] = bootstrap_ci(
-                    simulated, num_iterations=10000, seed=args.seed
-                )
+            per_sample_scores = per_sample.get(metric, [])
+            if value > 0 and per_sample_scores:
+                # Use actual per-sample scores for valid bootstrap CI
+                sample_scores = per_sample_scores
+            else:
+                # Fallback: illegitimate but at least non-simulated (use mean ± 0 placeholder)
+                print(f"[WARN] Per-sample scores for nemotron_pii.{metric} missing; skipping bootstrap")
+                continue
+            bootstrap_results[f"nemotron_pii_{metric}"] = bootstrap_ci(
+                sample_scores, num_iterations=10000, seed=args.seed
+            )
 
     if results["tab"]:
         tab_eval = results["tab"].get("tab_evaluation", {})
+        per_sample = results["tab"].get("per_sample", {})
         for metric in ["recall_direct", "recall_quasi", "weighted_f1"]:
             value = tab_eval.get(metric, 0)
-            if value > 0:
-                simulated = [value + np.random.normal(0, 0.02) for _ in range(100)]
-                bootstrap_results[f"tab_{metric}"] = bootstrap_ci(
-                    simulated, num_iterations=10000, seed=args.seed
-                )
+            per_sample_scores = per_sample.get(metric, [])
+            if value > 0 and per_sample_scores:
+                sample_scores = per_sample_scores
+            else:
+                print(f"[WARN] Per-sample scores for tab.{metric} missing; skipping bootstrap")
+                continue
+            bootstrap_results[f"tab_{metric}"] = bootstrap_ci(
+                sample_scores, num_iterations=10000, seed=args.seed
+            )
 
     if bootstrap_results:
         sig_report = format_significance_report(bootstrap_results)
@@ -387,17 +518,15 @@ def _generate_cross_benchmark_report(results: dict, args: argparse.Namespace) ->
     if results["pii_bench"]:
         pb = results["pii_bench"].get("benchmarks", {}).get("pii_bench", {})
         sf = pb.get("strict_f1", 0)
-        gpt4o = 0.893
-        delta = sf - gpt4o
-        lines.append(f"| PII-Bench (Strict-F1) | Strict-F1 | {sf:.4f} | vs GPT-4o: {delta:+.4f} |")
         ef = pb.get("entity_f1", 0)
-        lines.append(f"| PII-Bench (Entity-F1) | Entity-F1 | {ef:.4f} | — |")
         rf = pb.get("rouge_l_f", 0)
-        lines.append(f"| PII-Bench (RougeL-F) | RougeL-F | {rf:.4f} | — |")
         f2 = pb.get("f2_score", 0)
-        lines.append(f"| PII-Bench (F₂) | F₂ (β=2) | {f2:.4f} | — |")
+        lines.append(f"| Nemotron-PII (Strict-F1) | Strict-F1 | {sf:.4f} | — |")
+        lines.append(f"| Nemotron-PII (Entity-F1) | Entity-F1 | {ef:.4f} | — |")
+        lines.append(f"| Nemotron-PII (RougeL-F) | RougeL-F | {rf:.4f} | — |")
+        lines.append(f"| Nemotron-PII (F₂) | F₂ (β=2) | {f2:.4f} | — |")
     else:
-        lines.append("| PII-Bench | — | not run | — |")
+        lines.append("| Nemotron-PII | — | not run | — |")
 
     if results["tab"]:
         tab_eval = results["tab"].get("tab_evaluation", {})

@@ -125,7 +125,7 @@ def generate_lock(check_only: bool = False) -> dict:
     # Git SHAs for cloned repos
     repo_dirs = {
         "presidio_research": "benchmarks/presidio_research/presidio-research",
-        "pii_bench": "benchmarks/pii_bench/PII-Bench",
+        "pii_bench": "benchmarks/data/nemotron-pii",
         "tab": "benchmarks/tab/text-anonymization-benchmark",
     }
     for key, rel_dir in repo_dirs.items():

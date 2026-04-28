@@ -1,15 +1,13 @@
 # Aelvyril PII Detection — Benchmark Comparison
 
-**Generated:** 2026-04-23T14:44:38.732579+00:00
+**Generated:** 2026-04-28T07:06:11.935925+00:00
 **Primary Metric:** F₂ (β=2, recall-weighted)
 **Philosophy:** Missing PII is worse than over-redaction
 
 ## Executive Summary
 
-- **F₂ Score (Presidio-Research):** 0.9612
-- **Strict-F1 (PII-Bench):** 0.9012
-- **vs GPT-4o:** +0.0082 (+0.8%)
-- **R_direct (TAB):** 0.9623
+- **F₂ Score (Presidio-Research):** 0.5863
+- **Strict-F1 (Nemotron-PII):** 0.1314
 - **Adversarial Robustness:** 0.9234
 - **Strict-F1 (spaCy NER baseline):** 0.6234
 
@@ -17,47 +15,44 @@
 
 | PII Type | Aelvyril Recall | Aelvyril Precision | Aelvyril F₂ | Presidio Baseline F₂ | spaCy NER F₂ | GPT-4o F1 (PII-Bench) | Priority | Source |
 |----------|-----------------|--------------------|-------------|----------------------|--------------|-----------------------|----------|--------|
-| **SSN** | 99.12% | 99.34% | 0.99 | — | — | — | P0 | Custom regex + Presidio |
-| **Credit Card** | 98.45% | 97.89% | 0.98 | — | — | — | P0 | Custom regex + Luhn |
-| **Email** | 99.34% | 99.56% | 0.99 | — | — | — | P0 | Custom regex + Presidio |
-| **Phone** | 97.89% | 96.54% | 0.97 | — | — | — | P0 | Custom regex (tuned) |
-| **IBAN** | 99.67% | 99.45% | 1.00 | — | — | — | P0 | Custom regex + checksum |
-| **IP Address** | 96.54% | 94.89% | 0.96 | — | — | — | P1 | Custom regex + context filter |
-| **Person** | 95.12% | 92.34% | 0.94 | 0.63 | 0.83 | 0.998 | P1 | Presidio NER passthrough |
-| **Location** | 87.23% | 90.12% | 0.88 | 0.23 | 0.71 | 0.769 | P2 | Presidio NER passthrough |
-| **Organization** | 78.91% | 83.45% | 0.80 | — | 0.60 | 0.604 | P2 | Presidio NER passthrough |
-| **API Key** | 92.34% | 87.89% | 0.91 | — | — | — | P1 | Custom regex (synthetic eval only) |
-| **Domain** | 90.12% | 92.34% | 0.91 | — | — | — | P2 | Custom regex (synthetic eval only) |
-| **Date** | 87.89% | 90.12% | 0.88 | — | — | — | P3 | Custom regex (synthetic eval only) |
-| **Zip Code** | 89.12% | 91.23% | 0.90 | — | — | — | P3 | Custom regex (synthetic eval only) |
+| **SSN** | 86.57% | 100.00% | 0.89 | — | — | — | P0 | Custom regex + Presidio |
+| **Credit Card** | 0.00% | 0.00% | 0.00 | — | — | — | P0 | Custom regex + Luhn |
+| **Email** | 0.00% | 0.00% | 0.00 | — | — | — | P0 | Custom regex + Presidio |
+| **Phone** | 99.49% | 23.11% | 0.60 | — | — | — | P0 | Custom regex (tuned) |
+| **IBAN** | 0.00% | 0.00% | 0.00 | — | — | — | P0 | Custom regex + checksum |
+| **IP Address** | 100.00% | 100.00% | 1.00 | — | — | — | P1 | Custom regex + context filter |
+| **Person** | 81.00% | 79.91% | 0.81 | 0.63 | 0.83 | 0.998 | P1 | Presidio NER passthrough |
+| **Location** | 86.67% | 62.05% | 0.80 | 0.23 | 0.71 | 0.769 | P2 | Presidio NER passthrough |
+| **Organization** | 98.04% | 60.98% | 0.87 | — | 0.60 | 0.604 | P2 | Presidio NER passthrough |
+| **API Key** | 96.27% | 98.10% | 0.97 | — | — | — | P1 | Custom regex (synthetic eval only) |
+| **Domain** | ≥88% | ≥90% | ≥0.88 | — | — | — | P2 | Custom regex (synthetic eval only) |
+| **Date** | 7.95% | 25.53% | 0.09 | — | — | — | P3 | Custom regex (synthetic eval only) |
+| **Zip Code** | 100.00% | 32.78% | 0.71 | — | — | — | P3 | Custom regex (synthetic eval only) |
 
 > Targets are from the Aelvyril benchmark plan. Actual results replace targets once benchmarks are run.
 > **†** Presidio baseline values are from presidio-research evaluation.
 > **‡** spaCy NER F₂ is a standalone baseline (no Presidio regex overlay).
 
-## PII-Bench Comparison (arxiv:2502.18545)
+## Nemotron-PII Benchmark (NVIDIA, CC BY 4.0)
 
 | System | Strict-F1 | Entity-F1 | RougeL-F | Source |
 |--------|-----------|-----------|----------|--------|
-| **Aelvyril** | **0.9012** | **0.9189** | **0.9345** | This work |
-| GPT-4o | 0.893 | 0.912 | 0.935 | arxiv:2502.18545 |
-| Claude-3.5 | 0.876 | 0.898 | 0.921 | arxiv:2502.18545 (projected) |
-| DeepSeek | 0.841 | 0.867 | 0.891 | arxiv:2502.18545 (projected) |
+| **Aelvyril** | **0.1314** | **0.0632** | **0.2528** | This work |
 
 ## spaCy NER Baseline (Standalone)
 
 | System | Strict-F1 | Entity-F1 | RougeL-F | Source |
 |--------|-----------|-----------|----------|--------|
 | **spaCy NER (en_core_web_lg)** | **0.6234** | **0.6789** | **0.7123** | spaCy v3.x |
-| Aelvyril (same dataset) | 0.9012 | 0.9189 | 0.9345 | This work |
+| Aelvyril (Nemotron-PII) | 0.1314 | 0.0632 | 0.2528 | This work |
 
 ## TAB Anonymization Quality (arxiv:2202.00443)
 
 | Metric | Value | Assessment |
 |--------|-------|------------|
-| **R_direct** (must-mask recall) | 0.9623 | ✅ Low risk |
-| **R_quasi** (should-mask recall) | 0.8434 | ✅ Low risk |
-| **Weighted F1** | 0.9012 | — |
+| **R_direct** (must-mask recall) | 0.0000 | ❌ High risk |
+| **R_quasi** (should-mask recall) | 0.0000 | ❌ High risk |
+| **Weighted F1** | 0.0000 | — |
 
 ## Supplementary Benchmarks
 
@@ -94,6 +89,18 @@
 
 **Overall Robustness:** 0.9234
 
+### Cross-Lingual Detection
+
+**Aggregate:** F₂=0.0000, F₁=0.0000, Recall=0.0000
+
+| Locale | Samples | Precision | Recall | F₁ | F₂ |
+|--------|---------|-----------|--------|-----|-----|
+| en_US | 37 | 0.0000 | 0.0000 | 0.0000 | 0.0000 |
+| de_DE | 37 | 0.0000 | 0.0000 | 0.0000 | 0.0000 |
+| fr_FR | 37 | 0.0000 | 0.0000 | 0.0000 | 0.0000 |
+| es_MX | 37 | 0.0000 | 0.0000 | 0.0000 | 0.0000 |
+
+
 ## Methodology
 
 - **F₂ (β=2):** Recall-weighted F-score — missing PII penalized 4× more than false positives
@@ -119,3 +126,68 @@ docker compose -f benchmarks/docker-compose.bench.yml up -d
 ```
 
 See `benchmarks/versions.lock` for pinned dependency versions and `benchmarks/BENCHMARK_METHODOLOGY.md` for full methodology.
+
+---
+
+## Benchmark Trends
+
+**Runs tracked:** 14
+**First run:** 2026-04-25T09:14:43.039694+00:00
+**Latest run:** 2026-04-28T07:06:11.948501+00:00
+
+### Metric Trends (Latest vs Previous)
+
+| Metric | Latest | Previous | Δ | Trend |
+|--------|--------|----------|---|-------|
+| presidio_research/f2 | 0.5863 | 0.5863 | +0.0000 | → |
+| presidio_research/f1 | 0.5328 | 0.5328 | +0.0000 | → |
+| presidio_research/recall | 0.6283 | 0.6283 | +0.0000 | → |
+| presidio_research/precision | 0.4625 | 0.4625 | +0.0000 | → |
+| nemotron_pii/strict_f1 | 0.1314 | 0.1314 | +0.0000 | → |
+| nemotron_pii/entity_f1 | 0.0632 | 0.0632 | +0.0000 | → |
+| nemotron_pii/rouge_l_f | 0.2528 | 0.2528 | +0.0000 | → |
+| nemotron_pii/f2_score | 0.1311 | 0.1311 | +0.0000 | → |
+| tab/recall_direct | 0.0000 | 0.0000 | +0.0000 | → |
+| tab/recall_quasi | 0.0000 | 0.0000 | +0.0000 | → |
+| tab/weighted_f1 | 0.0000 | 0.0000 | +0.0000 | → |
+| adversarial/robustness | 0.9234 | 0.9234 | +0.0000 | → |
+| cross_lingual/f1 | 0.0000 | 0.0000 | +0.0000 | → |
+| cross_lingual/f2 | 0.0000 | 0.0000 | +0.0000 | → |
+| cross_lingual/precision | 0.0000 | 0.0000 | +0.0000 | → |
+| cross_lingual/recall | 0.0000 | 0.0000 | +0.0000 | → |
+
+### Run History
+
+| # | Timestamp | Git SHA | Suites |
+|---|-----------|---------|--------|
+| 1 | 2026-04-25T12:10:10 | `fc09e4df` | presidio_research, pii_bench, tab, datafog, ai4privacy, adversarial, spacy |
+| 2 | 2026-04-25T13:36:57 | `fc09e4df` | presidio_research, pii_bench, tab, datafog, ai4privacy, adversarial, spacy |
+| 3 | 2026-04-25T14:01:59 | `fc09e4df` | presidio_research, pii_bench, tab, datafog, ai4privacy, adversarial, spacy |
+| 4 | 2026-04-25T14:42:58 | `fc09e4df` | presidio_research, pii_bench, tab, datafog, ai4privacy, adversarial, spacy |
+| 5 | 2026-04-25T15:53:40 | `fc09e4df` | presidio_research, pii_bench, tab, datafog, ai4privacy, adversarial, spacy |
+| 6 | 2026-04-25T15:54:15 | `fc09e4df` | presidio_research, pii_bench, tab, datafog, ai4privacy, adversarial, spacy |
+| 7 | 2026-04-25T15:55:56 | `fc09e4df` | presidio_research, pii_bench, tab, datafog, ai4privacy, adversarial, spacy |
+| 8 | 2026-04-26T07:04:42 | `fc09e4df` | presidio_research, pii_bench, tab, datafog, ai4privacy, adversarial, spacy, cross_lingual |
+| 9 | 2026-04-28T06:50:08 | `fc09e4df` | presidio_research, pii_bench, tab, datafog, ai4privacy, adversarial, spacy, cross_lingual |
+| 10 | 2026-04-28T07:06:11 | `fc09e4df` | presidio_research, pii_bench, tab, datafog, ai4privacy, adversarial, spacy, cross_lingual |
+
+### Moving Averages (Last 5 Runs)
+
+| Metric | 5-Run Avg | Std Dev | Stability |
+|--------|-----------|---------|-----------|
+| adversarial/robustness | 0.9234 | 0.0000 | ✅ Stable |
+| cross_lingual/f1 | 0.0000 | 0.0000 | ✅ Stable |
+| cross_lingual/f2 | 0.0000 | 0.0000 | ✅ Stable |
+| cross_lingual/precision | 0.0000 | 0.0000 | ✅ Stable |
+| cross_lingual/recall | 0.0000 | 0.0000 | ✅ Stable |
+| nemotron_pii/entity_f1 | 0.5162 | 0.3699 | 🔴 Volatile |
+| nemotron_pii/f2_score | 0.4449 | 0.2562 | 🔴 Volatile |
+| nemotron_pii/rouge_l_f | 0.1011 | 0.1238 | 🔴 Volatile |
+| nemotron_pii/strict_f1 | 0.4064 | 0.2246 | 🔴 Volatile |
+| presidio_research/f1 | 0.6462 | 0.1216 | 🔴 Volatile |
+| presidio_research/f2 | 0.6613 | 0.1350 | 🔴 Volatile |
+| presidio_research/precision | 0.6489 | 0.1540 | 🔴 Volatile |
+| presidio_research/recall | 0.6770 | 0.1491 | 🔴 Volatile |
+| tab/recall_direct | 0.3682 | 0.3007 | 🔴 Volatile |
+| tab/recall_quasi | 0.4541 | 0.3708 | 🔴 Volatile |
+| tab/weighted_f1 | 0.0000 | 0.0000 | ✅ Stable |

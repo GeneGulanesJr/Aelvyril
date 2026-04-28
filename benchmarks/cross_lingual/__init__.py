@@ -326,7 +326,14 @@ def evaluate_cross_lingual(
             try:
                 resp = requests.post(
                     service_url,
-                    json={"text": sample["text"], "language": lang},
+                    json={
+                        "messages": [{"role": "user", "content": sample["text"]}],
+                        "model": "none",
+                    },
+                    headers={
+                        "Authorization": "Bearer aelvyril-benchmark-key",
+                        "X-Benchmark-Mode": "raw-detections",
+                    },
                     timeout=10,
                 )
                 resp.raise_for_status()

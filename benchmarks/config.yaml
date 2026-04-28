@@ -8,8 +8,8 @@ num_samples: 1000           # Default number of synthetic samples
 iou_threshold: 0.5          # IoU threshold for span matching
 
 # ── Service endpoints ────────────────────────────────────────────────────────────
-service_url: "http://localhost:3000/analyze"
-health_url: "http://localhost:3000/health"
+service_url: "http://localhost:4242/v1/chat/completions"
+health_url: "http://localhost:4242/health"
 
 # ── Metrics ──────────────────────────────────────────────────────────────────────
 primary_metric: "f2"        # F₂ (β=2, recall-weighted)
@@ -65,30 +65,14 @@ entity_types:
     target_recall: 0.85
     target_precision: 0.90
 
-# ── Phase 2: PII-Bench configuration ────────────────────────────────────────────
-pii_bench:
+# ── Phase 2: Nemotron-PII configuration ──────────────────────────────────────────
+nemotron_pii:
   tolerance: 0              # Character tolerance for Strict-F1 (0 = exact)
-  splits:                   # Which splits to evaluate (null = all)
-    - pii_single
-    - pii_multi
-    - pii_hard
-    - pii_distract
-  baselines:
-    GPT-4o:
-      strict_f1: 0.893
-      entity_f1: 0.912
-      rouge_l_f: 0.935
-      source: "arxiv:2502.18545 Table 2"
-    DeepSeek:
-      strict_f1: 0.841
-      entity_f1: 0.867
-      rouge_l_f: 0.891
-      source: "arxiv:2502.18545 Table 2 (projected)"
-    Claude-3.5:
-      strict_f1: 0.876
-      entity_f1: 0.898
-      rouge_l_f: 0.921
-      source: "arxiv:2502.18545 Table 2 (projected)"
+  max_samples: null         # Limit samples (null = all 50,000)
+  domains: null             # Filter by domain (null = all)
+  document_formats: null    # Filter by format (null = all)
+  source: "NVIDIA Nemotron-PII (CC BY 4.0)"
+  source_url: "https://huggingface.co/datasets/nvidia/Nemotron-PII"
 
 # ── Phase 2: TAB configuration ──────────────────────────────────────────────────
 tab:

@@ -6,14 +6,14 @@ Runs all benchmark phases in order, generates dashboards, runs the publication
 pipeline, and optionally updates versions.lock.
 
 Usage:
-    python benchmarks/run_all.py
+    python benchmarks/run_all.py --aelvyril-only
+    python benchmarks/run_all.py --service-url http://127.0.0.1:4242/v1/chat/completions --aelvyril-only
     python benchmarks/run_all.py --skip-phase1          # Skip Presidio-Research
     python benchmarks/run_all.py --skip-phase2          # Skip PII-Bench + TAB
     python benchmarks/run_all.py --skip-phase3          # Skip supplementary
     python benchmarks/run_all.py --skip-spacy           # Skip spaCy baseline
     python benchmarks/run_all.py --skip-publication     # Skip report generation
     python benchmarks/run_all.py --update-versions      # Update versions.lock
-    python benchmarks/run_all.py --service-url http://... # Custom endpoint
 """
 
 from __future__ import annotations
@@ -42,7 +42,9 @@ def _run_module(module: str, args: list[str]) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="One-shot Aelvyril benchmark orchestration")
-    parser.add_argument("--service-url", type=str, default="http://localhost:3000/analyze")
+    parser.add_argument("--service-url", type=str, default="http://localhost:4242/v1/chat/completions")
+    parser.add_argument("--baseline-url", type=str, default=None)
+    parser.add_argument("--aelvyril-only", action="store_true", help="Skip vanilla Presidio baseline; use Aelvyril only")
     parser.add_argument("--num-samples", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--data", type=str, default=None)
@@ -81,6 +83,10 @@ def main() -> None:
             phase1_args.extend(["--data", args.data])
         if args.clear_cache:
             phase1_args.append("--clear-cache")
+        if args.aelvyril_only:
+            phase1_args.append("--aelvyril-only")
+        if args.baseline_url:
+            phase1_args.extend(["--baseline-url", args.baseline_url])
         rc = _run_module("benchmarks.run", phase1_args)
         if rc != 0:
             failures.append("phase1")
@@ -94,12 +100,17 @@ def main() -> None:
         ]
         if args.data:
             phase2_args.extend(["--data", args.data])
+        if args.aelvyril_only:
+            phase2_args.append("--aelvyril-only")
+        if args.baseline_url:
+            phase2_args.extend(["--baseline-url", args.baseline_url])
         rc = _run_module("benchmarks.run", phase2_args)
         if rc != 0:
             failures.append("phase2")
 
     # ── spaCy baseline ───────────────────────────────────────────────────────
-    if not args.skip_spacy:
+    # Only run spaCy baseline when NOT in Aelvyril-only mode
+    if not args.skip_spacy and not args.aelvyril_only:
         spacy_args = [
             "--suite", "spacy",
             "--seed", str(args.seed),
@@ -120,6 +131,10 @@ def main() -> None:
         ]
         if args.data:
             phase3_args.extend(["--data", args.data])
+        if args.aelvyril_only:
+            phase3_args.append("--aelvyril-only")
+        if args.baseline_url:
+            phase3_args.extend(["--baseline-url", args.baseline_url])
         rc = _run_module("benchmarks.run", phase3_args)
         if rc != 0:
             failures.append("phase3")
@@ -135,6 +150,10 @@ def main() -> None:
             "--suite", "publication",
             "--service-url", args.service_url,
         ]
+        if args.aelvyril_only:
+            pub_args.append("--aelvyril-only")
+        if args.baseline_url:
+            pub_args.extend(["--baseline-url", args.baseline_url])
         rc = _run_module("benchmarks.run", pub_args)
         if rc != 0:
             failures.append("publication")

@@ -3,6 +3,7 @@ pub mod clipboard;
 pub mod lists;
 pub mod onboarding;
 pub mod orchestrator;
+// pub mod pattern_mining;
 pub mod providers;
 pub mod rate_limit;
 pub mod security;
@@ -16,6 +17,7 @@ pub use clipboard::*;
 pub use lists::*;
 pub use onboarding::*;
 pub use orchestrator::*;
+// pub use pattern_mining::*;
 pub use providers::*;
 pub use rate_limit::*;
 pub use security::*;
@@ -100,4 +102,3 @@ pub fn invoke_handler<R: tauri::Runtime>(
         get_validation_result,
     ]
 }
-

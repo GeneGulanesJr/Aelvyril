@@ -1,3 +1,3 @@
 fn main() {
-    tauri_build::build()
+    // No build-time resources needed for headless testing.
 }

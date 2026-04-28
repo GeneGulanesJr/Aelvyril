@@ -109,13 +109,9 @@ impl TokenUsageTracker {
                 } else {
                     0.0
                 };
-                let avg_duration_ms = self.daily_duration_samples
-                    .get(&date)
-                    .map(|samples| {
-                        let s = samples.lock();
-                        crate::token_usage::tracker::compute_duration_percentiles(&s).0
-                    })
-                    .unwrap_or(0.0);
+                let avg_duration_ms = self
+                    .get_duration_percentiles(&format!("d:{}", date))
+                    .0;
                 DailyTokenTrend {
                     date,
                     tokens_in_system: s.tokens_in_system,

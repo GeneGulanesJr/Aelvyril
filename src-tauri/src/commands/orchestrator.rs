@@ -57,8 +57,12 @@ pub async fn start_orchestrator_task(
 
     // Persist to SQLite
     let store = open_store()?;
-    let _ = store.save_task(&orch_state_obj.task);
-    let _ = store.save_orch_state(&orch_state_obj);
+    if let Err(e) = store.save_task(&orch_state_obj.task) {
+        tracing::warn!("Failed to persist new task {}: {}", task_id, e);
+    }
+    if let Err(e) = store.save_orch_state(&orch_state_obj) {
+        tracing::warn!("Failed to persist orchestrator state for {}: {}", task_id, e);
+    }
 
     // Clone what we need for the background task
     let app_state = state.inner().clone();
@@ -182,13 +186,19 @@ pub async fn cancel_orchestrator_task(
     // Also signal via the watch channel so the pi executor can kill
     // the subprocess immediately without waiting for a timeout.
     if let Some(ref tx) = state.cancel_tx {
-        let _ = tx.send(true);
+        if let Err(e) = tx.send(true) {
+            tracing::warn!("Failed to send cancel signal for task {}: {}", task_id, e);
+        }
     }
 
     // Persist
     let store = open_store()?;
-    let _ = store.save_task(&state.task);
-    let _ = store.save_orch_state(state);
+    if let Err(e) = store.save_task(&state.task) {
+        tracing::warn!("Failed to persist cancelled task {}: {}", task_id, e);
+    }
+    if let Err(e) = store.save_orch_state(state) {
+        tracing::warn!("Failed to persist orchestrator state on cancel for {}: {}", task_id, e);
+    }
 
     Ok(())
 }

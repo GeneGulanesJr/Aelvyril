@@ -179,14 +179,14 @@ class TrendTracker:
                 if val is not None:
                     metrics[f"presidio_research/{key}"] = float(val)
 
-        # Phase 2: PII-Bench
+        # Phase 2: Nemotron-PII
         pb = benchmarks.get("pii_bench")
         if pb:
             pb_metrics = pb.get("benchmarks", {}).get("pii_bench", {})
             for key in ("strict_f1", "entity_f1", "rouge_l_f", "f2_score"):
                 val = pb_metrics.get(key)
                 if val is not None:
-                    metrics[f"pii_bench/{key}"] = float(val)
+                    metrics[f"nemotron_pii/{key}"] = float(val)
 
         # Phase 2: TAB
         tab = benchmarks.get("tab")

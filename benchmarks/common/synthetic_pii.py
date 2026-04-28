@@ -234,18 +234,58 @@ def _random_ssn(rng: random.Random) -> str:
 
 
 def _random_credit_card(rng: random.Random) -> str:
-    # Generate a valid-looking 16-digit card number (Luhn-like prefix)
+    # Generate a 16-digit number that passes the Luhn checksum.
     prefixes = ["4", "5"]
     prefix = rng.choice(prefixes)
-    digits = prefix + "".join(str(rng.randint(0, 9)) for _ in range(15))
-    return " ".join(digits[i:i + 4] for i in range(0, 16, 4))
+    # Generate 15 random digits + 1 check digit
+    digits = [int(d) for d in prefix] + [rng.randint(0, 9) for _ in range(14)]
+    # Compute Luhn check digit
+    def luhn_check_digit(nums: list[int]) -> int:
+        total = 0
+        # Double every second digit from the right (excluding check digit position)
+        for i in range(len(nums) - 1, -1, -1):
+            d = nums[i]
+            if (len(nums) - i) % 2 == 0:
+                d = d * 2
+                if d > 9:
+                    d -= 9
+            total += d
+        return (10 - (total % 10)) % 10
+    check = luhn_check_digit(digits)
+    digits.append(check)
+    # Format with spaces every 4 digits
+    s = "".join(str(d) for d in digits)
+    return " ".join(s[i:i+4] for i in range(0, 16, 4))
 
 
 def _random_iban(rng: random.Random) -> str:
+    # Correct BBAN lengths per ISO 13616 (total = 4 + bban_len)
+    _BBAN_LENGTH = {
+        "GB": 18,  # 22 total
+        "DE": 18,  # 22
+        "FR": 23,  # 27
+        "ES": 20,  # 24
+        "IT": 23,  # 27
+        "NL": 14,  # 18
+        "BE": 12,  # 16
+        "AT": 16,  # 20
+        "CH": 17,  # 21
+        "PL": 24,  # 28
+    }
     country = rng.choice(["GB", "DE", "FR", "ES", "IT", "NL", "BE", "AT", "CH", "PL"])
-    check = f"{rng.randint(10, 99)}"
-    bban = "".join(str(rng.randint(0, 9)) for _ in range(18))
-    return f"{country}{check}{bban}"
+    bban_len = _BBAN_LENGTH[country]
+    bban = "".join(str(rng.randint(0, 9)) for _ in range(bban_len))
+
+    # Compute correct check digits per IBAN spec:
+    # 1. Form string: country + "00" + bban (00 = placeholder check digits)
+    # 2. Move first 4 characters to the end
+    # 3. Replace letters with numbers (A=10, B=11, ..., Z=35)
+    # 4. Mod 97, then check digits = 98 - mod
+    base = country + "00" + bban
+    rearranged = base[4:] + base[:4]
+    num_str = "".join(str(ord(c) - 55) if c.isalpha() else c for c in rearranged)
+    check_digits = 98 - (int(num_str) % 97)
+    return f"{country}{check_digits:02d}{bban}"
 
 
 def _random_ip(rng: random.Random) -> str:

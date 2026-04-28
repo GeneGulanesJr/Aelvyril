@@ -584,7 +584,7 @@ class AdversarialResult:
 
 
 def run_adversarial_evaluation(
-    service_url: str = "http://localhost:3000/analyze",
+    service_url: str | None = None,
     seed: int = 42,
     categories: Optional[List[str]] = None,
     output_dir: str = "benchmarks/supplementary/results",

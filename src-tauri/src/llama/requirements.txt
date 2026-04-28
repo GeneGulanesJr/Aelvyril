@@ -1,0 +1,12 @@
+# Aelvyril LFM2.5-350M chat-template helper
+#
+# tokenizers loads the local tokenizer.json
+# jinja2 renders the chat_template.jinja (no transformers dependency)
+#
+# Install:
+#   pip install -r requirements.txt
+#
+# Used by detector.rs via prompt_helper.py
+
+tokenizers>=0.15,<1.0
+jinja2>=3.0

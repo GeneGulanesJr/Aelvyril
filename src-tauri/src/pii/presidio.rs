@@ -96,6 +96,10 @@ impl std::error::Error for PresidioError {}
 
 /// Map Presidio entity type strings to our `PiiType` enum.
 /// Presidio supports many more types — unrecognized ones are preserved as custom.
+///
+/// The PiiType Display impl emits UPPER_SNAKE_CASE strings, matching the
+/// gold annotation namespace used by all benchmark datasets. This ensures
+/// entity type comparison in scoring is a simple string equality check.
 fn presidio_entity_to_pii_type(entity: &str) -> PiiType {
     match entity {
         "EMAIL_ADDRESS" => PiiType::Email,
@@ -105,22 +109,35 @@ fn presidio_entity_to_pii_type(entity: &str) -> PiiType {
         "US_SSN" => PiiType::Ssn,
         "IBAN_CODE" => PiiType::Iban,
         "API_KEY" | "CRYPTO" | "MEDICAL_LICENSE" => PiiType::ApiKey,
-        "URL" | "DOMAIN_NAME" => PiiType::Domain,
-        "DATE_TIME" | "DATE" => PiiType::Date,
+        "URL" => PiiType::Domain,
+        "DOMAIN_NAME" => PiiType::Domain,
+        "DATE_TIME" => PiiType::Date,
+        "DATE" => PiiType::Date,
         "US_ZIP_CODE" | "ZIP_CODE" => PiiType::ZipCode,
-        // NER-driven entity types (Phase 0 — Presidio passthrough)
+        // Fine-grained NER types
+        "CITY" => PiiType::City,
+        "US_STATE" => PiiType::UsState,
+        "STREET_ADDRESS" => PiiType::StreetAddress,
+        "COUNTRY" => PiiType::Country,
+        "NATIONALITY" => PiiType::Nationality,
+        "TITLE" => PiiType::Title,
+        "MEDICAL_RECORD" => PiiType::MedicalRecord,
+        "AGE" => PiiType::Age,
+        "SWIFT_CODE" => PiiType::SwiftCode,
+        "US_BANK_NUMBER" => PiiType::UsBankNumber,
+        "US_PASSPORT" => PiiType::UsPassport,
+        "US_DRIVER_LICENSE" => PiiType::UsDriverLicense,
+        // Generic NER types
         "PERSON" | "PER" => PiiType::Person,
-        "LOCATION" | "US_STATE" | "CITY" | "STREET_ADDRESS" | "LOC" => PiiType::Location,
+        "LOCATION" | "LOC" => PiiType::Location,
         "ORGANIZATION" | "ORG" | "NRP" => PiiType::Organization,
-        // Map financial identifiers to ApiKey (high-confidence catch-all)
-        "US_BANK_NUMBER" | "US_PASSPORT" | "UK_NHS" => PiiType::ApiKey,
-        // Default — preserve as ApiKey with high confidence so nothing slips through
+        // Catch-all for any unmapped Presidio type — preserve verbatim
         _ => {
             tracing::debug!(
                 ?entity,
-                "Unmapped Presidio entity type, treating as high-confidence"
+                "Unmapped Presidio entity type, preserving as Custom"
             );
-            PiiType::ApiKey
+            PiiType::Custom(entity.to_string())
         }
     }
 }
@@ -474,7 +491,7 @@ mod tests {
         assert_eq!(presidio_entity_to_pii_type("PERSON"), PiiType::Person);
         assert_eq!(presidio_entity_to_pii_type("LOCATION"), PiiType::Location);
         assert_eq!(presidio_entity_to_pii_type("ORGANIZATION"), PiiType::Organization);
-        assert_eq!(presidio_entity_to_pii_type("UNKNOWN_TYPE"), PiiType::ApiKey);
+        assert_eq!(presidio_entity_to_pii_type("UNKNOWN_TYPE"), PiiType::Custom("UNKNOWN_TYPE".to_string()));
     }
 
     #[test]

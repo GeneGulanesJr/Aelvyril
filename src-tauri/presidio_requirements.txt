@@ -12,3 +12,7 @@
 flask>=3.0,<4.0
 flask-cors>=4.0,<5.0
 presidio-analyzer>=2.2,<3.0
+
+
+# Llama chat-templating helper (separate from Presidio)
+# See src/llama/requirements.txt

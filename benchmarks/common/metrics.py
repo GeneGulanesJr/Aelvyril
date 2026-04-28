@@ -6,12 +6,117 @@ where missing PII is worse than over-redaction.
 
 F₂ = (1 + β²) × (Precision × Recall) / (β² × Precision + Recall)
 where β = 2 (recall weighted 2× over precision)
+
+Core supported types:
+    Aelvyril can detect 24 entity types split across two mechanisms:
+
+    REGEX_ONLY (10 types): Always available via built-in regex recognizers.
+        EMAIL_ADDRESS, PHONE_NUMBER, IP_ADDRESS, CREDIT_CARD, US_SSN,
+        IBAN_CODE, API_KEY, URL, DATE_TIME, US_ZIP_CODE.
+
+    NER_DEPENDENT (14 types): Require Presidio NER service integration.
+        PERSON, LOCATION, ORGANIZATION, CITY, US_STATE, STREET_ADDRESS,
+        COUNTRY, NATIONALITY, TITLE, MEDICAL_RECORD, AGE, SWIFT_CODE,
+        US_BANK_NUMBER, US_PASSPORT, US_DRIVER_LICENSE.
+
+    CORE_SUPPORTED_TYPES = REGEX_ONLY | NER_DEPENDENT (all 24 types).
+    Use compute_core_aggregate(regex_only=True) to evaluate fallback-only.
+
+    Excluded from evaluation:
+      - "NRP" — demographic attributes (gender, race, religion, politics,
+        sexuality) that are NOT PII. Excluded from all pipelines.
+      - "ID" — generic catch-all (device_identifier, unique_id, customer_id,
+        employee_id, vehicle_identifier). No Aelvyril recognizer produces it.
+
+    Gold types not in the core set still appear in per-entity breakdowns
+    (for transparency) but are excluded from the core aggregate so
+    unsupported types don't deflate the overall score.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
+
+
+# ── Core supported types ──────────────────────────────────────────────────
+#
+# Types Aelvyril can detect, split by detection mechanism:
+#
+#   REGEX_ONLY: Always available — detected by built-in regex recognizers.
+#              These types work even when Presidio NER is unavailable.
+#
+#   NER_DEPENDENT: Require Presidio NER service. Detected through Aelvyril's
+#                  Presidio integration (mapped in presidio.rs). If Presidio
+#                  is down, these types have zero recall.
+#
+# CORE_SUPPORTED_TYPES = union of both sets. Used for the "core aggregate"
+# in benchmark reports. All 24 types are in the PiiType enum and have Display
+# mappings, so they're part of Aelvyril's canonical namespace.
+#
+# Important: The core aggregate includes all 24 types because they are all
+# *supported* by Aelvyril (when Presidio is available). If Presidio is down,
+# use REGEX_ONLY for a fairer aggregate. This is clearly documented so
+# aggregate scores are interpretable.
+
+REGEX_ONLY: Set[str] = {
+    "EMAIL_ADDRESS",
+    "PHONE_NUMBER",
+    "IP_ADDRESS",
+    "CREDIT_CARD",
+    "US_SSN",
+    "IBAN_CODE",
+    "API_KEY",
+    "URL",
+    "DATE_TIME",
+    "US_ZIP_CODE",
+}
+
+NER_DEPENDENT: Set[str] = {
+    "PERSON",
+    "LOCATION",
+    "ORGANIZATION",
+    "CITY",
+    "US_STATE",
+    "STREET_ADDRESS",
+    "COUNTRY",
+    "NATIONALITY",
+    "TITLE",
+    "MEDICAL_RECORD",
+    "AGE",
+    "SWIFT_CODE",
+    "US_BANK_NUMBER",
+    "US_PASSPORT",
+    "US_DRIVER_LICENSE",
+}
+
+CORE_SUPPORTED_TYPES: Set[str] = REGEX_ONLY | NER_DEPENDENT
+
+
+def compute_core_aggregate(
+    per_entity: Dict[str, "EntityMetrics"],
+    average: str = "micro",
+    regex_only: bool = False,
+) -> Tuple["EntityMetrics", Set[str]]:
+    """Compute aggregate over only the core supported types.
+
+    Args:
+        per_entity: Per-entity metrics from evaluate_entity_types().
+        average: "micro" or "macro".
+        regex_only: If True, only include types detectable by regex
+                   (no Presidio NER dependency). Useful for evaluating
+                   fallback performance when Presidio is unavailable.
+
+    Returns:
+        Tuple of (aggregate EntityMetrics, set of included entity types).
+    """
+    supported = REGEX_ONLY if regex_only else CORE_SUPPORTED_TYPES
+    filtered = {
+        k: v for k, v in per_entity.items()
+        if k in supported
+    }
+    included = set(filtered.keys())
+    return compute_aggregate(filtered, average=average), included
 
 
 @dataclass

@@ -44,14 +44,31 @@ TAB_DATA_FILES = {
     "test": f"{TAB_REPO}/echr_test.json",
 }
 
-# TAB entity type to Aelvyril/Presidio entity type mapping
+# TAB entity type → benchmark canonical namespace.
+#
+# TAB uses a simpler schema (PERSON, ORG, LOC, DATETIME, CODE, DEM).
+# Fine-grained types map to their canonical equivalents; unrecognized
+# types (like CODE for case/court references) pass through unchanged.
+
 TAB_ENTITY_MAP: Dict[str, str] = {
     "PERSON": "PERSON",
     "ORG": "ORGANIZATION",
+    "ORGANIZATION": "ORGANIZATION",
     "LOC": "LOCATION",
+    "LOCATION": "LOCATION",
+    "CITY": "CITY",
+    "US_STATE": "US_STATE",
+    "STREET_ADDRESS": "STREET_ADDRESS",
+    "COUNTRY": "COUNTRY",
     "DATETIME": "DATE_TIME",
-    "CODE": "CODE",  # Case/court reference numbers — no Aelvyril equivalent
-    "DEM": "LOCATION",  # Demographic descriptors — mapped to Location
+    "DATE": "DATE_TIME",
+    # CODE = court/case reference numbers — no Aelvyril equivalent, pass through
+    "CODE": "CODE",
+    # DEM (demographic descriptors) → LOCATION for legal context
+    "DEM": "LOCATION",
+    # Remaining fine-grained
+    "PER": "PERSON",
+    "NRP": "ORGANIZATION",
 }
 
 # Which identifier types require masking
@@ -119,8 +136,15 @@ def download_tab(
             continue
 
     if total_docs == 0:
-        print("[WARN] Could not download TAB corpus. Generating synthetic test data...")
-        _generate_synthetic_tab(data_dir)
+        raise RuntimeError(
+            "TAB corpus download failed (all URLs returned errors). "
+            "The repository (github.com/NorskRegnesentral/text-anonymization-benchmark) "
+            "may be temporarily unavailable.\n\n"
+            "Options:\n"
+            "  1. Retry later.\n"
+            "  2. Download manually and place echr_test.json in "
+            f"     {data_dir}/"
+        )
     else:
         # Write download manifest
         manifest = {
@@ -130,6 +154,7 @@ def download_tab(
             "files": [os.path.basename(f) for f in downloaded_files],
             "source": "TAB (NorskRegnesentral/text-anonymization-benchmark)",
             "license": "MIT",
+            "data_source": "real",
         }
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
@@ -238,92 +263,3 @@ def normalize_tab_document(doc: dict) -> dict:
     }
 
 
-def _generate_synthetic_tab(data_dir: str) -> None:
-    """Generate synthetic TAB-compatible test data for pipeline validation.
-
-    NOT a substitute for the real benchmark — validates pipeline only.
-    """
-    import random
-
-    from faker import Faker
-
-    Faker.seed(42)
-    fake = Faker("en_US")
-    random.seed(42)
-
-    docs: List[dict] = []
-
-    for i in range(50):
-        text_parts: List[str] = []
-        mentions: List[dict] = []
-        offset = 0
-
-        # Generate a document with mixed entity types
-        segments = [
-            (f"In the case of ", None),
-            (fake.name(), ("PERSON", "DIRECT")),
-            (f" (born {fake.date()}), the court examined events in ", ("DATETIME", "QUASI")),
-            (fake.city(), ("LOC", "QUASI")),
-            (". ", None),
-            (f"The applicant, {fake.name()}", ("PERSON", "DIRECT")),
-            (f", was represented by {fake.company()}", ("ORG", "QUASI")),
-            (f". Contact via {fake.email()}", ("PERSON", "QUASI")),
-            (f" or phone {fake.phone_number()}", ("PERSON", "QUASI")),
-            (". Case reference: ", None),
-            (f"{random.randint(10000, 99999)}/{random.randint(90, 99)}", ("CODE", "DIRECT")),
-            (".", None),
-        ]
-
-        for segment_text, entity_info in segments:
-            start = offset
-            end = offset + len(segment_text)
-            text_parts.append(segment_text)
-
-            if entity_info:
-                entity_type, identifier_type = entity_info
-                mentions.append({
-                    "entity_type": entity_type,
-                    "entity_mention_id": f"synth_{i}_em{len(mentions)}",
-                    "start_offset": start,
-                    "end_offset": end,
-                    "span_text": segment_text,
-                    "edit_type": "check",
-                    "identifier_type": identifier_type,
-                    "entity_id": f"synth_{i}_e{len(mentions)}",
-                    "confidential_status": "NOT_CONFIDENTIAL",
-                })
-
-            offset = end
-
-        full_text = "".join(text_parts)
-        docs.append({
-            "doc_id": f"synth_{i:04d}",
-            "text": full_text,
-            "dataset_type": "test",
-            "annotations": {
-                "annotator1": {
-                    "entity_mentions": mentions,
-                }
-            },
-            "quality_checked": True,
-            "task": "anonymize_applicant",
-            "_split": "test",
-        })
-
-    output_path = os.path.join(data_dir, "echr_test.json")
-    with open(output_path, "w") as f:
-        json.dump(docs, f, indent=2)
-
-    manifest = {
-        "status": "complete",
-        "total_documents": len(docs),
-        "splits": ["test"],
-        "files": ["echr_test.json"],
-        "source": "synthetic (for pipeline validation only)",
-        "note": "Run download_tab() with force=True to get real TAB corpus",
-    }
-    manifest_path = os.path.join(data_dir, "download_manifest.json")
-    with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
-
-    print(f"  Generated {len(docs)} synthetic TAB documents → {output_path}")

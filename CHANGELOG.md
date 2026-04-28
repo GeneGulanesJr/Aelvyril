@@ -69,4 +69,4 @@
 
 ## 2026-04-14
 - Expanded `design.md` into a production-ready design spec by adding semantic color/state tokens, typography scale, layout/spacing system, component guidance, and accessibility requirements.
-- Synced `plan.md` Shot 1 checklist to current implementation status (checked completed scaffolding, gateway, keychain, PII, pseudonymization, and sessions; left local ONNX model + streaming rehydration/failover unchecked).
+- Synced `plan.md` Shot 1 checklist to current implementation status (checked completed scaffolding, gateway, keychain, PII, pseudonymization, and sessions; left local model + streaming rehydration/failover unchecked).

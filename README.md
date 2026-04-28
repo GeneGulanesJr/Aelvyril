@@ -167,7 +167,7 @@ src-tauri/src/
 ├── orchestrator/     # Plan-and-execute coding agent (state machine, planner, executor, validator)
 ├── lists/            # Allow/deny list manager
 ├── perf/             # Latency benchmarking, PII detection cache
-├── model/            # Contextual signal classifier (feature-based + optional ONNX)
+├── model/            # Contextual signal classifier (feature-based regex + llama.cpp GGUF)
 ├── commands/         # Tauri IPC commands
 ├── bridge/           # WebSocket bridge for browser extension
 ├── bootstrap/        # App initialization and setup

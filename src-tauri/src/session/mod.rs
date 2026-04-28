@@ -117,6 +117,12 @@ impl SessionManager {
         Some(f(entry.value_mut()))
     }
 
+    /// Remove a session's mapping table entirely.
+    /// Used by benchmark-mode requests to avoid unbounded memory growth.
+    pub fn clear_mapping(&self, session_id: &str) {
+        self.mapping_tables.remove(session_id);
+    }
+
     /// Record a request in a session
     pub fn record_request(
         &self,

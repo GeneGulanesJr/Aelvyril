@@ -1,6 +1,6 @@
 {
   "aelvyril_version": "dev",
-  "timestamp": "2026-04-25T04:26:05.728055+00:00",
+  "timestamp": "2026-04-26T07:04:38.225000+00:00",
   "aggregate": {
     "entity_type": "AGGREGATE",
     "precision": 0.0,
@@ -9,8 +9,8 @@
     "f2": 0.0,
     "tp": 0,
     "fp": 0,
-    "fn": 1406,
-    "gold_count": 1406,
+    "fn": 436,
+    "gold_count": 436,
     "pred_count": 0
   },
   "per_entity": {
@@ -22,8 +22,8 @@
       "f2": 0.0,
       "tp": 0,
       "fp": 0,
-      "fn": 72,
-      "gold_count": 72,
+      "fn": 26,
+      "gold_count": 26,
       "pred_count": 0
     },
     "CITY": {
@@ -34,8 +34,8 @@
       "f2": 0.0,
       "tp": 0,
       "fp": 0,
-      "fn": 24,
-      "gold_count": 24,
+      "fn": 7,
+      "gold_count": 7,
       "pred_count": 0
     },
     "CREDIT_CARD": {
@@ -46,8 +46,8 @@
       "f2": 0.0,
       "tp": 0,
       "fp": 0,
-      "fn": 59,
-      "gold_count": 59,
+      "fn": 18,
+      "gold_count": 18,
       "pred_count": 0
     },
     "DATE_TIME": {
@@ -58,8 +58,8 @@
       "f2": 0.0,
       "tp": 0,
       "fp": 0,
-      "fn": 73,
-      "gold_count": 73,
+      "fn": 21,
+      "gold_count": 21,
       "pred_count": 0
     },
     "EMAIL_ADDRESS": {
@@ -70,8 +70,8 @@
       "f2": 0.0,
       "tp": 0,
       "fp": 0,
-      "fn": 184,
-      "gold_count": 184,
+      "fn": 62,
+      "gold_count": 62,
       "pred_count": 0
     },
     "IBAN_CODE": {
@@ -82,8 +82,8 @@
       "f2": 0.0,
       "tp": 0,
       "fp": 0,
-      "fn": 15,
-      "gold_count": 15,
+      "fn": 8,
+      "gold_count": 8,
       "pred_count": 0
     },
     "IP_ADDRESS": {
@@ -94,8 +94,8 @@
       "f2": 0.0,
       "tp": 0,
       "fp": 0,
-      "fn": 113,
-      "gold_count": 113,
+      "fn": 40,
+      "gold_count": 40,
       "pred_count": 0
     },
     "LOCATION": {
@@ -106,8 +106,8 @@
       "f2": 0.0,
       "tp": 0,
       "fp": 0,
-      "fn": 163,
-      "gold_count": 163,
+      "fn": 46,
+      "gold_count": 46,
       "pred_count": 0
     },
     "ORGANIZATION": {
@@ -118,8 +118,8 @@
       "f2": 0.0,
       "tp": 0,
       "fp": 0,
-      "fn": 96,
-      "gold_count": 96,
+      "fn": 30,
+      "gold_count": 30,
       "pred_count": 0
     },
     "PERSON": {
@@ -130,8 +130,8 @@
       "f2": 0.0,
       "tp": 0,
       "fp": 0,
-      "fn": 314,
-      "gold_count": 314,
+      "fn": 98,
+      "gold_count": 98,
       "pred_count": 0
     },
     "PHONE_NUMBER": {
@@ -142,8 +142,8 @@
       "f2": 0.0,
       "tp": 0,
       "fp": 0,
-      "fn": 96,
-      "gold_count": 96,
+      "fn": 31,
+      "gold_count": 31,
       "pred_count": 0
     },
     "STREET_ADDRESS": {
@@ -154,8 +154,8 @@
       "f2": 0.0,
       "tp": 0,
       "fp": 0,
-      "fn": 62,
-      "gold_count": 62,
+      "fn": 20,
+      "gold_count": 20,
       "pred_count": 0
     },
     "US_SSN": {
@@ -166,8 +166,8 @@
       "f2": 0.0,
       "tp": 0,
       "fp": 0,
-      "fn": 79,
-      "gold_count": 79,
+      "fn": 16,
+      "gold_count": 16,
       "pred_count": 0
     },
     "US_ZIP_CODE": {
@@ -178,16 +178,16 @@
       "f2": 0.0,
       "tp": 0,
       "fp": 0,
-      "fn": 56,
-      "gold_count": 56,
+      "fn": 13,
+      "gold_count": 13,
       "pred_count": 0
     }
   },
   "meta": {
     "benchmark": "datafog",
-    "num_samples": 500,
+    "num_samples": 150,
     "iou_threshold": 0.5,
-    "elapsed_seconds": 0.016857624053955078,
+    "elapsed_seconds": 0.0018842220306396484,
     "bootstrap": {
       "metric": "bootstrap",
       "observed": NaN,

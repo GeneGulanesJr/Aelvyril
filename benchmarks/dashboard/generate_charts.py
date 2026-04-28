@@ -234,10 +234,7 @@ def generate_comparison_table(
         pb = pii_bench.get("benchmarks", {}).get("pii_bench", {})
         sf = pb.get("strict_f1", 0)
         if sf:
-            summary_metrics.append(f"- **Strict-F1 (PII-Bench):** {sf:.4f}")
-            gpt4o = 0.893
-            delta = sf - gpt4o
-            summary_metrics.append(f"- **vs GPT-4o:** {delta:+.4f} ({delta*100:+.1f}%)")
+            summary_metrics.append(f"- **Strict-F1 (Nemotron-PII):** {sf:.4f}")
 
     if tab:
         te = tab.get("tab_evaluation", {})
@@ -327,8 +324,8 @@ def generate_comparison_table(
     lines.append("> **‡** spaCy NER F₂ is a standalone baseline (no Presidio regex overlay).")
     lines.append("")
 
-    # ── PII-Bench Comparison ─────────────────────────────────────────────
-    lines.append("## PII-Bench Comparison (arxiv:2502.18545)")
+    # ── Nemotron-PII Results ─────────────────────────────────────────────
+    lines.append("## Nemotron-PII Benchmark (NVIDIA, CC BY 4.0)")
     lines.append("")
     lines.append("| System | Strict-F1 | Entity-F1 | RougeL-F | Source |")
     lines.append("|--------|-----------|-----------|----------|--------|")
@@ -341,10 +338,6 @@ def generate_comparison_table(
         )
     else:
         lines.append("| **Aelvyril** | _pending_ | _pending_ | _pending_ | — |")
-
-    lines.append("| GPT-4o | 0.893 | 0.912 | 0.935 | arxiv:2502.18545 |")
-    lines.append("| Claude-3.5 | 0.876 | 0.898 | 0.921 | arxiv:2502.18545 (projected) |")
-    lines.append("| DeepSeek | 0.841 | 0.867 | 0.891 | arxiv:2502.18545 (projected) |")
     lines.append("")
 
     # ── spaCy NER Baseline ────────────────────────────────────────────────
@@ -365,7 +358,7 @@ def generate_comparison_table(
     if pii_bench:
         pb = pii_bench.get("benchmarks", {}).get("pii_bench", {})
         lines.append(
-            f"| Aelvyril (same dataset) | {pb.get('strict_f1', 0):.4f} | "
+            f"| Aelvyril (Nemotron-PII) | {pb.get('strict_f1', 0):.4f} | "
             f"{pb.get('entity_f1', 0):.4f} | {pb.get('rouge_l_f', 0):.4f} | This work |"
         )
     else:

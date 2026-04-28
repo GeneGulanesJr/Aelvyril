@@ -1,10 +1,10 @@
 {
   "aelvyril_version": "dev",
-  "timestamp": "2026-04-25T04:15:45Z",
+  "timestamp": "2026-04-26T09:03:54Z",
   "tab_evaluation": {
     "precision": 0.0,
-    "recall_direct": 0.6055,
-    "recall_quasi": 0.6793,
+    "recall_direct": 0.0,
+    "recall_quasi": 0.0,
     "f1_direct": 0.0,
     "f1_quasi": 0.0,
     "weighted_f1": 0.0,
@@ -16,7 +16,7 @@
       "gold_direct": 365,
       "gold_quasi": 4796,
       "gold_no_mask": 2210,
-      "predicted": 5111
+      "predicted": 2710
     },
     "per_entity": {
       "CODE": {
@@ -31,48 +31,59 @@
         "quasi_count": 187
       },
       "DATE_TIME": {
-        "precision": 0.86,
-        "recall": 0.9679,
-        "f1": 0.9108,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
         "recall_direct": 1.0,
-        "recall_quasi": 0.9699,
+        "recall_quasi": 0.0,
         "gold_count": 2615,
-        "pred_count": 2943,
+        "pred_count": 0,
         "direct_count": 0,
         "quasi_count": 2488
       },
       "LOCATION": {
-        "precision": 0.4855,
-        "recall": 0.428,
-        "f1": 0.4549,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
         "recall_direct": 1.0,
-        "recall_quasi": 0.394,
+        "recall_quasi": 0.0,
         "gold_count": 979,
-        "pred_count": 863,
+        "pred_count": 0,
         "direct_count": 0,
         "quasi_count": 533
       },
       "ORGANIZATION": {
-        "precision": 0.0152,
-        "recall": 0.0015,
-        "f1": 0.0028,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
         "recall_direct": 0.0,
-        "recall_quasi": 0.0018,
+        "recall_quasi": 0.0,
         "gold_count": 1937,
-        "pred_count": 198,
+        "pred_count": 0,
         "direct_count": 4,
         "quasi_count": 557
       },
       "PERSON": {
-        "precision": 0.8207,
-        "recall": 0.8523,
-        "f1": 0.8362,
-        "recall_direct": 0.9779,
-        "recall_quasi": 0.8661,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "recall_direct": 0.0,
+        "recall_quasi": 0.0,
         "gold_count": 1063,
-        "pred_count": 1104,
+        "pred_count": 0,
         "direct_count": 226,
         "quasi_count": 732
+      },
+      "PHONE_NUMBER": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "recall_direct": 1.0,
+        "recall_quasi": 1.0,
+        "gold_count": 0,
+        "pred_count": 2710,
+        "direct_count": 0,
+        "quasi_count": 0
       },
       "MISC": {
         "precision": 0.0,
@@ -95,28 +106,6 @@
         "pred_count": 0,
         "direct_count": 0,
         "quasi_count": 175
-      },
-      "URL": {
-        "precision": 0.0,
-        "recall": 0.0,
-        "f1": 0.0,
-        "recall_direct": 1.0,
-        "recall_quasi": 1.0,
-        "gold_count": 0,
-        "pred_count": 2,
-        "direct_count": 0,
-        "quasi_count": 0
-      },
-      "US_DRIVER_LICENSE": {
-        "precision": 0.0,
-        "recall": 0.0,
-        "f1": 0.0,
-        "recall_direct": 1.0,
-        "recall_quasi": 1.0,
-        "gold_count": 0,
-        "pred_count": 1,
-        "direct_count": 0,
-        "quasi_count": 0
       }
     }
   },

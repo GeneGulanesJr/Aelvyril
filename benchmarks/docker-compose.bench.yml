@@ -1,26 +1,4 @@
-# Benchmark stack docker-compose — Aelvyril + Presidio + health checks
-#
-# Brings up reproducible environment for benchmark runs.
-# Services:
-#   presidio  — Microsoft Presidio HTTP analyzer (baseline evaluatable)
-#   mock      — Aelvyril mock /analyze (for CI / offline runs; enable with --profile ci)
-#
-# Usage:
-#   docker compose -f benchmarks/docker-compose.bench.yml up -d presidio
-#   # Wait for health: docker compose ps
-#   python3 -m benchmarks.run --suite all --service-url http://localhost:5000/analyze
-#   docker compose -f benchmarks/docker-compose.bench.yml down
-#
-# Notes:
-#   - The full Aelvyril desktop app cannot be containerized (Tauri GUI). For
-#     Phase 1 Presidio baseline, use the 'presidio' service above.
-#   - For Phase 3 adversarial + PII-Bench runs against Aelvyril's own detector,
-#     run the local mock service (benchmarks/mock_service.py) or the real app
-#     (usually at http://localhost:3000/analyze). The 'mock' service in this
-#     compose file can be started via: docker compose --profile ci up -d mock
-
-version: "3.9"
-
+version: '3.9'
 services:
   presidio:
     build:
@@ -28,39 +6,71 @@ services:
       dockerfile: benchmarks/presidio_service.Dockerfile
     container_name: aelvyril-presidio
     ports:
-      - "5000:3000"
+    - 5000:3000
     environment:
-      - AELVYRIL_PRESIDIO_HOST=0.0.0.0
-      - PRESIDIO_HOST=0.0.0.0
+    - AELVYRIL_PRESIDIO_HOST=0.0.0.0
+    - PRESIDIO_HOST=0.0.0.0
+    - AELVYRIL_MODE=enhanced
     volumes:
-      - ./data:/app/data:ro
+    - ./data:/app/data:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:3000/health
       interval: 5s
       timeout: 3s
       retries: 5
       start_period: 10s
     networks:
-      - bench-net
-
+    - bench-net
   mock:
     build:
       context: ..
       dockerfile: benchmarks/mock_service.Dockerfile
     container_name: aelvyril-mock
     ports:
-      - "3000:3000"
+    - 3000:3000
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:3000/health
       interval: 3s
       timeout: 2s
       retries: 3
       start_period: 3s
     networks:
-      - bench-net
+    - bench-net
     profiles:
-      - ci  # Only started with: docker compose --profile ci up
-
+    - ci
+  presidio-vanilla:
+    build:
+      context: ..
+      dockerfile: benchmarks/presidio_service.Dockerfile
+    container_name: aelvyril-presidio-vanilla
+    ports:
+    - 5001:3000
+    environment:
+    - AELVYRIL_PRESIDIO_HOST=0.0.0.0
+    - PRESIDIO_HOST=0.0.0.0
+    - AELVYRIL_MODE=vanilla
+    volumes:
+    - ./data:/app/data:ro
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:3000/health
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+    - bench-net
 networks:
   bench-net:
     driver: bridge

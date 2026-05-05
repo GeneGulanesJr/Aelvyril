@@ -17,7 +17,10 @@ describe('AgentProcess', () => {
     processes.push(proc);
     expect(proc.isRunning()).toBe(true);
     proc.kill();
-    await new Promise(r => setTimeout(r, 100));
+    const start = Date.now();
+    while (proc.isRunning() && Date.now() - start < 5000) {
+      await new Promise(r => setTimeout(r, 10));
+    }
     expect(proc.isRunning()).toBe(false);
   });
 
@@ -27,9 +30,15 @@ describe('AgentProcess', () => {
       agentType: 'test', sessionId: 'test-session', memoryDbPath: '/tmp/test-memory.db',
     });
     processes.push(proc);
-    const error = await new Promise<string>(resolve => {
+
+    const timeout = new Promise<string>((_, reject) =>
+      setTimeout(() => reject(new Error('stderr capture timed out')), 5000)
+    );
+    const error = new Promise<string>(resolve => {
       proc.onStderr((data) => resolve(data.toString()));
     });
-    expect(error).toContain('test error');
+
+    const result = await Promise.race([error, timeout]);
+    expect(result).toContain('test error');
   });
 });

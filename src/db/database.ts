@@ -57,7 +57,7 @@ export class Database {
     return this.raw.prepare(`
       SELECT session_id, agent_type, ticket_id, action, details, timestamp
       FROM audit_log WHERE session_id = ?
-      ORDER BY timestamp DESC LIMIT ?
+      ORDER BY id DESC LIMIT ?
     `).all(sessionId, limit) as AuditEntry[];
   }
 

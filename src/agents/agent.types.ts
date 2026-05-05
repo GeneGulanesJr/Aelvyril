@@ -20,6 +20,7 @@ export interface AgentStatus {
   sessionId: string;
   /** null means the process is not currently running */
   pid: number | null;
+  running: boolean;
   spawnedAt: string;
   lastHealthcheck: string | null;
 }

@@ -1,0 +1,110 @@
+:root {
+  --bg-primary: #0a0a0a;
+  --bg-secondary: #111111;
+  --bg-tertiary: #1a1a1a;
+  --bg-hover: #222222;
+  --text-primary: #e0e0e0;
+  --text-secondary: #888888;
+  --text-dim: #555555;
+  --accent-green: #4caf50;
+  --accent-blue: #42a5f5;
+  --accent-yellow: #fdd835;
+  --accent-red: #ef5350;
+  --accent-purple: #ab47bc;
+  --border-color: #333333;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  --font-size-sm: 12px;
+  --font-size-md: 14px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  overflow: hidden;
+  height: 100vh;
+}
+
+#root { height: 100vh; display: flex; flex-direction: column; }
+
+.app-layout { display: flex; height: 100vh; }
+.app-sidebar { width: 360px; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; }
+.app-main { flex: 1; display: flex; overflow: hidden; }
+.app-aside { width: 300px; border-left: 1px solid var(--border-color); }
+
+.chat-panel { display: flex; flex-direction: column; height: 100%; }
+.chat-header { padding: 12px 16px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 8px; }
+.chat-title { font-weight: bold; color: var(--accent-green); }
+.chat-status { font-size: 10px; }
+.chat-status.connected { color: var(--accent-green); }
+.chat-status.disconnected { color: var(--accent-red); }
+
+.chat-messages { flex: 1; overflow-y: auto; padding: 12px; }
+.chat-message { margin-bottom: 8px; padding: 6px 10px; border-radius: 4px; max-width: 90%; }
+.chat-message.user_to_supervisor { background: var(--bg-tertiary); margin-left: auto; border: 1px solid var(--border-color); }
+.chat-message.supervisor_to_user { background: rgba(66, 165, 245, 0.1); border: 1px solid rgba(66, 165, 245, 0.3); }
+.chat-message-content { display: block; }
+.chat-message-time { font-size: var(--font-size-sm); color: var(--text-dim); }
+.chat-empty { color: var(--text-dim); text-align: center; padding: 40px; }
+
+.chat-input-form { display: flex; border-top: 1px solid var(--border-color); padding: 8px; }
+.chat-input { flex: 1; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); font-family: var(--font-mono); font-size: var(--font-size-md); padding: 8px 12px; border-radius: 4px; outline: none; }
+.chat-input:focus { border-color: var(--accent-blue); }
+.chat-input:disabled { opacity: 0.5; }
+.chat-send { background: var(--accent-green); border: none; color: var(--bg-primary); padding: 8px 16px; margin-left: 8px; border-radius: 4px; cursor: pointer; font-family: var(--font-mono); font-weight: bold; }
+.chat-send:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.kanban-board { display: flex; height: 100%; overflow-x: auto; }
+.kanban-column { flex: 1; min-width: 200px; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; }
+.kanban-column-header { padding: 12px; border-bottom: 1px solid var(--border-color); font-weight: bold; display: flex; align-items: center; gap: 8px; position: sticky; top: 0; background: var(--bg-secondary); }
+.kanban-count { background: var(--bg-tertiary); padding: 2px 8px; border-radius: 10px; font-size: var(--font-size-sm); color: var(--text-secondary); }
+.kanban-column-body { flex: 1; padding: 8px; overflow-y: auto; }
+
+.ticket-card { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; margin-bottom: 8px; cursor: default; }
+.ticket-card:hover { border-color: var(--accent-blue); }
+.ticket-card.held { border-color: var(--accent-yellow); opacity: 0.7; }
+.ticket-id { font-size: var(--font-size-sm); color: var(--text-secondary); }
+.ticket-title { margin: 4px 0; }
+.ticket-meta { display: flex; gap: 8px; font-size: var(--font-size-sm); color: var(--text-dim); }
+.ticket-agent { color: var(--accent-blue); }
+.ticket-cost { color: var(--accent-green); }
+.ticket-rejects { color: var(--accent-red); }
+
+.kanban-held-notice { position: fixed; bottom: 16px; right: 16px; background: var(--accent-yellow); color: var(--bg-primary); padding: 8px 16px; border-radius: 6px; font-weight: bold; }
+
+.activity-feed { display: flex; flex-direction: column; height: 100%; }
+.activity-header { padding: 12px; border-bottom: 1px solid var(--border-color); font-weight: bold; }
+.activity-entries { flex: 1; overflow-y: auto; padding: 8px; }
+.activity-entry { padding: 4px 0; font-size: var(--font-size-sm); display: flex; gap: 8px; }
+.activity-time { color: var(--text-dim); min-width: 70px; }
+.activity-agent { font-weight: bold; min-width: 100px; }
+.activity-ticket { color: var(--accent-blue); }
+.activity-empty { color: var(--text-dim); text-align: center; padding: 40px; }
+
+.cost-dashboard { padding: 16px; }
+.cost-header { display: flex; justify-content: space-between; margin-bottom: 16px; }
+.cost-total { display: flex; gap: 16px; }
+.cost-tokens { color: var(--text-secondary); }
+.cost-usd { color: var(--accent-green); font-weight: bold; }
+.cost-section { margin-bottom: 24px; }
+.cost-section h4 { margin-bottom: 8px; color: var(--text-secondary); }
+.cost-table { width: 100%; border-collapse: collapse; }
+.cost-table th, .cost-table td { padding: 4px 8px; text-align: left; border-bottom: 1px solid var(--border-color); }
+.cost-table th { color: var(--text-dim); font-size: var(--font-size-sm); }
+.cost-empty { color: var(--text-dim); text-align: center; padding: 40px; }
+
+.settings-page { padding: 24px; max-width: 600px; }
+.settings-section { margin-bottom: 24px; }
+.settings-section h3 { margin-bottom: 12px; color: var(--accent-blue); }
+.settings-field { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.settings-field label { min-width: 120px; color: var(--text-secondary); text-transform: capitalize; }
+.settings-field input, .settings-field select { flex: 1; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); font-family: var(--font-mono); padding: 6px 10px; border-radius: 4px; }
+.settings-save { background: var(--accent-blue); border: none; color: var(--bg-primary); padding: 10px 24px; border-radius: 4px; cursor: pointer; font-family: var(--font-mono); font-weight: bold; }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }

@@ -15,6 +15,8 @@ describe('WorkspaceManager', () => {
 
     remoteRepo = path.join(tmpDir, 'remote-repo');
     fs.mkdirSync(remoteRepo);
+    execSync('git config --global user.email "test@test.com"');
+    execSync('git config --global user.name "Test"');
     execSync('git init', { cwd: remoteRepo });
     fs.writeFileSync(path.join(remoteRepo, 'README.md'), '# Test Repo');
     execSync('git add .', { cwd: remoteRepo });

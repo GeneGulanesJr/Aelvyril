@@ -1,0 +1,221 @@
+import { Database } from './db/database.js';
+import { SessionManager } from './sessions/session-manager.js';
+import { AgentPool } from './agents/agent-pool.js';
+import { BoardManager } from './board/board-manager.js';
+import { BoardEvents } from './board/board-events.js';
+import { ChatHandler } from './supervisor/chat-handler.js';
+import { WatchdogAgent, DEFAULT_WATCHDOG_CONFIG } from './agents/watchdog/watchdog-agent.js';
+import { TestAgent, type TestAgentConfig } from './agents/test-agent/test-agent.js';
+import { ReviewAgent, type ReviewAgentConfig } from './agents/review-agent/review-agent.js';
+import { createTicketBranch, createPR, mergePR } from './agents/main-agent/git-operations.js';
+import { getNextDispatchable } from './agents/main-agent/wave-executor.js';
+import { buildTicketPrompt } from './agents/ticket-agent/prompt-builder.js';
+import { parsePlanResponse } from './agents/ticket-agent/plan-parser.js';
+import type { Ticket, TicketStatus, ConcurrencyPlan } from './types/common.js';
+
+export interface OrchestratorConfig {
+  port: number;
+  workspaceRoot: string;
+  dbPath: string;
+}
+
+export class Orchestrator {
+  public readonly db: Database;
+  public readonly sessionManager: SessionManager;
+  public readonly agentPool: AgentPool;
+  public readonly boardEvents: BoardEvents;
+
+  private watchdogs: Map<string, WatchdogAgent> = new Map();
+  private boards: Map<string, BoardManager> = new Map();
+
+  constructor(private config: OrchestratorConfig) {
+    this.db = new Database(config.dbPath);
+    this.sessionManager = new SessionManager(this.db, config.workspaceRoot);
+    this.agentPool = new AgentPool();
+    this.boardEvents = new BoardEvents();
+  }
+
+  startSession(repoUrl: string): { sessionId: string; board: BoardManager } {
+    const session = this.sessionManager.create(repoUrl);
+    const board = new BoardManager(this.db, session.id);
+    this.boards.set(session.id, board);
+
+    const memoryDbPath = `${session.repo_path}/.aelvyril/memory.db`;
+    this.agentPool.spawnLongRunning('supervisor', session.id, memoryDbPath, 'supervisor');
+    this.agentPool.spawnLongRunning('main_agent', session.id, memoryDbPath, 'main');
+    this.agentPool.spawnLongRunning('watchdog', session.id, memoryDbPath, 'watchdog');
+
+    const watchdog = new WatchdogAgent(this.agentPool, board, session.id, DEFAULT_WATCHDOG_CONFIG);
+    watchdog.setCallbacks({
+      onProgress: (report) => {
+        this.boardEvents.emitBoardState({
+          session_id: session.id,
+          tickets: board.getTickets(),
+          plan: board.getConcurrencyPlan() ?? { max_parallel: 1, waves: [], conflict_groups: [] },
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      },
+      onEscalate: (ticketId, message) => {
+        this.boardEvents.emit('escalation', { session_id: session.id, ticket_id: ticketId, message });
+      },
+      onIntervention: (stuck, action) => {
+        this.boardEvents.emit('agent_activity', {
+          agent: 'WATCHDOG',
+          action: `Intervention: ${action} for ${stuck.ticket_id}`,
+        });
+      },
+    });
+    watchdog.start();
+    this.watchdogs.set(session.id, watchdog);
+
+    return { sessionId: session.id, board };
+  }
+
+  async routeMessage(sessionId: string, content: string): Promise<void> {
+    const board = this.boards.get(sessionId);
+    if (!board) throw new Error(`Session ${sessionId} not found`);
+
+    const session = this.sessionManager.get(sessionId);
+    if (!session) throw new Error(`Session ${sessionId} not found`);
+
+    const chatHandler = new ChatHandler({
+      onNewRequest: async (req) => {
+        const memoryDbPath = `${session.repo_path}/.aelvyril/memory.db`;
+        const prompt = buildTicketPrompt(req, []);
+        this.boardEvents.emit('agent_activity', {
+          agent: 'TICKET_AGENT',
+          action: `Decomposing request: "${req}"`,
+        });
+      },
+      onRedirect: async (ticketId, content) => {
+        this.boardEvents.emit('agent_activity', {
+          agent: 'SUPERVISOR',
+          action: `Redirecting ${ticketId}: ${content}`,
+        });
+      },
+      onStatusCheck: async () => {
+        const tickets = board.getTickets();
+        const plan = board.getConcurrencyPlan();
+        this.boardEvents.emit('supervisor_response', {
+          message: `${tickets.length} tickets. Plan: ${plan ? `${plan.max_parallel} parallel, ${plan.waves.length} waves` : 'No plan yet'}`,
+        });
+      },
+      onCancel: async () => {
+        this.agentPool.killEphemeral();
+        this.boardEvents.emit('supervisor_response', { message: 'All tasks cancelled.' });
+      },
+      onConfigUpdate: async (key, value) => {
+        this.boardEvents.emit('supervisor_response', { message: `Config updated: ${key}` });
+      },
+    });
+
+    await chatHandler.handleMessage(sessionId, content);
+  }
+
+  async processTickets(sessionId: string): Promise<void> {
+    const board = this.boards.get(sessionId);
+    if (!board) return;
+
+    const plan = board.getConcurrencyPlan();
+    if (!plan) return;
+
+    const tickets = board.getTickets();
+    const dispatchable = getNextDispatchable(tickets, plan, 0);
+
+    for (const ticketId of dispatchable) {
+      const ticket = board.getTicket(ticketId);
+      if (!ticket) continue;
+
+      board.transition(ticketId, 'in_progress');
+
+      const session = this.sessionManager.get(sessionId);
+      if (session) {
+        createTicketBranch(session.repo_path, ticketId, sessionId);
+      }
+
+      this.boardEvents.emit('agent_activity', {
+        agent: 'MAIN_AGENT',
+        action: `Dispatched ${ticketId} (${ticket.title})`,
+      });
+    }
+  }
+
+  async runTests(sessionId: string, ticketId: string): Promise<void> {
+    const board = this.boards.get(sessionId);
+    if (!board) return;
+
+    const session = this.sessionManager.get(sessionId);
+    if (!session) return;
+
+    const ticket = board.getTicket(ticketId);
+    if (!ticket) return;
+
+    board.transition(ticketId, 'testing');
+
+    const testAgent = new TestAgent(this.agentPool, board, {
+      sessionId,
+      sessionBranch: `aelvyril/session-${sessionId}`,
+      memoryDbPath: `${session.repo_path}/.aelvyril/memory.db`,
+      workspacePath: session.repo_path,
+    });
+
+    const result = await testAgent.execute(ticket, []);
+
+    if (result.passed) {
+      board.transition(ticketId, 'in_review');
+      await this.runReview(sessionId, ticketId);
+    } else {
+      board.transition(ticketId, 'in_progress');
+      this.boardEvents.emit('agent_activity', {
+        agent: 'TEST_AGENT',
+        action: `Tests failed for ${ticketId}: ${result.failures.map(f => f.test_name).join(', ')}`,
+      });
+    }
+  }
+
+  async runReview(sessionId: string, ticketId: string): Promise<void> {
+    const board = this.boards.get(sessionId);
+    if (!board) return;
+
+    const session = this.sessionManager.get(sessionId);
+    if (!session) return;
+
+    const ticket = board.getTicket(ticketId);
+    if (!ticket) return;
+
+    const reviewAgent = new ReviewAgent(this.agentPool, board, {
+      sessionId,
+      sessionBranch: `aelvyril/session-${sessionId}`,
+      memoryDbPath: `${session.repo_path}/.aelvyril/memory.db`,
+      workspacePath: session.repo_path,
+    });
+
+    const decision = await reviewAgent.execute(ticket, []);
+
+    this.boardEvents.emit('agent_activity', {
+      agent: 'REVIEW_AGENT',
+      action: `${decision.approved ? '✅ Approved' : '❌ Rejected'} ${ticketId}: ${decision.summary}`,
+    });
+  }
+
+  destroySession(sessionId: string): void {
+    const watchdog = this.watchdogs.get(sessionId);
+    watchdog?.stop();
+    this.watchdogs.delete(sessionId);
+    this.boards.delete(sessionId);
+    this.agentPool.killAll();
+  }
+
+  getBoard(sessionId: string): BoardManager | undefined {
+    return this.boards.get(sessionId);
+  }
+
+  shutdown(): void {
+    for (const [id] of this.watchdogs) {
+      this.watchdogs.get(id)?.stop();
+    }
+    this.agentPool.killAll();
+    this.db.close();
+  }
+}

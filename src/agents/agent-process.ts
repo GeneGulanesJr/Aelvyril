@@ -59,7 +59,9 @@ export class AgentProcess {
     });
     this.child.on('error', () => { this.child = null; });
     this.child.on('close', () => { this.child = null; });
-    this.child.stdin?.on('error', () => {});
+    this.child.stdin?.on('error', (err) => {
+      console.error(`[AgentProcess] stdin error for agent ${this.config.agentType}:`, err.message);
+    });
   }
 
   isRunning(): boolean {

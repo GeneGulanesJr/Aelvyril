@@ -1,6 +1,13 @@
 import { ChildProcess, spawn } from 'child_process';
 import type { AgentProcessConfig, AgentStatus } from './agent.types.js';
 
+const BLOCKED_ENV_VARS = new Set([
+  'PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'HOME', 'USER', 'SHELL',
+  'NODE_OPTIONS', 'ELECTRON_RUN_AS_NODE', 'DYLD_INSERT_LIBRARIES',
+  'DYLD_LIBRARY_PATH', 'IFS', 'ENV', 'BASH_ENV', 'PYTHONPATH',
+  'PERL5LIB', 'RUBYLIB', 'CLASSPATH', 'DOTNET_ROOT', 'JAVA_HOME',
+]);
+
 export class AgentProcess {
   private child: ChildProcess | null = null;
   private readonly config: AgentProcessConfig;
@@ -16,13 +23,17 @@ export class AgentProcess {
   }
 
   private spawn(): void {
-    const env = {
-      ...process.env,
-      ...this.config.env,
-      AELVYRIL_SESSION_ID: this.config.sessionId,
-      AELVYRIL_MEMORY_DB: this.config.memoryDbPath,
-      AELVYRIL_AGENT_TYPE: this.config.agentType,
-    };
+    const env: Record<string, string | undefined> = { ...process.env };
+    if (this.config.env) {
+      for (const [key, value] of Object.entries(this.config.env)) {
+        if (!BLOCKED_ENV_VARS.has(key)) {
+          env[key] = value;
+        }
+      }
+    }
+    env.AELVYRIL_SESSION_ID = this.config.sessionId;
+    env.AELVYRIL_MEMORY_DB = this.config.memoryDbPath;
+    env.AELVYRIL_AGENT_TYPE = this.config.agentType;
     this.child = spawn(this.config.command, this.config.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env,
@@ -74,7 +85,6 @@ export class AgentProcess {
   kill(): void {
     if (this.child) {
       this.child.kill('SIGTERM');
-      this.child = null;
     }
   }
 }

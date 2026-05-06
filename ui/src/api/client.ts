@@ -59,6 +59,15 @@ export interface Config {
   branch_prefix: string;
 }
 
+export interface AuditEntry {
+  session_id: string;
+  agent_type: string;
+  ticket_id: string | null;
+  action: string;
+  details: string | null;
+  timestamp: string;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -80,6 +89,7 @@ export const api = {
   deleteSession: (id: string) => fetch(`${API_BASE}/sessions/${id}`, { method: 'DELETE' }),
   getBoard: (sessionId: string) => request<BoardState>(`/sessions/${sessionId}/board`),
   getCost: (sessionId: string) => request<CostReport>(`/sessions/${sessionId}/cost`),
+  getAudit: (sessionId: string) => request<AuditEntry[]>(`/sessions/${sessionId}/audit`),
   getConfig: () => request<Config>('/config'),
   updateConfig: (config: Partial<Config>) => request<Config>('/config', {
     method: 'PUT',

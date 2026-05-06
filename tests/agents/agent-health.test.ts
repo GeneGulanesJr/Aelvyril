@@ -49,7 +49,7 @@ describe('AgentHealthMonitor', () => {
       'agent-2',
       'session-2',
       '/tmp/test.db',
-      'coder',
+      'sub',
       'node',
       ['-e', 'process.stdin.resume()'],
     );
@@ -65,7 +65,7 @@ describe('AgentHealthMonitor', () => {
     monitor.start();
     await new Promise(r => setTimeout(r, 250));
 
-    expect(onUnresponsive).toHaveBeenCalledWith('agent-2', 'coder');
+    expect(onUnresponsive).toHaveBeenCalledWith('agent-2', 'sub');
     expect(onCrash).not.toHaveBeenCalled();
   });
 

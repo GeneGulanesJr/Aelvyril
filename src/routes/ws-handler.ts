@@ -8,9 +8,9 @@ export function handleWebSocketConnection(orchestrator: Orchestrator, ws: WebSoc
     timestamp: new Date().toISOString(),
   }));
 
-  const onBoardEvent = (_event: string, message: string) => {
+  const onBoardEvent = (_event: string, message: unknown) => {
     if (ws.readyState === ws.OPEN) {
-      ws.send(message);
+      ws.send(typeof message === 'string' ? message : JSON.stringify(message));
     }
   };
 
@@ -33,6 +33,6 @@ export function handleWebSocketConnection(orchestrator: Orchestrator, ws: WebSoc
   });
 
   ws.on('close', () => {
-    orchestrator.boardEvents.off('board_state', onBoardEvent);
+    orchestrator.boardEvents.removeBoardChange(onBoardEvent);
   });
 }

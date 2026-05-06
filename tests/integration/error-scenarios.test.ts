@@ -85,4 +85,21 @@ describe('Error scenarios', () => {
     expect(board.getTicket('#1')!.status).toBe('in_progress');
     expect(board.getTicket('#1')!.held_reason).toBeNull();
   });
+
+  it('test failure does not move ticket to review', () => {
+    board.createTicket({ title: 'Testable', description: '', acceptance_criteria: ['Done'], dependencies: [], files: ['a.ts'], priority: 1 });
+    board.transition('#1', 'in_progress');
+    board.transition('#1', 'testing');
+
+    board.setTestResults('#1', {
+      passed: false, total: 1, passed_count: 0, failed_count: 1,
+      failures: [{ test_name: 'should work', message: 'fail' }],
+      coverage_delta: null, duration_ms: 100,
+      test_branch: 'aelvyril/ticket-#1', timestamp: new Date().toISOString(),
+    });
+
+    board.transition('#1', 'in_progress');
+    expect(board.getTicket('#1')!.status).toBe('in_progress');
+    expect(board.getTicket('#1')!.test_results!.passed).toBe(false);
+  });
 });

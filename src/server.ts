@@ -1,10 +1,49 @@
 import http from 'http';
+import fs from 'fs';
+import path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Database } from './db/database.js';
 import { registerSessionRoutes } from './routes/session-routes.js';
 import { registerConfigRoutes } from './routes/config-routes.js';
 import { handleWebSocketConnection } from './routes/ws-handler.js';
 import type { Orchestrator } from './orchestrator.js';
+
+const UI_DIST = path.resolve(process.cwd(), 'ui', 'dist');
+
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html',
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+};
+
+function serveStatic(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+  const urlPath = req.url ?? '/';
+  let filePath = path.join(UI_DIST, urlPath === '/' ? 'index.html' : urlPath.slice(1));
+
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+    filePath = path.join(UI_DIST, 'index.html');
+  }
+
+  if (fs.existsSync(filePath)) {
+    const ext = path.extname(filePath);
+    const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
+    res.writeHead(200, { 'Content-Type': contentType });
+    fs.createReadStream(filePath).pipe(res);
+    return true;
+  }
+
+  return false;
+}
 
 interface WebSocketClient extends WebSocket {
   sessionId?: string;
@@ -23,6 +62,10 @@ export function createServer(db: Database, port: number, orchestrator?: Orchestr
     }
 
     if (registerConfigRoutes(req, res)) {
+      return;
+    }
+
+    if (serveStatic(req, res)) {
       return;
     }
 

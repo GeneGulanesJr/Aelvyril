@@ -82,7 +82,7 @@ export class TestAgent {
       total: 0,
       passed_count: 0,
       failed_count: 0,
-      failures: [{ test_name: '(setup)', message }],
+      failures: [{ test_name: '(setup)', file: '', error_message: message, stack_trace: null }],
       coverage_delta: null,
       duration_ms: 0,
       test_branch: branch,

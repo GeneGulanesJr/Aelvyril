@@ -40,6 +40,24 @@ describe('buildInterventionPrompt', () => {
   });
 });
 
+  it('returns available actions in the prompt', () => {
+    const stuck: StuckTicket = {
+      ticket_id: '#5',
+      status: 'in_progress',
+      reason: 'no_activity',
+      minutes_stuck: 10,
+      recommended_action: 'Retry',
+    };
+    const prompt = buildInterventionPrompt(stuck, 'Fix auth bug', []);
+    expect(prompt).toContain('retry');
+    expect(prompt).toContain('re_scope');
+    expect(prompt).toContain('escalate');
+    expect(prompt).toContain('break_deadlock');
+    expect(prompt).toContain('hold');
+    expect(prompt).toContain('wait');
+    expect(prompt).toContain('Available Actions');
+  });
+
 describe('parseInterventionResponse', () => {
   it('parses a valid intervention response', () => {
     const raw = JSON.stringify({

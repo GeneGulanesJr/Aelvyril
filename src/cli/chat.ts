@@ -151,19 +151,20 @@ export function startChat(config: ChatConfig = {}): void {
   client.connect();
 }
 
-const args = process.argv.slice(2);
-let port = 3000;
-let session: string | undefined;
+export function runCli(): void {
+  const args = process.argv.slice(2);
+  let port = 3000;
+  let session: string | undefined;
 
-for (let i = 0; i < args.length; i++) {
-  if (args[i] === '--port' && args[i + 1]) {
-    port = parseInt(args[i + 1], 10);
-    i++;
-  } else if (args[i] === '--session' && args[i + 1]) {
-    session = args[i + 1];
-    i++;
-  } else if (args[i] === '--help') {
-    console.log(`
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--port' && args[i + 1]) {
+      port = parseInt(args[i + 1], 10);
+      i++;
+    } else if (args[i] === '--session' && args[i + 1]) {
+      session = args[i + 1];
+      i++;
+    } else if (args[i] === '--help') {
+      console.log(`
 \x1b[1mUsage:\x1b[0m aelvyril chat [options]
 
 \x1b[1mOptions:\x1b[0m
@@ -171,8 +172,9 @@ for (let i = 0; i < args.length; i++) {
   --session <id>     Connect to specific session
   --help             Show this help
 `);
-    process.exit(0);
+      process.exit(0);
+    }
   }
-}
 
-startChat({ port, session });
+  startChat({ port, session });
+}

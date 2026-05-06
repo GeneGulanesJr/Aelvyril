@@ -42,7 +42,7 @@ describe('parseVitestOutput', () => {
     expect(result.failed_count).toBe(1);
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0].test_name).toBe('should toggle theme on click');
-    expect(result.failures[0].message).toContain('expected "dark" received "light"');
+    expect(result.failures[0].error_message).toContain('expected "dark" received "light"');
   });
 
   it('handles empty/timeout output', () => {
@@ -50,6 +50,7 @@ describe('parseVitestOutput', () => {
     expect(result.passed).toBe(false);
     expect(result.total).toBe(0);
     expect(result.failed_count).toBe(0);
+    expect(result.failures[0]?.error_message).toContain('timeout');
   });
 
   it('extracts duration', () => {
@@ -71,5 +72,28 @@ describe('parseVitestOutput', () => {
 `;
     const result = parseVitestOutput(output, 'aelvyril/ticket-#6');
     expect(result.duration_ms).toBe(0);
+  });
+
+  it('parses multiple failures', () => {
+    const output = `
+ ✗ src/api.test.ts (3 tests) 100ms
+   × should return 200
+     → expected 404 received 200
+   × should return JSON
+     → expected "text/html" received "application/json"
+   ✓ should have body
+
+ Test Files  0 passed, 1 failed (1)
+      Tests  1 passed, 2 failed (3)
+`;
+    const result = parseVitestOutput(output, 'aelvyril/ticket-#3');
+    expect(result.passed).toBe(false);
+    expect(result.failed_count).toBe(2);
+    expect(result.failures).toHaveLength(2);
+    expect(result.failures[0].test_name).toBe('should return 200');
+    expect(result.failures[0].file).toBe('src/api.test.ts');
+    expect(result.failures[0].error_message).toBe('expected 404 received 200');
+    expect(result.failures[1].test_name).toBe('should return JSON');
+    expect(result.failures[1].error_message).toBe('expected "text/html" received "application/json"');
   });
 });

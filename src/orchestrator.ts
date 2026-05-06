@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { Database } from './db/database.js';
 import { SessionManager } from './sessions/session-manager.js';
 import { AgentPool } from './agents/agent-pool.js';
@@ -5,13 +6,10 @@ import { BoardManager } from './board/board-manager.js';
 import { BoardEvents } from './board/board-events.js';
 import { ChatHandler } from './supervisor/chat-handler.js';
 import { WatchdogAgent, DEFAULT_WATCHDOG_CONFIG } from './agents/watchdog/watchdog-agent.js';
-import { TestAgent, type TestAgentConfig } from './agents/test-agent/test-agent.js';
-import { ReviewAgent, type ReviewAgentConfig } from './agents/review-agent/review-agent.js';
-import { createTicketBranch, createPR, mergePR } from './agents/main-agent/git-operations.js';
+import { TestAgent } from './agents/test-agent/test-agent.js';
+import { ReviewAgent } from './agents/review-agent/review-agent.js';
+import { createTicketBranch } from './agents/main-agent/git-operations.js';
 import { getNextDispatchable } from './agents/main-agent/wave-executor.js';
-import { buildTicketPrompt } from './agents/ticket-agent/prompt-builder.js';
-import { parsePlanResponse } from './agents/ticket-agent/plan-parser.js';
-import type { Ticket, TicketStatus, ConcurrencyPlan } from './types/common.js';
 
 export interface OrchestratorConfig {
   port: number;
@@ -81,8 +79,6 @@ export class Orchestrator {
 
     const chatHandler = new ChatHandler({
       onNewRequest: async (req) => {
-        const memoryDbPath = `${session.repo_path}/.aelvyril/memory.db`;
-        const prompt = buildTicketPrompt(req, []);
         this.boardEvents.emit('agent_activity', {
           agent: 'TICKET_AGENT',
           action: `Decomposing request: "${req}"`,
@@ -204,7 +200,21 @@ export class Orchestrator {
     watchdog?.stop();
     this.watchdogs.delete(sessionId);
     this.boards.delete(sessionId);
-    this.agentPool.killAll();
+
+    const session = this.sessionManager.get(sessionId);
+    if (session) {
+      const agentIds = ['supervisor', 'main_agent', 'watchdog'];
+      for (const id of agentIds) {
+        this.agentPool.kill(id);
+      }
+      if (session.repo_path) {
+        try {
+          fs.rmSync(session.repo_path, { recursive: true, force: true });
+        } catch {}
+      }
+    }
+
+    this.sessionManager.complete(sessionId);
   }
 
   getBoard(sessionId: string): BoardManager | undefined {

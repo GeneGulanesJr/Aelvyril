@@ -7,7 +7,23 @@ import { KanbanBoard } from './components/KanbanBoard.js';
 import { ActivityFeed } from './components/ActivityFeed.js';
 import { CostDashboard } from './components/CostDashboard.js';
 import { SettingsPage } from './components/SettingsPage.js';
-import type { CostReport, Config } from './api/client.js';
+import type { CostReport, Config, Ticket } from './api/client.js';
+import type { ActivityEntry } from './components/ActivityFeed.js';
+
+interface ProgressAlert {
+  ticket: string;
+  type: string;
+  message: string;
+}
+
+interface ProgressReport {
+  session_id: string;
+  total_tickets: number;
+  status: Record<string, number>;
+  alerts: ProgressAlert[];
+  all_done: boolean;
+  timestamp: string;
+}
 
 type Tab = 'board' | 'cost' | 'settings';
 
@@ -17,8 +33,8 @@ export function App() {
   );
   const [tab, setTab] = useState<Tab>('board');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [tickets, setTickets] = useState<any[]>([]);
-  const [activity, setActivity] = useState<any[]>([]);
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [costReport, setCostReport] = useState<CostReport | null>(null);
   const [config, setConfig] = useState<Config | null>(null);
 
@@ -29,7 +45,7 @@ export function App() {
       case 'supervisor_response':
         setMessages(prev => [...prev, {
           direction: 'supervisor_to_user',
-          content: (lastEvent.data as any).message ?? String(lastEvent.data),
+          content: (lastEvent.data as { message?: string }).message ?? String(lastEvent.data),
           timestamp: new Date().toISOString(),
         }]);
         break;
@@ -40,7 +56,7 @@ export function App() {
       case 'ticket_released':
       case 'board_state':
         if (lastEvent.event === 'board_state') {
-          setTickets((lastEvent.data as any).tickets ?? []);
+          setTickets((lastEvent.data as { tickets?: Ticket[] }).tickets ?? []);
         }
         setActivity(prev => [{
           timestamp: new Date().toISOString(),
@@ -50,12 +66,30 @@ export function App() {
         break;
 
       case 'agent_activity':
-        setActivity(prev => [lastEvent.data as any, ...prev].slice(0, 200));
+        setActivity(prev => [lastEvent.data as ActivityEntry, ...prev].slice(0, 200));
         break;
 
       case 'cost_update':
         setCostReport(lastEvent.data as CostReport);
         break;
+
+      case 'progress_report': {
+        const report = lastEvent.data as ProgressReport;
+        const newEntries: ActivityEntry[] = report.alerts.map(alert => ({
+          timestamp: report.timestamp,
+          agent: 'WATCHDOG',
+          action: `[progress] ${alert.ticket}: ${alert.message}`,
+        }));
+        if (report.all_done) {
+          newEntries.push({
+            timestamp: report.timestamp,
+            agent: 'WATCHDOG',
+            action: '[progress] All tickets completed!',
+          });
+        }
+        setActivity(prev => [...newEntries, ...prev].slice(0, 200));
+        break;
+      }
     }
   }, [lastEvent]);
 

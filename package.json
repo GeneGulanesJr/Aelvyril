@@ -4,6 +4,9 @@
   "type": "module",
   "description": "Aelvyril Cloud Platform — 7-agent coding pipeline",
   "main": "dist/index.js",
+  "bin": {
+    "aelvyril-chat": "./bin/chat.js"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.build.json",

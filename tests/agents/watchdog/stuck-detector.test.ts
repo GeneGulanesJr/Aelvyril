@@ -67,6 +67,48 @@ describe('detectStuckTickets', () => {
     expect(stuck[0].reason).toBe('reject_hard_stop');
     expect(stuck[0].recommended_action).toContain('stop');
   });
+
+  it('detects testing ticket stalled with no activity', () => {
+    const elevenMinAgo = new Date(Date.now() - 660000).toISOString();
+    const tickets = [makeTicket('#10', 'testing', elevenMinAgo, 0)];
+    const stuck = detectStuckTickets(tickets, { stallThresholdMs: 300000, testingStallMs: 600000 });
+    expect(stuck).toHaveLength(1);
+    expect(stuck[0].ticket_id).toBe('#10');
+    expect(stuck[0].status).toBe('testing');
+    expect(stuck[0].reason).toBe('no_activity');
+    expect(stuck[0].recommended_action).toContain('Test Agent');
+  });
+
+  it('detects in_review ticket stalled with no activity', () => {
+    const sixMinAgo = new Date(Date.now() - 360000).toISOString();
+    const tickets = [makeTicket('#11', 'in_review', sixMinAgo, 0)];
+    const stuck = detectStuckTickets(tickets, { stallThresholdMs: 300000, reviewStallMs: 300000 });
+    expect(stuck).toHaveLength(1);
+    expect(stuck[0].ticket_id).toBe('#11');
+    expect(stuck[0].status).toBe('in_review');
+    expect(stuck[0].reason).toBe('no_activity');
+    expect(stuck[0].recommended_action).toContain('Review Agent');
+  });
+
+  it('uses custom testingStallMs config', () => {
+    const fiveMinAgo = new Date(Date.now() - 300000).toISOString();
+    const tickets = [makeTicket('#20', 'testing', fiveMinAgo, 0)];
+    const stuckDefault = detectStuckTickets(tickets, { stallThresholdMs: 300000, testingStallMs: 600000 });
+    expect(stuckDefault).toHaveLength(0);
+    const stuckCustom = detectStuckTickets(tickets, { stallThresholdMs: 300000, testingStallMs: 200000 });
+    expect(stuckCustom).toHaveLength(1);
+    expect(stuckCustom[0].ticket_id).toBe('#20');
+  });
+
+  it('uses custom reviewStallMs config', () => {
+    const twoMinAgo = new Date(Date.now() - 120000).toISOString();
+    const tickets = [makeTicket('#21', 'in_review', twoMinAgo, 0)];
+    const stuckDefault = detectStuckTickets(tickets, { stallThresholdMs: 300000, reviewStallMs: 300000 });
+    expect(stuckDefault).toHaveLength(0);
+    const stuckCustom = detectStuckTickets(tickets, { stallThresholdMs: 300000, reviewStallMs: 60000 });
+    expect(stuckCustom).toHaveLength(1);
+    expect(stuckCustom[0].ticket_id).toBe('#21');
+  });
 });
 
 function makeTicket(

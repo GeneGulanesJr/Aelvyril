@@ -67,6 +67,7 @@ export interface Ticket {
 }
 
 export interface ConcurrencyPlan {
+  tickets: Ticket[];
   max_parallel: number;
   waves: string[][];
   conflict_groups: string[][];
@@ -75,7 +76,7 @@ export interface ConcurrencyPlan {
 export interface BoardState {
   session_id: string;
   tickets: Ticket[];
-  plan: ConcurrencyPlan | null;
+  plan: ConcurrencyPlan;
   created_at: string;
   updated_at: string;
 }

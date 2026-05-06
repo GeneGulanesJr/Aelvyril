@@ -5,6 +5,7 @@ import type { AgentStatus } from './agent.types.js';
 interface PooledAgent {
   process: AgentProcess;
   type: 'long_running' | 'ephemeral';
+  agentType: AgentType;
 }
 
 export class AgentPool {
@@ -13,23 +14,30 @@ export class AgentPool {
   spawnLongRunning(
     id: string, sessionId: string, memoryDbPath: string, agentType: AgentType
   ): AgentProcess {
-    const proc = new AgentProcess({
-      command: 'pi', args: ['--agent', agentType],
-      agentType, sessionId, memoryDbPath,
-    });
-    this.agents.set(id, { process: proc, type: 'long_running' });
-    return proc;
+    return this.spawn(id, sessionId, memoryDbPath, agentType, 'long_running');
   }
 
   spawnEphemeral(
     id: string, sessionId: string, memoryDbPath: string,
     agentType: AgentType, env?: Record<string, string>
   ): AgentProcess {
+    return this.spawn(id, sessionId, memoryDbPath, agentType, 'ephemeral', env);
+  }
+
+  private spawn(
+    id: string, sessionId: string, memoryDbPath: string,
+    agentType: AgentType, type: 'long_running' | 'ephemeral',
+    env?: Record<string, string>
+  ): AgentProcess {
+    const existing = this.agents.get(id);
+    if (existing) {
+      try { existing.process.kill(); } finally { this.agents.delete(id); }
+    }
     const proc = new AgentProcess({
       command: 'pi', args: ['--agent', agentType],
       agentType, sessionId, memoryDbPath, env,
     });
-    this.agents.set(id, { process: proc, type: 'ephemeral' });
+    this.agents.set(id, { process: proc, type, agentType });
     return proc;
   }
 
@@ -39,20 +47,21 @@ export class AgentPool {
 
   kill(id: string): void {
     const agent = this.agents.get(id);
-    if (agent) { agent.process.kill(); this.agents.delete(id); }
+    if (agent) {
+      try { agent.process.kill(); } finally { this.agents.delete(id); }
+    }
   }
 
   killAll(): void {
-    for (const [id] of this.agents) { this.kill(id); }
+    for (const id of [...this.agents.keys()]) { this.kill(id); }
   }
 
   killEphemeral(): void {
+    const ephemeralIds: string[] = [];
     for (const [id, agent] of this.agents) {
-      if (agent.type === 'ephemeral') {
-        agent.process.kill();
-        this.agents.delete(id);
-      }
+      if (agent.type === 'ephemeral') ephemeralIds.push(id);
     }
+    for (const id of ephemeralIds) { this.kill(id); }
   }
 
   getAllStatuses(): Map<string, AgentStatus> {
@@ -66,10 +75,14 @@ export class AgentPool {
   getByAgentType(agentType: AgentType): AgentProcess[] {
     const result: AgentProcess[] = [];
     for (const agent of this.agents.values()) {
-      if (agent.process.getStatus().agentType === agentType) {
+      if (agent.agentType === agentType) {
         result.push(agent.process);
       }
     }
     return result;
+  }
+
+  dispose(): void {
+    this.killAll();
   }
 }

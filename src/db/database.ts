@@ -1,10 +1,8 @@
 import BetterSqlite3 from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import type { AuditEntry, CostEntry } from '../types/common.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { migrations } from './migrations.js';
 
 export class Database {
   private db: BetterSqlite3.Database;
@@ -22,11 +20,27 @@ export class Database {
   }
 
   private runMigrations(): void {
-    const schema = fs.readFileSync(
-      path.join(__dirname, 'schema.sql'),
-      'utf-8'
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS _migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      )
+    `);
+
+    const applied = new Set(
+      (this.db.prepare('SELECT version FROM _migrations').all() as { version: number }[])
+        .map(r => r.version)
     );
-    this.db.exec(schema);
+
+    for (const migration of migrations) {
+      if (!applied.has(migration.version)) {
+        this.db.exec(migration.up);
+        const now = new Date().toISOString();
+        this.db.prepare('INSERT INTO _migrations (version, name, applied_at) VALUES (?, ?, ?)')
+          .run(migration.version, migration.name, now);
+      }
+    }
   }
 
   pragma(pragma: string): Record<string, string>[] {

@@ -7,8 +7,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   branch TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
   memory_db_path TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS tickets (
@@ -29,8 +29,8 @@ CREATE TABLE IF NOT EXISTS tickets (
   git_branch TEXT,
   cost_tokens INTEGER NOT NULL DEFAULT 0,
   cost_usd REAL NOT NULL DEFAULT 0.0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
   PRIMARY KEY (id, session_id),
   FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
@@ -38,8 +38,8 @@ CREATE TABLE IF NOT EXISTS tickets (
 CREATE TABLE IF NOT EXISTS concurrency_plans (
   session_id TEXT PRIMARY KEY,
   plan_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
   FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   ticket_id TEXT,
   action TEXT NOT NULL,
   details TEXT,
-  timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+  timestamp TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS cost_entries (
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS cost_entries (
   input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
   cost_usd REAL NOT NULL DEFAULT 0.0,
-  timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+  timestamp TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS config (

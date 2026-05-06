@@ -9,6 +9,13 @@ export class BoardEvents {
     this.callbacks.push(callback);
   }
 
+  off(_event: string, callback: BoardEventCallback): void {
+    const idx = this.callbacks.indexOf(callback);
+    if (idx !== -1) {
+      this.callbacks.splice(idx, 1);
+    }
+  }
+
   emitTicketCreated(ticket: Ticket): void {
     this.emit('ticket_created', ticket);
   }

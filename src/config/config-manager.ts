@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import type { Database } from '../db/database.js';
 import type { AelvyrilConfig } from '../types/common.js';
+import { encrypt, decrypt } from './crypto.js';
 
 const DEFAULT_CONFIG: AelvyrilConfig = {
   port: 3456,
@@ -38,6 +39,30 @@ export class ConfigManager {
     this.config = this.mergeAll();
   }
 
+  private decryptApiKeys(config: AelvyrilConfig): void {
+    for (const [provider, key] of Object.entries(config.api_keys)) {
+      if (key && key.includes(':')) {
+        try {
+          config.api_keys[provider] = decrypt(key);
+        } catch {
+          // If decryption fails, keep as-is (might be plaintext from before encryption)
+        }
+      }
+    }
+  }
+
+  private encryptApiKeys(config: AelvyrilConfig): Record<string, string> {
+    const encrypted: Record<string, string> = {};
+    for (const [provider, key] of Object.entries(config.api_keys)) {
+      if (key && !key.includes(':')) {
+        encrypted[provider] = encrypt(key);
+      } else {
+        encrypted[provider] = key;
+      }
+    }
+    return encrypted;
+  }
+
   private mergeAll(): AelvyrilConfig {
     let config = { ...DEFAULT_CONFIG };
 
@@ -55,6 +80,7 @@ export class ConfigManager {
       } catch {}
     }
 
+    this.decryptApiKeys(config);
     return config;
   }
 
@@ -65,12 +91,15 @@ export class ConfigManager {
   save(partial: Partial<AelvyrilConfig>): void {
     this.config = { ...this.config, ...partial };
 
-    this.db.setConfig('config', JSON.stringify(this.config));
+    const toPersist = { ...this.config };
+    toPersist.api_keys = this.encryptApiKeys(this.config);
+
+    this.db.setConfig('config', JSON.stringify(toPersist));
 
     const dir = path.dirname(this.configPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(this.configPath, JSON.stringify(this.config, null, 2));
+    fs.writeFileSync(this.configPath, JSON.stringify(toPersist, null, 2));
   }
 }

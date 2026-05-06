@@ -4,10 +4,15 @@ import { ConfigManager } from './config/config-manager.js';
 import path from 'path';
 import os from 'os';
 
-const configPath = path.join(os.homedir(), '.aelvyril', 'config.json');
-const dbPath = path.join(os.homedir(), '.aelvyril', 'aelvyril.db');
+function expandHome(filepath: string): string {
+  if (filepath.startsWith('~/')) {
+    return path.join(os.homedir(), filepath.slice(2));
+  }
+  return filepath;
+}
 
-const db = new Database(dbPath);
+const configPath = path.join(os.homedir(), '.aelvyril', 'config.json');
+const db = new Database(expandHome('~/.aelvyril/aelvyril.db'));
 const configManager = new ConfigManager(db, configPath);
 const config = configManager.load();
 
@@ -16,7 +21,7 @@ const server = createServer(db, config.port);
 server.listen(config.port, () => {
   console.log(`Aelvyril Orchestrator running on http://localhost:${config.port}`);
   console.log(`WebSocket at ws://localhost:${config.port}/ws`);
-  console.log(`Database: ${dbPath}`);
+  console.log(`Database: ${expandHome(config.db_path)}`);
 });
 
 process.on('SIGINT', () => {

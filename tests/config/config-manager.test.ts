@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ConfigManager } from '../../src/config/config-manager.js';
 import { Database } from '../../src/db/database.js';
+import { encrypt } from '../../src/config/crypto.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -52,5 +53,29 @@ describe('ConfigManager', () => {
     const config = cm.load();
     expect(config.models.supervisor).toBe('claude-sonnet-4-20250514');
     expect(config.models.sub).toBe('claude-opus-4-20250514');
+  });
+
+  it('encrypts API keys on save and decrypts on load', () => {
+    cm.save({ api_keys: { anthropic: 'sk-secret-key-123' } });
+
+    const fileContent = JSON.parse(fs.readFileSync(path.join(tmpDir, 'config.json'), 'utf-8'));
+    expect(fileContent.api_keys.anthropic).not.toBe('sk-secret-key-123');
+    expect(fileContent.api_keys.anthropic).toContain(':');
+
+    const cm2 = new ConfigManager(db, path.join(tmpDir, 'config.json'));
+    const config = cm2.load();
+    expect(config.api_keys.anthropic).toBe('sk-secret-key-123');
+  });
+
+  it('handles already encrypted keys gracefully', () => {
+    const encrypted = encrypt('sk-existing-key');
+    cm.save({ api_keys: { anthropic: 'sk-existing-key' } });
+
+    const fileContent = JSON.parse(fs.readFileSync(path.join(tmpDir, 'config.json'), 'utf-8'));
+    expect(fileContent.api_keys.anthropic).not.toBe('sk-existing-key');
+
+    const cm2 = new ConfigManager(db, path.join(tmpDir, 'config.json'));
+    const config = cm2.load();
+    expect(config.api_keys.anthropic).toBe('sk-existing-key');
   });
 });

@@ -46,4 +46,25 @@ describe('Database', () => {
     });
     expect(() => promises).not.toThrow();
   });
+
+  it('creates _migrations table and tracks applied migrations', () => {
+    const tables = db.allTables();
+    expect(tables).toContain('_migrations');
+
+    const rows = db.raw.prepare('SELECT version, name FROM _migrations ORDER BY version').all() as { version: number; name: string }[];
+    expect(rows.length).toBe(1);
+    expect(rows[0].version).toBe(1);
+    expect(rows[0].name).toBe('initial_schema');
+  });
+
+  it('does not re-apply migrations on re-open', () => {
+    const before = db.raw.prepare('SELECT COUNT(*) as count FROM _migrations').get() as { count: number };
+    expect(before.count).toBe(1);
+
+    db.close();
+    db = new Database(path.join(tmpDir, 'test.db'));
+
+    const after = db.raw.prepare('SELECT COUNT(*) as count FROM _migrations').get() as { count: number };
+    expect(after.count).toBe(1);
+  });
 });

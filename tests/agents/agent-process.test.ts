@@ -27,6 +27,22 @@ describe('AgentProcess', () => {
     expect(proc.isRunning()).toBe(false);
   });
 
+  it('spawns with a custom command', async () => {
+    const proc = new AgentProcess({
+      command: 'node',
+      args: ['-e', 'process.stdin.resume()'],
+      agentType: 'supervisor',
+      sessionId: 'test-session',
+      memoryDbPath: '/tmp/test-memory.db',
+    });
+    processes.push(proc);
+
+    expect(proc.isRunning()).toBe(true);
+    proc.kill();
+    await new Promise(r => setTimeout(r, 100));
+    expect(proc.isRunning()).toBe(false);
+  });
+
   it('captures stderr output', async () => {
     const proc = new AgentProcess({
       command: 'node',

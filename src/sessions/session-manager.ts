@@ -4,6 +4,21 @@ import fs from 'fs';
 import type { Database } from '../db/database.js';
 import type { Session } from '../types/common.js';
 
+function sanitizeUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.password) {
+      parsed.password = '***';
+    }
+    if (parsed.username) {
+      parsed.username = '***';
+    }
+    return parsed.toString();
+  } catch {
+    return url.replace(/\/\/[^@]+@/, '//***@');
+  }
+}
+
 export class SessionManager {
   constructor(
     private db: Database,
@@ -30,7 +45,7 @@ export class SessionManager {
       agent_type: 'supervisor',
       ticket_id: null,
       action: 'session_created',
-      details: `Session created for repo`,
+      details: `Created session for ${sanitizeUrl(repoUrl)}`,
       timestamp: now,
     });
 

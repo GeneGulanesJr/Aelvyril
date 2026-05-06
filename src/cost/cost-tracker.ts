@@ -3,6 +3,16 @@ import type { CostReport, AgentType } from '../types/common.js';
 
 const ALL_AGENT_TYPES: AgentType[] = ['supervisor', 'ticket', 'main', 'sub', 'test', 'review', 'watchdog'];
 
+const SPEC_KEY_MAP: Record<AgentType, string> = {
+  supervisor: 'supervisor_agent',
+  ticket: 'ticket_agent',
+  main: 'main_agent',
+  sub: 'sub_agents',
+  test: 'test_agent',
+  review: 'review_agent',
+  watchdog: 'watchdog_agent',
+};
+
 export class CostTracker {
   constructor(private db: Database) {}
 
@@ -70,4 +80,16 @@ export class CostTracker {
       by_ticket: byTicket,
     };
   }
+}
+
+export function toSpecFormat(report: CostReport): Record<string, unknown> {
+  const byAgentSpec: Record<string, { tokens: number; cost: number }> = {};
+  for (const [key, value] of Object.entries(report.by_agent)) {
+    const specKey = SPEC_KEY_MAP[key as AgentType] ?? key;
+    byAgentSpec[specKey] = value;
+  }
+  return {
+    ...report,
+    by_agent: byAgentSpec,
+  };
 }

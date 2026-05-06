@@ -14,11 +14,13 @@ export class AgentPool {
     id: string,
     sessionId: string,
     memoryDbPath: string,
-    agentType: AgentType
+    agentType: AgentType,
+    command: string = 'pi',
+    args: string[] = ['--agent', agentType]
   ): AgentProcess {
     const proc = new AgentProcess({
-      command: 'pi',
-      args: ['--agent', agentType],
+      command,
+      args,
       agentType,
       sessionId,
       memoryDbPath,
@@ -32,11 +34,13 @@ export class AgentPool {
     sessionId: string,
     memoryDbPath: string,
     agentType: AgentType,
-    env?: Record<string, string>
+    env?: Record<string, string>,
+    command: string = 'pi',
+    args: string[] = ['--agent', agentType]
   ): AgentProcess {
     const proc = new AgentProcess({
-      command: 'pi',
-      args: ['--agent', agentType],
+      command,
+      args,
       agentType,
       sessionId,
       memoryDbPath,

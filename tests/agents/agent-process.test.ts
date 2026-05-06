@@ -130,14 +130,23 @@ describe('AgentProcess', () => {
     expect(proc.isRunning()).toBe(false);
   });
 
-  it('blocked env vars are not overridden', () => {
+  it('blocked env vars are not overridden', async () => {
     const proc = new AgentProcess({
       command: 'node',
-      args: ['-e', 'console.log(JSON.stringify(process.env))'],
+      args: ['-e', 'console.log(JSON.stringify({PATH: process.env.PATH, HOME: process.env.HOME, CUSTOM_VAR: process.env.CUSTOM_VAR, AELVYRIL_AGENT_TYPE: process.env.AELVYRIL_AGENT_TYPE}))'],
       agentType: 'test', sessionId: 'test-session', memoryDbPath: '/tmp/test-memory.db',
       env: { PATH: '/malicious', HOME: '/evil', CUSTOM_VAR: 'ok' },
     });
     processes.push(proc);
+    const output = await new Promise<string>(resolve => {
+      let buf = '';
+      proc.onStdout((data) => { buf += data.toString(); if (buf.includes('\n')) resolve(buf); });
+    });
+    const parsed = JSON.parse(output.trim());
+    expect(parsed.PATH).not.toBe('/malicious');
+    expect(parsed.HOME).not.toBe('/evil');
+    expect(parsed.CUSTOM_VAR).toBe('ok');
+    expect(parsed.AELVYRIL_AGENT_TYPE).toBe('test');
   });
 
   it('kill() does not immediately null child (grace period correctness)', async () => {

@@ -5,7 +5,7 @@ export async function registerSessionRoutes(
   orchestrator: Orchestrator,
   req: IncomingMessage,
   res: ServerResponse
-): boolean {
+): Promise<boolean> {
   const url = new URL(req.url ?? '/', `http://localhost`);
   const path = url.pathname;
 

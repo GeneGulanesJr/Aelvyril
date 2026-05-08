@@ -1,7 +1,7 @@
 import type { Database } from '../db/database.js';
 import type { CostReport, AgentType } from '../types/common.js';
 
-const ALL_AGENT_TYPES: AgentType[] = ['supervisor', 'ticket', 'main', 'sub', 'test', 'review', 'watchdog'];
+const ALL_AGENT_TYPES: AgentType[] = ['supervisor', 'ticket', 'main', 'sub', 'test', 'review', 'watchdog', 'orchestrator', 'worker', 'scrutiny_validator', 'user_testing_validator', 'research_subagent'];
 
 const SPEC_KEY_MAP: Record<AgentType, string> = {
   supervisor: 'supervisor_agent',
@@ -11,6 +11,11 @@ const SPEC_KEY_MAP: Record<AgentType, string> = {
   test: 'test_agent',
   review: 'review_agent',
   watchdog: 'watchdog_agent',
+  orchestrator: 'orchestrator',
+  worker: 'worker',
+  scrutiny_validator: 'scrutiny_validator',
+  user_testing_validator: 'user_testing_validator',
+  research_subagent: 'research_subagent',
 };
 
 export class CostTracker {

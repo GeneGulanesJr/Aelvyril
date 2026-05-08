@@ -215,7 +215,7 @@ describe('Mission lifecycle', () => {
     });
 
     sharedState.appendBroadcast({
-      source: 'orchestrator',
+      from: 'orchestrator',
       type: 'status',
       message: 'Mission started',
       timestamp: new Date().toISOString(),
@@ -226,15 +226,15 @@ describe('Mission lifecycle', () => {
     expect(broadcasts[0].message).toBe('Mission started');
 
     sharedState.appendBroadcast({
-      source: 'worker',
-      type: 'progress',
+      from: 'worker',
+      type: 'context',
       message: 'Feature done',
       timestamp: new Date().toISOString(),
     });
 
     const since = sharedState.readBroadcasts(1);
     expect(since).toHaveLength(1);
-    expect(since[0].source).toBe('worker');
+    expect(since[0].from).toBe('worker');
   });
 
   it('error log records and reads errors', () => {

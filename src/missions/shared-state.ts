@@ -61,6 +61,7 @@ export class SharedState {
       features.milestones[features.current_milestone_index].status = 'done';
       this.writeFeatures(features);
     }
+    this.clearValidationContract();
   }
 
   updateFeatureStatus(featureId: string, status: FeaturesFile['features'][number]['status']): void {
@@ -116,6 +117,13 @@ export class SharedState {
       contract.locked = true;
       const filePath = path.join(this.missionDir, 'validation-contract.md');
       fs.writeFileSync(filePath, JSON.stringify(contract, null, 2), 'utf-8');
+    }
+  }
+
+  clearValidationContract(): void {
+    const filePath = path.join(this.missionDir, 'validation-contract.md');
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
     }
   }
 

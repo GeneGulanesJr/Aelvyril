@@ -23,8 +23,8 @@ describe('API endpoints', () => {
       dbPath: path.join(tmpDir, 'test.db'),
     });
 
-    server = createServer((req, res) => {
-      if (!registerSessionRoutes(orchestrator, req, res)) {
+    server = createServer(async (req, res) => {
+      if (!await registerSessionRoutes(orchestrator, req, res)) {
         if (!registerConfigRoutes(req, res)) {
           res.writeHead(404);
           res.end('Not found');

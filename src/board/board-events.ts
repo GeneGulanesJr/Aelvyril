@@ -43,7 +43,7 @@ export class BoardEvents {
     this.emit('board_state', state);
   }
 
-  private emit(event: string, data: unknown): void {
+  emit(event: string, data: unknown): void {
     const message = { event, data, timestamp: new Date().toISOString() };
     for (const cb of this.callbacks) {
       cb(event, message);

@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 import { Database } from './db/database.js';
 import { SessionManager } from './sessions/session-manager.js';
 import { AgentPool } from './agents/agent-pool.js';
@@ -10,6 +11,11 @@ import { TestAgent } from './agents/test-agent/test-agent.js';
 import { ReviewAgent } from './agents/review-agent/review-agent.js';
 import { createTicketBranch } from './agents/main-agent/git-operations.js';
 import { getNextDispatchable } from './agents/main-agent/wave-executor.js';
+import { SharedState } from './missions/shared-state.js';
+import { MilestoneLoop } from './missions/milestone-loop.js';
+import { ModelAssignmentManager, DEFAULT_MODEL_ASSIGNMENT } from './missions/model-assignment.js';
+import { BroadcastManager } from './missions/broadcast.js';
+import type { StartMissionRequest, MissionResult, FeaturesFile, ModelAssignment } from './missions/missions.types.js';
 
 export interface OrchestratorConfig {
   port: number;
@@ -25,12 +31,52 @@ export class Orchestrator {
 
   private watchdogs: Map<string, WatchdogAgent> = new Map();
   private boards: Map<string, BoardManager> = new Map();
+  private missions: Map<string, SharedState> = new Map();
+  private loops: Map<string, MilestoneLoop> = new Map();
 
   constructor(private config: OrchestratorConfig) {
     this.db = new Database(config.dbPath);
     this.sessionManager = new SessionManager(this.db, config.workspaceRoot);
     this.agentPool = new AgentPool();
     this.boardEvents = new BoardEvents();
+  }
+
+  startMission(req: StartMissionRequest): { sessionId: string; sharedState: SharedState } {
+    const session = this.sessionManager.create(req.repoUrl);
+
+    const missionDir = path.join(session.repo_path, '.aelvyril', 'missions', session.id);
+    const sharedState = new SharedState(missionDir);
+
+    const features = this.decomposeGoal(req.goal, req.context);
+    const models = this.resolveModels();
+
+    sharedState.initialize(features, models);
+    this.missions.set(session.id, sharedState);
+
+    const loop = new MilestoneLoop(
+      sharedState,
+      this.agentPool,
+      this.sessionManager,
+      this.boardEvents,
+    );
+    this.loops.set(session.id, loop);
+
+    this.boardEvents.emit('agent_activity', {
+      agent: 'ORCHESTRATOR',
+      action: `Mission started: ${req.goal}`,
+    });
+
+    return { sessionId: session.id, sharedState };
+  }
+
+  async executeMission(sessionId: string): Promise<MissionResult> {
+    const loop = this.loops.get(sessionId);
+    if (!loop) throw new Error(`No mission for session ${sessionId}`);
+    return loop.run();
+  }
+
+  getMissionState(sessionId: string): SharedState | undefined {
+    return this.missions.get(sessionId);
   }
 
   startSession(repoUrl: string): { sessionId: string; board: BoardManager } {
@@ -49,7 +95,7 @@ export class Orchestrator {
         this.boardEvents.emitBoardState({
           session_id: session.id,
           tickets: board.getTickets(),
-          plan: board.getConcurrencyPlan() ?? { max_parallel: 1, waves: [], conflict_groups: [] },
+          plan: board.getConcurrencyPlan() ?? { max_parallel: 1, waves: [], conflict_groups: [], tickets: [] },
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
@@ -151,7 +197,6 @@ export class Orchestrator {
 
     const testAgent = new TestAgent(this.agentPool, board, {
       sessionId,
-      sessionBranch: `aelvyril/session-${sessionId}`,
       memoryDbPath: `${session.repo_path}/.aelvyril/memory.db`,
       workspacePath: session.repo_path,
     });
@@ -191,7 +236,7 @@ export class Orchestrator {
 
     this.boardEvents.emit('agent_activity', {
       agent: 'REVIEW_AGENT',
-      action: `${decision.approved ? '✅ Approved' : '❌ Rejected'} ${ticketId}: ${decision.summary}`,
+      action: `${decision.approved ? 'Approved' : 'Rejected'} ${ticketId}: ${decision.summary}`,
     });
   }
 
@@ -200,6 +245,8 @@ export class Orchestrator {
     watchdog?.stop();
     this.watchdogs.delete(sessionId);
     this.boards.delete(sessionId);
+    this.loops.delete(sessionId);
+    this.missions.delete(sessionId);
 
     const session = this.sessionManager.get(sessionId);
     if (session) {
@@ -227,5 +274,33 @@ export class Orchestrator {
     }
     this.agentPool.killAll();
     this.db.close();
+  }
+
+  private decomposeGoal(goal: string, context?: string): FeaturesFile {
+    return {
+      mission_name: goal.substring(0, 60),
+      goal,
+      milestones: [{
+        index: 0,
+        name: 'Implementation',
+        features: ['#1'],
+        status: 'pending',
+        retry_count: 0,
+      }],
+      features: [{
+        id: '#1',
+        title: goal.substring(0, 80),
+        description: goal,
+        acceptance_criteria: [context ?? 'Implement the goal'],
+        files: [],
+        status: 'pending',
+        assigned_worker: null,
+      }],
+      current_milestone_index: 0,
+    };
+  }
+
+  private resolveModels(): ModelAssignment {
+    return { ...DEFAULT_MODEL_ASSIGNMENT };
   }
 }

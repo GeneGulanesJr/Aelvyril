@@ -1,6 +1,7 @@
 import { createServer } from './server.js';
 import { Database } from './db/database.js';
 import { ConfigManager } from './config/config-manager.js';
+import { Orchestrator } from './orchestrator.js';
 import path from 'path';
 import os from 'os';
 
@@ -16,7 +17,13 @@ const db = new Database(expandHome('~/.aelvyril/aelvyril.db'));
 const configManager = new ConfigManager(db, configPath);
 const config = configManager.load();
 
-const server = createServer(db, config.port);
+const orchestrator = new Orchestrator({
+  port: config.port,
+  workspaceRoot: expandHome('~/.aelvyril/workspaces'),
+  dbPath: expandHome(config.db_path),
+});
+
+const server = createServer(db, config.port, orchestrator);
 
 server.listen(config.port, () => {
   console.log(`Aelvyril Orchestrator running on http://localhost:${config.port}`);

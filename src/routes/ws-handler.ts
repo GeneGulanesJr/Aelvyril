@@ -26,6 +26,44 @@ export function handleWebSocketConnection(orchestrator: Orchestrator, ws: WebSoc
         if (sessionId && content) {
           await orchestrator.routeMessage(sessionId, content);
         }
+      } else if (msg.type === 'start_mission') {
+        const result = orchestrator.startMission({
+          goal: msg.goal,
+          repoUrl: msg.repo_url,
+          context: msg.context,
+        });
+        ws.send(JSON.stringify({
+          event: 'mission_started',
+          data: { session_id: result.sessionId },
+          timestamp: new Date().toISOString(),
+        }));
+      } else if (msg.type === 'mission_status') {
+        const missionState = orchestrator.getMissionState(msg.session_id);
+        if (missionState) {
+          ws.send(JSON.stringify({
+            event: 'mission_status',
+            data: {
+              features: missionState.readFeatures(),
+              handoffs: missionState.readHandoffs(),
+            },
+            timestamp: new Date().toISOString(),
+          }));
+        }
+      } else if (msg.type === 'execute_mission') {
+        try {
+          const result = await orchestrator.executeMission(msg.session_id);
+          ws.send(JSON.stringify({
+            event: 'mission_result',
+            data: result,
+            timestamp: new Date().toISOString(),
+          }));
+        } catch (err) {
+          ws.send(JSON.stringify({
+            event: 'mission_error',
+            data: { error: err instanceof Error ? err.message : String(err) },
+            timestamp: new Date().toISOString(),
+          }));
+        }
       }
     } catch {
       // Ignore malformed messages

@@ -1,7 +1,7 @@
 import type { Orchestrator } from '../orchestrator.js';
 import type { IncomingMessage, ServerResponse } from 'http';
 
-export function registerSessionRoutes(
+export async function registerSessionRoutes(
   orchestrator: Orchestrator,
   req: IncomingMessage,
   res: ServerResponse
@@ -75,6 +75,59 @@ export function registerSessionRoutes(
       'SELECT * FROM audit_log WHERE session_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?'
     ).all(auditMatch[1], limit, offset);
     jsonResponse(res, rows);
+    return true;
+  }
+
+  if (req.method === 'POST' && path === '/api/missions') {
+    const body = await readBody(req) as { goal?: string; repo_url?: string; context?: string };
+    if (!body.goal || !body.repo_url) {
+      jsonResponse(res, { error: 'goal and repo_url required' }, 400);
+      return true;
+    }
+    const result = orchestrator.startMission({ goal: body.goal, repoUrl: body.repo_url, context: body.context });
+    jsonResponse(res, { session_id: result.sessionId, status: 'active' }, 201);
+    return true;
+  }
+
+  const missionStatusMatch = path.match(/^\/api\/missions\/([^/]+)\/status$/);
+  if (req.method === 'GET' && missionStatusMatch) {
+    const missionState = orchestrator.getMissionState(missionStatusMatch[1]);
+    if (!missionState) {
+      jsonResponse(res, { error: 'Mission not found' }, 404);
+      return true;
+    }
+    const features = missionState.readFeatures();
+    const currentMilestone = features.milestones[features.current_milestone_index] ?? null;
+    jsonResponse(res, {
+      mission_id: missionStatusMatch[1],
+      current_milestone: currentMilestone?.name ?? 'completed',
+      features_total: features.features.length,
+      features_done: features.features.filter(f => f.status === 'done').length,
+      milestones_total: features.milestones.length,
+      milestones_done: features.milestones.filter(m => m.status === 'done').length,
+    });
+    return true;
+  }
+
+  const missionHandoffsMatch = path.match(/^\/api\/missions\/([^/]+)\/handoffs$/);
+  if (req.method === 'GET' && missionHandoffsMatch) {
+    const missionState = orchestrator.getMissionState(missionHandoffsMatch[1]);
+    if (!missionState) {
+      jsonResponse(res, { error: 'Mission not found' }, 404);
+      return true;
+    }
+    jsonResponse(res, missionState.readHandoffs());
+    return true;
+  }
+
+  const missionFeaturesMatch = path.match(/^\/api\/missions\/([^/]+)\/features$/);
+  if (req.method === 'GET' && missionFeaturesMatch) {
+    const missionState = orchestrator.getMissionState(missionFeaturesMatch[1]);
+    if (!missionState) {
+      jsonResponse(res, { error: 'Mission not found' }, 404);
+      return true;
+    }
+    jsonResponse(res, missionState.readFeatures());
     return true;
   }
 

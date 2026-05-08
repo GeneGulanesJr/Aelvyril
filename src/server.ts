@@ -50,14 +50,14 @@ interface WebSocketClient extends WebSocket {
 }
 
 export function createServer(db: Database, port: number, orchestrator?: Orchestrator): http.Server {
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     if (req.url === '/health' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
       return;
     }
 
-    if (orchestrator && registerSessionRoutes(orchestrator, req, res)) {
+    if (orchestrator && await registerSessionRoutes(orchestrator, req, res)) {
       return;
     }
 

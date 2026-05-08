@@ -1,5 +1,7 @@
 // src/types/common.ts
-export type AgentType = 'supervisor' | 'ticket' | 'main' | 'sub' | 'test' | 'review' | 'watchdog';
+export type AgentType =
+  | 'supervisor' | 'ticket' | 'main' | 'sub' | 'test' | 'review' | 'watchdog'
+  | 'orchestrator' | 'worker' | 'scrutiny_validator' | 'user_testing_validator' | 'research_subagent';
 
 export type TicketStatus = 'backlog' | 'in_progress' | 'testing' | 'in_review' | 'done' | 'held';
 

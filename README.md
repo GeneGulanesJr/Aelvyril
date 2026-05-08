@@ -113,7 +113,137 @@ Three-step guided setup:
 
 Aelvyril auto-detects common tools (Cursor, VS Code, Claude CLI, pi) and shows tool-specific setup instructions.
 
-## Architecture
+## How It Works
+
+```mermaid
+flowchart TD
+    subgraph UserInput["User Input"]
+        A1["Browser Extension<br/>Copy-paste intercept"]
+        A2["Clipboard Monitor<br/>System-level PII scan"]
+        A3["CLI / Coding Agent<br/>Prompt submission"]
+    end
+
+    subgraph Gateway["Aelvyril Gateway"]
+        B1["Auth & Rate Limit"]
+        B2["Session Manager<br/>Derive / create session"]
+    end
+
+    subgraph PII["PII Detection Pipeline"]
+        C1["Presidio Microservice<br/>NER: person, location, org"]
+        C2["Rust Regex Recognizers<br/>email, phone, IP, SSN,<br/>IBAN, credit card, API key"]
+        C3["Contextual Signal Analysis<br/>False-positive filtering"]
+        C4["Allowlist / Denylist<br/>User-defined rules"]
+    end
+
+    subgraph Pseudonymize["Pseudonymization"]
+        D1["Replace entities with<br/>typed tokens<br/><em>Jason Smith → [Person_1]</em>"]
+    end
+
+    subgraph Upstream["Upstream LLM Providers"]
+        E1["OpenAI"]
+        E2["Anthropic"]
+        E3["OpenAI-compatible<br/>endpoints"]
+    end
+
+    subgraph PostProcess["Post-Processing"]
+        F1["Token Usage &<br/>Cost Tracking"]
+        F2["Audit Log<br/>(no raw PII stored)"]
+        F3["Rehydration<br/>Tokens → original values"]
+    end
+
+    subgraph Response["Response"]
+        G1["Clean response<br/>back to client"]
+    end
+
+    A1 --> B1
+    A2 --> B1
+    A3 --> B1
+    B1 --> B2
+    B2 --> C1
+    B2 --> C2
+    C1 --> C3
+    C2 --> C3
+    C3 --> C4
+    C4 --> D1
+    D1 --> E1
+    D1 --> E2
+    D1 --> E3
+    E1 --> F1
+    E2 --> F1
+    E3 --> F1
+    F1 --> F2
+    F2 --> F3
+    F3 --> G1
+```
+
+### Orchestrator Pipeline
+
+```mermaid
+flowchart TD
+    subgraph Input["User Task"]
+        A1["User submits<br/>coding task"]
+    end
+
+    subgraph Decompose["Ticket Agent"]
+        B1["Decompose request<br/>into subtask tickets"]
+        B2["Generate concurrency plan<br/>(waves, dependencies)"]
+    end
+
+    subgraph Board["Board Manager"]
+        C1["Kanban board<br/>backlog → in_progress →<br/>testing → in_review → done"]
+        C2["Wave Executor<br/>Dispatch tickets in parallel"]
+    end
+
+    subgraph Execute["Main Agent"]
+        D1["Create git branch<br/>per ticket"]
+        D2["Spawn sub-agents<br/>for code editing"]
+    end
+
+    subgraph Validate["Test Agent"]
+        E1["Run whitelisted<br/>test commands"]
+        E2{"Tests pass?"}
+    end
+
+    subgraph Review["Review Agent"]
+        F1["Collect diffs"]
+        F2{"Approved?"}
+    end
+
+    subgraph Monitor["Watchdog Agent"]
+        G1["Monitor progress"]
+        G2["Detect stuck agents"]
+        G3["Intervene / escalate"]
+    end
+
+    subgraph Supervisor["Supervisor Agent"]
+        H1["Route messages"]
+        H2["Handle redirects &<br/>status checks"]
+    end
+
+    A1 --> B1
+    B1 --> B2
+    B2 --> C1
+    C1 --> C2
+    C2 --> D1
+    D1 --> D2
+    D2 --> E1
+    E1 --> E2
+    E2 -- "Yes" --> F1
+    E2 -- "No" --> D2
+    F1 --> F2
+    F2 -- "Yes" --> C1
+    F2 -- "No" --> D2
+    G1 --> G2
+    G2 --> G3
+    G3 -.-> C1
+    H1 --> H2
+    H2 -.-> C1
+
+    style E2 fill:#f9f,stroke:#333
+    style F2 fill:#f9f,stroke:#333
+```
+
+### Architecture (Text)
 
 ```
 Copy-paste event or prompt submission

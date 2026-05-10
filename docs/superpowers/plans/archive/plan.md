@@ -160,6 +160,7 @@
 - [ ] Team mode — shared detection policies synced over a local server
 - [ ] Support for non-text modalities (images, files)
 - [ ] Metrics dashboard — leak prevention stats over time
+- [ ] **Agent activity visualizer** — infinite-scrollable node graph showing running orchestrator agents and subagents in real time. Each node = an agent/subtask, edges = dependencies, live status indicators (planning / executing / blocked / done). Like a pipeline DAG that scrolls infinitely as new tasks spin up. Needs research into: best canvas/SVG approach for infinite scroll (e.g. React Flow, Cytoscape.js, D3 zoom), real-time event streaming from orchestrator state machine to UI via Tauri events, and how to render subagent trees from the orchestrator's `task → plan → subtask → execution` hierarchy.
 
 ---
 

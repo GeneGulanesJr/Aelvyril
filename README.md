@@ -409,6 +409,40 @@ The built-in orchestrator is a plan-and-execute coding agent that leverages Aelv
 | `executor_timeout_secs` | `600` | Per-subtask timeout (10 min) |
 | `max_tool_calls` | `30` | Tool call limit before abort |
 
+
+
+ Aelvyril — Overview Plan                                                                                                                                                                                                                           
+                                                                                                                                                                                                                                                    
+ ```                                                                                                                                                                                                                                                
+   ┌─────────────────────────────────────────────────────────┐                                                                                                                                                                                      
+   │                        AELVYRIL                         │                                                                                                                                                                                      
+   │                   (localhost:4000)                        │                                                                                                                                                                                    
+   │                                                         │                                                                                                                                                                                      
+   │  ┌─────────┐    ┌──────────┐    ┌──────────┐           │                                                                                                                                                                                       
+   │  │  PII     │    │  Router  │    │  Key     │           │                                                                                                                                                                                      
+   │  │  Detect  │───►│  & Proxy │───►│  Vaults  │           │                                                                                                                                                                                      
+   │  │  & Mask  │    │          │    │          │           │                                                                                                                                                                                      
+   │  └─────────┘    └──────────┘    └──────────┘           │                                                                                                                                                                                       
+   │       ▲               │                │                │                                                                                                                                                                                      
+   └───────│───────────────│────────────────│────────────────┘                                                                                                                                                                                      
+           │               │                │                                                                                                                                                                                                       
+           │         ┌─────┴─────┐    ┌──────┴──────┐                                                                                                                                                                                               
+      Pi sends      │           │    │  OS Keychain  │                                                                                                                                                                                              
+      prompt with   │  Route to: │    │  (or .env)   │                                                                                                                                                                                              
+      real PII      │           │    │              │                                                                                                                                                                                               
+           │        │  ┌─OpenAI │    │  OPENAI_KEY  │                                                                                                                                                                                               
+           │        │  ├─Anthropic   │  ANTHROPIC_KEY│                                                                                                                                                                                              
+           │        │  └─Ollama  │    └──────────────┘                                                                                                                                                                                              
+           │        │           │                                                                                                                                                                                                                   
+           ▼        └─────┬─────┘                                                                                                                                                                                                                   
+     ┌──────────┐         │                                                                                                                                                                                                                         
+     │ Sanitize │    ┌────┴─────┐                                                                                                                                                                                                                   
+     │ [EMAIL_1]│    │ Response  │                                                                                                                                                                                                                  
+     │ [SSN_2]  │    │ Rehydrate │                                                                                                                                                                                                                  
+     │ [PHONE_3]│    │ [EMAIL_1] │──► "john@real.com"                                                                                                                                                                                               
+     └──────────┘    └──────────┘                                                                                                                                                                                                                   
+ ```                
+
 ### Safeguards
 
 - Executor file changes validated against `allowed_files` scope

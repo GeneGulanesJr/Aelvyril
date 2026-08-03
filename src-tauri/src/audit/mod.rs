@@ -4,6 +4,8 @@ pub mod open;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+pub use store::{AuditStats, PolicyEvent};
+
 /// A single audit log entry — never stores raw PII values
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {

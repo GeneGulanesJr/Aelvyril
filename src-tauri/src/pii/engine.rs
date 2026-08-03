@@ -1,11 +1,9 @@
+use crate::pii::liquid::LiquidPiiClient;
 use crate::pii::presidio::PresidioClient;
 use crate::pii::recognizers::{self, PiiMatch, PiiType, Recognizer};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Arc;
-
-#[cfg(feature = "llama")]
-use crate::llama::LlamaDetector;
 
 /// Minimum confidence threshold for detection
 const MIN_CONFIDENCE: f64 = 0.5;
@@ -15,9 +13,10 @@ static RECOGNIZERS: Lazy<Vec<Recognizer>> = Lazy::new(recognizers::all_recognize
 /// The PII detection engine.
 ///
 /// Detection strategy (layered):
-///   0. **LLM** (optional, feature-gated) — Fine-tuned LFM2.5-350M via llama-server.
-///      JSON-based entity extraction with high recall on trained PII types.
-///   1. **Presidio** (primary) — Microsoft Presidio via local microservice.
+///   0. **Liquid PII encoder** (optional, default off) — `LFM2.5-Encoder-350M-PII-Detector`
+///      via the Python sidecar. Token-classification with 40 PII types / 16 languages.
+///      Highest recall on trained types; degrades to layer 1+ if the sidecar is unreachable.
+///   1. **Presidio** (primary) — Microsoft Presidio via the same local sidecar.
 ///      Best-in-class NLP-based detection with NER support.
 ///   2. **Custom recognizers** (safety layer) — Our own regex-based patterns.
 ///      Always run alongside Presidio to catch anything it misses.
@@ -33,9 +32,8 @@ pub struct PiiEngine {
     deny_patterns: Vec<regex::Regex>,
     /// Presidio client for NLP-based detection
     presidio: PresidioClient,
-    /// LLM-based PII detection via fine-tuned LFM2.5 (feature-gated)
-    #[cfg(feature = "llama")]
-    llama: Option<Arc<tokio::sync::RwLock<LlamaDetector>>>,
+    /// Liquid LFM2.5 PII encoder client (optional Layer 0)
+    liquid_pii: Option<LiquidPiiClient>,
     /// External (JSON-loaded) recognizers — hot-reloaded pattern mining output
     external_recognizers: Arc<tokio::sync::RwLock<Vec<Recognizer>>>,
 }
@@ -52,8 +50,10 @@ impl PiiEngine {
             allow_patterns: Vec::new(),
             deny_patterns: Vec::new(),
             presidio: PresidioClient::new("http://localhost:3000".into(), true),
-            #[cfg(feature = "llama")]
-            llama: None,
+            liquid_pii: Some(LiquidPiiClient::new(
+                "http://localhost:3000".into(),
+                false, // disabled by default until bootstrap confirms sidecar
+            )),
             external_recognizers: Arc::new(tokio::sync::RwLock::new(Vec::new())),
         }
     }
@@ -63,9 +63,8 @@ impl PiiEngine {
         Self {
             allow_patterns: Vec::new(),
             deny_patterns: Vec::new(),
-            presidio: PresidioClient::new(base_url, enabled),
-            #[cfg(feature = "llama")]
-            llama: None,
+            presidio: PresidioClient::new(base_url.clone(), enabled),
+            liquid_pii: Some(LiquidPiiClient::new(base_url, false)),
             external_recognizers: Arc::new(tokio::sync::RwLock::new(Vec::new())),
         }
     }
@@ -94,7 +93,10 @@ impl PiiEngine {
 
     /// Update the Presidio service URL
     pub fn set_presidio_url(&mut self, url: String) {
-        self.presidio.set_url(url);
+        self.presidio.set_url(url.clone());
+        if let Some(lp) = self.liquid_pii.as_mut() {
+            lp.set_url(url);
+        }
     }
 
     /// Get a reference to the Presidio client (for health checks etc.)
@@ -102,44 +104,23 @@ impl PiiEngine {
         &self.presidio
     }
 
-    /// Initialize the LLM PII detection backend with a GGUF model.
-    /// Must be called before `detect()` for LLM detection to work.
-    /// Requires the `llama` feature flag.
-    ///
-    /// The detector is created first (expensive: starts llama-server),
-    /// then installed behind a short-lived write lock.
-    #[cfg(feature = "llama")]
-    pub async fn init_llama(gguf_path: &str) -> Result<Arc<tokio::sync::RwLock<LlamaDetector>>, String> {
-        let detector =
-            LlamaDetector::new(gguf_path).await.map_err(|e| e.to_string())?;
-        tracing::info!(path = %gguf_path, "LLM PII backend initialized");
-        Ok(Arc::new(tokio::sync::RwLock::new(detector)))
+    /// Enable/disable the Liquid PII encoder client. Idempotent; safe to call at runtime.
+    pub fn set_liquid_pii_enabled(&mut self, enabled: bool) {
+        if let Some(lp) = self.liquid_pii.as_mut() {
+            lp.set_enabled(enabled);
+        }
     }
 
-    /// Install a pre-created LLM detector into the engine.
-    /// Takes the detector by Arc so the write lock is held only briefly.
-    #[cfg(feature = "llama")]
-    pub fn set_llama_detector(&mut self, detector: Arc<tokio::sync::RwLock<LlamaDetector>>) {
-        self.llama = Some(detector);
+    /// Check if the Liquid PII encoder client is currently enabled.
+    pub fn liquid_pii_enabled(&self) -> bool {
+        self.liquid_pii.as_ref().is_some_and(|lp| lp.is_enabled())
     }
 
     /// Reload external recognizers from the configured JSON file.
     /// Errors are logged but do not panic — old patterns remain active.
-    /// Reload external recognizers from file.
     /// Currently stubbed — not needed for LLM detection.
     pub async fn reload_external_recognizers(&self) -> Result<usize, String> {
         Ok(0)
-    }
-
-    /// Check if the LLM backend is enabled and healthy.
-    #[cfg(feature = "llama")]
-    pub async fn llama_healthy(&self) -> bool {
-        if let Some(ref llama) = self.llama {
-            let guard = llama.read().await;
-            guard.is_healthy().await
-        } else {
-            false
-        }
     }
 
     /// Run our custom recognizers (the safety layer).
@@ -251,21 +232,17 @@ impl PiiEngine {
     pub async fn detect(&self, text: &str) -> Vec<PiiMatch> {
         let mut matches: Vec<PiiMatch> = Vec::new();
 
-        // Layer 0: LLM-based detection (feature-gated)
-        #[cfg(feature = "llama")]
-        if let Some(ref llama) = self.llama {
-            match llama.read().await.detect(text).await {
-                Ok(llm_matches) => {
-                    let count = llm_matches.len();
-                    for m in llm_matches {
+        // Layer 0: Liquid LFM2.5-Encoder-350M-PII-Detector (token-classification)
+        if let Some(ref liquid) = self.liquid_pii {
+            if liquid.is_enabled() {
+                if let Some(liquid_matches) = liquid.analyze(text).await {
+                    let count = liquid_matches.len();
+                    for m in liquid_matches {
                         if !self.is_allowed(&m.text) {
                             matches.push(m);
                         }
                     }
-                    tracing::debug!(count, "LLM detected {} entities", count);
-                }
-                Err(e) => {
-                    tracing::warn!("LLM detection failed, falling back to other layers: {}", e);
+                    tracing::debug!(count, "Liquid PII detected {} entities", count);
                 }
             }
         }
@@ -412,33 +389,32 @@ fn resolve_overlaps(matches: &mut Vec<PiiMatch>) {
 /// - 2: Moderately specific (IP address, Phone, Domain)
 /// - 1: Generic / ambiguous (Date, Person, Location, Organization, Custom)
 fn type_specificity(pii_type: &PiiType) -> u8 {
+    use PiiType::*;
     match pii_type {
-        PiiType::Ssn => 3,
-        PiiType::Iban => 3,
-        PiiType::CreditCard => 3,
-        PiiType::ZipCode => 3,
-        PiiType::ApiKey => 3,
-        PiiType::Email => 3,
-        PiiType::SwiftCode => 3,
-        PiiType::UsBankNumber => 3,
-        PiiType::UsPassport => 3,
-        PiiType::UsDriverLicense => 3,
-        PiiType::UsState => 3,
-        PiiType::StreetAddress => 3,
-        PiiType::City => 3,
-        PiiType::Country => 3,
-        PiiType::MedicalRecord => 3,
-        PiiType::Age => 2,
-        PiiType::Title => 2,
-        PiiType::Nationality => 2,
-        PiiType::IpAddress => 2,
-        PiiType::PhoneNumber => 2,
-        PiiType::Domain => 2,
-        PiiType::Date => 1,
-        PiiType::Person => 1,
-        PiiType::Location => 1,
-        PiiType::Organization => 1,
-        PiiType::Custom(_) => 1,
+        // Legacy very-specific
+        Ssn | Iban | CreditCard | ZipCode | ApiKey | Email | SwiftCode | UsBankNumber
+        | UsPassport | UsDriverLicense | UsState | StreetAddress | City | Country
+        | MedicalRecord => 3,
+        Age | Title | Nationality | IpAddress | PhoneNumber | Domain => 2,
+        // Liquid encoder — Identity / Contact / Financial / Credential (specific)
+        IdentityPersonName | IdentityNationalId | IdentityPassport | IdentityDriversLicense
+        | IdentityDateOfBirth | IdentityTaxId | ContactEmail | ContactPhone | ContactAddress
+        | ContactPostalCode | ContactIpAddress | FinancialCreditCard | FinancialIban
+        | FinancialBankAccount | FinancialSwiftBic | FinancialCryptoWallet | FinancialAmount
+        | CredentialApiKey | CredentialPassword | CredentialPrivateKey | CredentialJwt
+        | CredentialConnectionString | DeveloperLoginCredentials => 3,
+        // Liquid encoder — Device / Location / Healthcare / Org / Legal (specific)
+        DeviceMacAddress | DeviceImei | DeveloperDeviceId | LocationGpsCoordinates
+        | HealthcareMedicalRecord | HealthcareCondition | HealthcareMedication
+        | HealthcareHealthPlanId | OrgCompanyName | LegalCaseNumber => 3,
+        // Liquid encoder — Online (moderately specific)
+        OnlineUsername | OnlineUrl => 2,
+        // Liquid encoder — Special category (sensitive; treat as specific)
+        SpecialReligion | SpecialPolitical | SpecialOrientation | SpecialHealthStatus => 3,
+        // Generic / ambiguous
+        Date | Person | Location | Organization | Custom(_) => 1,
+        // Fallthrough for any future variant
+        _ => 1,
     }
 }
 

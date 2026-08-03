@@ -1,0 +1,17 @@
+# Aelvyril Presidio + Liquid encoder sidecar dependencies.
+#
+# Presidio uses spaCy-based NLP. The Liquid encoders add torch + transformers for
+# the LFM2.5-Encoder token-classification and rule-matching models.
+#
+# Heavy deps (torch) are only required when AELVYRIL_LIQUID_PII_ENABLED or
+# AELVYRIL_LIQUID_POLICY_ENABLED is set; otherwise Presidio alone is enough.
+
+# Presidio analyzer stack
+presidio-analyzer>=2.2
+spacy>=3.7
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
+
+# Liquid LFM2.5 encoder models (auto-downloaded from Hugging Face)
+torch>=2.1
+transformers>=4.40
+huggingface_hub>=0.23

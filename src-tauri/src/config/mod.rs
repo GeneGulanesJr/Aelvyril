@@ -50,6 +50,20 @@ pub struct AppSettings {
     /// Orchestrator settings (plan-and-execute agent)
     #[serde(default)]
     pub orchestrator: crate::orchestrator::types::OrchestratorSettings,
+    // ── Liquid LFM2.5 encoder settings ─────────────────────────────────────
+    /// Enable the Liquid LFM2.5-Encoder-350M-PII-Detector as the Layer 0 NLP detector.
+    /// Requires the Python sidecar to be running with `AELVYRIL_LIQUID_PII_ENABLED=1`.
+    #[serde(default)]
+    pub liquid_pii_enabled: bool,
+    /// Enable the Liquid LFM2.5-Encoder-350M-Policy-Linter for content-policy gating.
+    #[serde(default)]
+    pub liquid_policy_enabled: bool,
+    /// Override the Liquid model cache directory. Default: `~/.aelvyril/models`.
+    #[serde(default)]
+    pub liquid_model_dir: Option<String>,
+    /// User-authored policy rules. Each rule carries its own `warn|block` action.
+    #[serde(default)]
+    pub policy_rules: Vec<crate::policy::PolicyRule>,
 }
 
 impl Default for AppSettings {
@@ -89,6 +103,10 @@ impl Default for AppSettings {
             alert_abnormal_retry_rate: 0.30,     // 30%
             alert_daily_cost_spike_cents: 1_000, // $10.00 daily spike
             orchestrator: crate::orchestrator::types::OrchestratorSettings::default(),
+            liquid_pii_enabled: false,
+            liquid_policy_enabled: false,
+            liquid_model_dir: None,
+            policy_rules: Vec::new(),
         }
     }
 }
@@ -174,7 +192,6 @@ mod tests {
         let provider = find_provider_for_model(&providers, "llama-3-70b");
         assert!(provider.is_none());
     }
-}
 
     #[test]
     fn test_default_alert_thresholds() {
@@ -192,4 +209,13 @@ mod tests {
         assert!(settings.rate_limit_max_requests_per_hour > 0);
         assert!(settings.rate_limit_max_concurrent_requests > 0);
     }
+
+    #[test]
+    fn test_default_liquid_settings() {
+        let settings = AppSettings::default();
+        assert!(!settings.liquid_pii_enabled);
+        assert!(!settings.liquid_policy_enabled);
+        assert!(settings.policy_rules.is_empty());
+    }
+}
 

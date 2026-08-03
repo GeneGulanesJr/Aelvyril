@@ -10,8 +10,13 @@ use std::fmt;
 /// so that the benchmark scoring namespace (all uppercase) aligns exactly with the
 /// gold annotation namespace — preventing entity type collapses that would drive
 /// precision/recall to zero.
+///
+/// Starting with the Liquid LFM2.5-Encoder-350M-PII-Detector integration, the enum
+/// also includes the encoder's 40 domain-prefixed entity types so the full detection
+/// vocabulary is represented without lossy folding.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PiiType {
+    // ── Legacy / Presidio namespace ────────────────────────────────────────
     Email,
     PhoneNumber,
     IpAddress,
@@ -26,7 +31,6 @@ pub enum PiiType {
     Person,
     Location,
     Organization,
-    /// Fine-grained NER types (keep distinct from Location/Org for scoring)
     City,
     UsState,
     StreetAddress,
@@ -39,11 +43,62 @@ pub enum PiiType {
     UsBankNumber,
     UsPassport,
     UsDriverLicense,
+    // ── Liquid encoder — Identity ──────────────────────────────────────────
+    IdentityPersonName,
+    IdentityNationalId,
+    IdentityPassport,
+    IdentityDriversLicense,
+    IdentityDateOfBirth,
+    IdentityTaxId,
+    // ── Liquid encoder — Contact ───────────────────────────────────────────
+    ContactEmail,
+    ContactPhone,
+    ContactAddress,
+    ContactPostalCode,
+    ContactIpAddress,
+    // ── Liquid encoder — Financial ─────────────────────────────────────────
+    FinancialCreditCard,
+    FinancialIban,
+    FinancialBankAccount,
+    FinancialSwiftBic,
+    FinancialCryptoWallet,
+    FinancialAmount,
+    // ── Liquid encoder — Credentials ───────────────────────────────────────
+    CredentialApiKey,
+    CredentialPassword,
+    CredentialPrivateKey,
+    CredentialJwt,
+    CredentialConnectionString,
+    DeveloperLoginCredentials,
+    // ── Liquid encoder — Online ────────────────────────────────────────────
+    OnlineUsername,
+    OnlineUrl,
+    // ── Liquid encoder — Device ────────────────────────────────────────────
+    DeviceMacAddress,
+    DeviceImei,
+    DeveloperDeviceId,
+    // ── Liquid encoder — Location ──────────────────────────────────────────
+    LocationGpsCoordinates,
+    // ── Liquid encoder — Healthcare ────────────────────────────────────────
+    HealthcareMedicalRecord,
+    HealthcareCondition,
+    HealthcareMedication,
+    HealthcareHealthPlanId,
+    // ── Liquid encoder — Organization ──────────────────────────────────────
+    OrgCompanyName,
+    // ── Liquid encoder — Special category ──────────────────────────────────
+    SpecialReligion,
+    SpecialPolitical,
+    SpecialOrientation,
+    SpecialHealthStatus,
+    // ── Liquid encoder — Legal ─────────────────────────────────────────────
+    LegalCaseNumber,
 }
 
 impl fmt::Display for PiiType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            // Legacy / Presidio
             PiiType::Email => write!(f, "EMAIL_ADDRESS"),
             PiiType::PhoneNumber => write!(f, "PHONE_NUMBER"),
             PiiType::IpAddress => write!(f, "IP_ADDRESS"),
@@ -70,6 +125,56 @@ impl fmt::Display for PiiType {
             PiiType::UsBankNumber => write!(f, "US_BANK_NUMBER"),
             PiiType::UsPassport => write!(f, "US_PASSPORT"),
             PiiType::UsDriverLicense => write!(f, "US_DRIVER_LICENSE"),
+            // Liquid encoder — Identity
+            PiiType::IdentityPersonName => write!(f, "IDENTITY_PERSON_NAME"),
+            PiiType::IdentityNationalId => write!(f, "IDENTITY_NATIONAL_ID"),
+            PiiType::IdentityPassport => write!(f, "IDENTITY_PASSPORT"),
+            PiiType::IdentityDriversLicense => write!(f, "IDENTITY_DRIVERS_LICENSE"),
+            PiiType::IdentityDateOfBirth => write!(f, "IDENTITY_DATE_OF_BIRTH"),
+            PiiType::IdentityTaxId => write!(f, "IDENTITY_TAX_ID"),
+            // Liquid encoder — Contact
+            PiiType::ContactEmail => write!(f, "CONTACT_EMAIL"),
+            PiiType::ContactPhone => write!(f, "CONTACT_PHONE"),
+            PiiType::ContactAddress => write!(f, "CONTACT_ADDRESS"),
+            PiiType::ContactPostalCode => write!(f, "CONTACT_POSTAL_CODE"),
+            PiiType::ContactIpAddress => write!(f, "CONTACT_IP_ADDRESS"),
+            // Liquid encoder — Financial
+            PiiType::FinancialCreditCard => write!(f, "FINANCIAL_CREDIT_CARD"),
+            PiiType::FinancialIban => write!(f, "FINANCIAL_IBAN"),
+            PiiType::FinancialBankAccount => write!(f, "FINANCIAL_BANK_ACCOUNT"),
+            PiiType::FinancialSwiftBic => write!(f, "FINANCIAL_SWIFT_BIC"),
+            PiiType::FinancialCryptoWallet => write!(f, "FINANCIAL_CRYPTO_WALLET"),
+            PiiType::FinancialAmount => write!(f, "FINANCIAL_AMOUNT"),
+            // Liquid encoder — Credentials
+            PiiType::CredentialApiKey => write!(f, "CREDENTIAL_API_KEY"),
+            PiiType::CredentialPassword => write!(f, "CREDENTIAL_PASSWORD"),
+            PiiType::CredentialPrivateKey => write!(f, "CREDENTIAL_PRIVATE_KEY"),
+            PiiType::CredentialJwt => write!(f, "CREDENTIAL_JWT"),
+            PiiType::CredentialConnectionString => write!(f, "CREDENTIAL_CONNECTION_STRING"),
+            PiiType::DeveloperLoginCredentials => write!(f, "DEVELOPER_LOGIN_CREDENTIALS"),
+            // Liquid encoder — Online
+            PiiType::OnlineUsername => write!(f, "ONLINE_USERNAME"),
+            PiiType::OnlineUrl => write!(f, "ONLINE_URL"),
+            // Liquid encoder — Device
+            PiiType::DeviceMacAddress => write!(f, "DEVICE_MAC_ADDRESS"),
+            PiiType::DeviceImei => write!(f, "DEVICE_IMEI"),
+            PiiType::DeveloperDeviceId => write!(f, "DEVELOPER_DEVICE_ID"),
+            // Liquid encoder — Location
+            PiiType::LocationGpsCoordinates => write!(f, "LOCATION_GPS_COORDINATES"),
+            // Liquid encoder — Healthcare
+            PiiType::HealthcareMedicalRecord => write!(f, "HEALTHCARE_MEDICAL_RECORD"),
+            PiiType::HealthcareCondition => write!(f, "HEALTHCARE_CONDITION"),
+            PiiType::HealthcareMedication => write!(f, "HEALTHCARE_MEDICATION"),
+            PiiType::HealthcareHealthPlanId => write!(f, "HEALTHCARE_HEALTH_PLAN_ID"),
+            // Liquid encoder — Organization
+            PiiType::OrgCompanyName => write!(f, "ORG_COMPANY_NAME"),
+            // Liquid encoder — Special category
+            PiiType::SpecialReligion => write!(f, "SPECIAL_RELIGION"),
+            PiiType::SpecialPolitical => write!(f, "SPECIAL_POLITICAL"),
+            PiiType::SpecialOrientation => write!(f, "SPECIAL_ORIENTATION"),
+            PiiType::SpecialHealthStatus => write!(f, "SPECIAL_HEALTH_STATUS"),
+            // Liquid encoder — Legal
+            PiiType::LegalCaseNumber => write!(f, "LEGAL_CASE_NUMBER"),
         }
     }
 }
@@ -78,8 +183,11 @@ impl PiiType {
     /// Parse from a string label (e.g., from JSON config or external recognizer).
     /// Returns a known variant or `Custom` for unrecognized types.
     ///
-    /// Accepts both Presidio uppercase names (EMAIL_ADDRESS, CITY, US_STATE) and
-    /// legacy Aelvyril display names (Email, City, US_State) for backward compat.
+    /// Accepts:
+    /// * Presidio uppercase names (`EMAIL_ADDRESS`, `CITY`, `US_STATE`)
+    /// * Legacy Aelvyril display names (`Email`, `City`, `US_State`)
+    /// * Liquid encoder domain-prefixed labels (`identity.person_name`, `contact.email`,
+    ///   `credential.api_key`, etc.) — all 40 encoder entity types.
     pub fn from_str(s: &str) -> PiiType {
         match s {
             // Presidio / benchmark namespace
@@ -108,6 +216,57 @@ impl PiiType {
             "US_BANK_NUMBER" => PiiType::UsBankNumber,
             "US_PASSPORT" => PiiType::UsPassport,
             "US_DRIVER_LICENSE" => PiiType::UsDriverLicense,
+            // Liquid encoder — Identity
+            "identity.person_name" | "IDENTITY_PERSON_NAME" => PiiType::IdentityPersonName,
+            "identity.ssn" | "IDENTITY_SSN" => PiiType::Ssn,
+            "identity.national_id" | "IDENTITY_NATIONAL_ID" => PiiType::IdentityNationalId,
+            "identity.passport" | "IDENTITY_PASSPORT" => PiiType::IdentityPassport,
+            "identity.drivers_license" | "IDENTITY_DRIVERS_LICENSE" => PiiType::IdentityDriversLicense,
+            "identity.date_of_birth" | "IDENTITY_DATE_OF_BIRTH" => PiiType::IdentityDateOfBirth,
+            "identity.tax_id" | "IDENTITY_TAX_ID" => PiiType::IdentityTaxId,
+            // Liquid encoder — Contact
+            "contact.email" | "CONTACT_EMAIL" => PiiType::ContactEmail,
+            "contact.phone" | "CONTACT_PHONE" => PiiType::ContactPhone,
+            "contact.address" | "CONTACT_ADDRESS" => PiiType::ContactAddress,
+            "contact.postal_code" | "CONTACT_POSTAL_CODE" => PiiType::ContactPostalCode,
+            "contact.ip_address" | "CONTACT_IP_ADDRESS" => PiiType::ContactIpAddress,
+            // Liquid encoder — Financial
+            "financial.credit_card" | "FINANCIAL_CREDIT_CARD" => PiiType::FinancialCreditCard,
+            "financial.iban" | "FINANCIAL_IBAN" => PiiType::FinancialIban,
+            "financial.bank_account" | "FINANCIAL_BANK_ACCOUNT" => PiiType::FinancialBankAccount,
+            "financial.swift_bic" | "FINANCIAL_SWIFT_BIC" => PiiType::FinancialSwiftBic,
+            "financial.crypto_wallet" | "FINANCIAL_CRYPTO_WALLET" => PiiType::FinancialCryptoWallet,
+            "financial.amount" | "FINANCIAL_AMOUNT" => PiiType::FinancialAmount,
+            // Liquid encoder — Credentials
+            "credential.api_key" | "CREDENTIAL_API_KEY" => PiiType::CredentialApiKey,
+            "credential.password" | "CREDENTIAL_PASSWORD" => PiiType::CredentialPassword,
+            "credential.private_key" | "CREDENTIAL_PRIVATE_KEY" => PiiType::CredentialPrivateKey,
+            "credential.jwt" | "CREDENTIAL_JWT" => PiiType::CredentialJwt,
+            "credential.connection_string" | "CREDENTIAL_CONNECTION_STRING" => PiiType::CredentialConnectionString,
+            "developer.login_credentials" | "DEVELOPER_LOGIN_CREDENTIALS" => PiiType::DeveloperLoginCredentials,
+            // Liquid encoder — Online
+            "online.username" | "ONLINE_USERNAME" => PiiType::OnlineUsername,
+            "online.url" | "ONLINE_URL" => PiiType::OnlineUrl,
+            // Liquid encoder — Device
+            "device.mac_address" | "DEVICE_MAC_ADDRESS" => PiiType::DeviceMacAddress,
+            "device.imei" | "DEVICE_IMEI" => PiiType::DeviceImei,
+            "developer.device_id" | "DEVELOPER_DEVICE_ID" => PiiType::DeveloperDeviceId,
+            // Liquid encoder — Location
+            "location.gps_coordinates" | "LOCATION_GPS_COORDINATES" => PiiType::LocationGpsCoordinates,
+            // Liquid encoder — Healthcare
+            "healthcare.medical_record" | "HEALTHCARE_MEDICAL_RECORD" => PiiType::HealthcareMedicalRecord,
+            "healthcare.condition" | "HEALTHCARE_CONDITION" => PiiType::HealthcareCondition,
+            "healthcare.medication" | "HEALTHCARE_MEDICATION" => PiiType::HealthcareMedication,
+            "healthcare.health_plan_id" | "HEALTHCARE_HEALTH_PLAN_ID" => PiiType::HealthcareHealthPlanId,
+            // Liquid encoder — Organization
+            "org.company_name" | "ORG_COMPANY_NAME" => PiiType::OrgCompanyName,
+            // Liquid encoder — Special category
+            "special.religion" | "SPECIAL_RELIGION" => PiiType::SpecialReligion,
+            "special.political" | "SPECIAL_POLITICAL" => PiiType::SpecialPolitical,
+            "special.orientation" | "SPECIAL_ORIENTATION" => PiiType::SpecialOrientation,
+            "special.health_status" | "SPECIAL_HEALTH_STATUS" => PiiType::SpecialHealthStatus,
+            // Liquid encoder — Legal
+            "legal.case_number" | "LEGAL_CASE_NUMBER" => PiiType::LegalCaseNumber,
             _ => PiiType::Custom(s.to_string()),
         }
     }
@@ -432,5 +591,102 @@ mod tests {
         } else {
             panic!("Expected Custom variant, got {:?}", custom);
         }
+    }
+
+    // ── Liquid LFM2.5-Encoder-350M mapping tests ───────────────────────────
+
+    #[test]
+    fn test_liquid_encoder_identity_mapping() {
+        assert_eq!(PiiType::from_str("identity.person_name"), PiiType::IdentityPersonName);
+        assert_eq!(PiiType::from_str("identity.ssn"), PiiType::Ssn);
+        assert_eq!(PiiType::from_str("identity.national_id"), PiiType::IdentityNationalId);
+        assert_eq!(PiiType::from_str("identity.passport"), PiiType::IdentityPassport);
+        assert_eq!(PiiType::from_str("identity.drivers_license"), PiiType::IdentityDriversLicense);
+        assert_eq!(PiiType::from_str("identity.date_of_birth"), PiiType::IdentityDateOfBirth);
+        assert_eq!(PiiType::from_str("identity.tax_id"), PiiType::IdentityTaxId);
+    }
+
+    #[test]
+    fn test_liquid_encoder_contact_mapping() {
+        assert_eq!(PiiType::from_str("contact.email"), PiiType::ContactEmail);
+        assert_eq!(PiiType::from_str("contact.phone"), PiiType::ContactPhone);
+        assert_eq!(PiiType::from_str("contact.address"), PiiType::ContactAddress);
+        assert_eq!(PiiType::from_str("contact.postal_code"), PiiType::ContactPostalCode);
+        assert_eq!(PiiType::from_str("contact.ip_address"), PiiType::ContactIpAddress);
+    }
+
+    #[test]
+    fn test_liquid_encoder_financial_mapping() {
+        assert_eq!(PiiType::from_str("financial.credit_card"), PiiType::FinancialCreditCard);
+        assert_eq!(PiiType::from_str("financial.iban"), PiiType::FinancialIban);
+        assert_eq!(PiiType::from_str("financial.bank_account"), PiiType::FinancialBankAccount);
+        assert_eq!(PiiType::from_str("financial.swift_bic"), PiiType::FinancialSwiftBic);
+        assert_eq!(PiiType::from_str("financial.crypto_wallet"), PiiType::FinancialCryptoWallet);
+        assert_eq!(PiiType::from_str("financial.amount"), PiiType::FinancialAmount);
+    }
+
+    #[test]
+    fn test_liquid_encoder_credentials_mapping() {
+        assert_eq!(PiiType::from_str("credential.api_key"), PiiType::CredentialApiKey);
+        assert_eq!(PiiType::from_str("credential.password"), PiiType::CredentialPassword);
+        assert_eq!(PiiType::from_str("credential.private_key"), PiiType::CredentialPrivateKey);
+        assert_eq!(PiiType::from_str("credential.jwt"), PiiType::CredentialJwt);
+        assert_eq!(PiiType::from_str("credential.connection_string"), PiiType::CredentialConnectionString);
+        assert_eq!(PiiType::from_str("developer.login_credentials"), PiiType::DeveloperLoginCredentials);
+    }
+
+    #[test]
+    fn test_liquid_encoder_misc_mapping() {
+        assert_eq!(PiiType::from_str("online.username"), PiiType::OnlineUsername);
+        assert_eq!(PiiType::from_str("online.url"), PiiType::OnlineUrl);
+        assert_eq!(PiiType::from_str("device.mac_address"), PiiType::DeviceMacAddress);
+        assert_eq!(PiiType::from_str("device.imei"), PiiType::DeviceImei);
+        assert_eq!(PiiType::from_str("developer.device_id"), PiiType::DeveloperDeviceId);
+        assert_eq!(PiiType::from_str("location.gps_coordinates"), PiiType::LocationGpsCoordinates);
+        assert_eq!(PiiType::from_str("org.company_name"), PiiType::OrgCompanyName);
+        assert_eq!(PiiType::from_str("legal.case_number"), PiiType::LegalCaseNumber);
+    }
+
+    #[test]
+    fn test_liquid_encoder_healthcare_mapping() {
+        assert_eq!(PiiType::from_str("healthcare.medical_record"), PiiType::HealthcareMedicalRecord);
+        assert_eq!(PiiType::from_str("healthcare.condition"), PiiType::HealthcareCondition);
+        assert_eq!(PiiType::from_str("healthcare.medication"), PiiType::HealthcareMedication);
+        assert_eq!(PiiType::from_str("healthcare.health_plan_id"), PiiType::HealthcareHealthPlanId);
+    }
+
+    #[test]
+    fn test_liquid_encoder_special_mapping() {
+        assert_eq!(PiiType::from_str("special.religion"), PiiType::SpecialReligion);
+        assert_eq!(PiiType::from_str("special.political"), PiiType::SpecialPolitical);
+        assert_eq!(PiiType::from_str("special.orientation"), PiiType::SpecialOrientation);
+        assert_eq!(PiiType::from_str("special.health_status"), PiiType::SpecialHealthStatus);
+    }
+
+    #[test]
+    fn test_liquid_encoder_display_is_uppercase() {
+        // All Liquid encoder variants must display as the benchmark-namespace form.
+        assert_eq!(PiiType::IdentityPersonName.to_string(), "IDENTITY_PERSON_NAME");
+        assert_eq!(PiiType::ContactEmail.to_string(), "CONTACT_EMAIL");
+        assert_eq!(PiiType::FinancialCreditCard.to_string(), "FINANCIAL_CREDIT_CARD");
+        assert_eq!(PiiType::CredentialPassword.to_string(), "CREDENTIAL_PASSWORD");
+        assert_eq!(PiiType::DeviceMacAddress.to_string(), "DEVICE_MAC_ADDRESS");
+        assert_eq!(PiiType::HealthcareCondition.to_string(), "HEALTHCARE_CONDITION");
+        assert_eq!(PiiType::OrgCompanyName.to_string(), "ORG_COMPANY_NAME");
+        assert_eq!(PiiType::LegalCaseNumber.to_string(), "LEGAL_CASE_NUMBER");
+        assert_eq!(PiiType::SpecialReligion.to_string(), "SPECIAL_RELIGION");
+    }
+
+    #[test]
+    fn test_liquid_encoder_both_label_forms_round_trip() {
+        // Both the dotted (model-native) and UPPER_SNAKE (display) labels parse.
+        assert_eq!(
+            PiiType::from_str("contact.email"),
+            PiiType::from_str("CONTACT_EMAIL"),
+        );
+        assert_eq!(
+            PiiType::from_str("credential.password"),
+            PiiType::from_str("CREDENTIAL_PASSWORD"),
+        );
     }
 }

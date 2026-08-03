@@ -56,6 +56,12 @@ rcgen = { version = "0.13", features = ["x509-parser"], optional = true }
 [features]
 benchmark = []
 llama = []
+# Liquid LFM2.5-Encoder-350M (PII-Detector + Policy-Linter) integration.
+# The Rust clients and Python sidecar endpoints are always compiled in (the
+# runtime `liquid_pii_enabled` / `liquid_policy_enabled` toggles in settings
+# control behavior). This feature is reserved for future heavy compile-time
+# gating (e.g. bundling model weights at build time).
+liquid-encoder = []
 tls = ["rcgen"]
 
 [dev-dependencies]
@@ -71,4 +77,3 @@ strip = true
 [[bin]]
 name = "aelvyril-headless"
 path = "src/bin/aelvyril-headless.rs"
-required-features = ["llama"]

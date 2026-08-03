@@ -68,6 +68,17 @@ export interface AppSettings {
   rate_limit_max_requests_per_minute: number;
   rate_limit_max_requests_per_hour: number;
   rate_limit_max_concurrent_requests: number;
+  // Liquid LFM2.5 encoder settings
+  liquid_pii_enabled?: boolean;
+  liquid_policy_enabled?: boolean;
+  liquid_model_dir?: string | null;
+  policy_rules?: PolicyRule[];
+}
+
+export interface PolicyRule {
+  text: string;
+  action: "warn" | "block";
+  enabled: boolean;
 }
 
 export interface DetectedTool {

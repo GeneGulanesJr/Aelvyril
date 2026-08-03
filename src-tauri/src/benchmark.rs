@@ -25,7 +25,7 @@ pub struct BenchmarkConfig {
 pub enum BackendKind {
     Presidio,
     Regex,
-    Llama,
+    Liquid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,50 +176,31 @@ impl RegexDetector {
     }
 }
 
-// ── Llama backend (requires llama-server in PATH) ──────────────────────────
+// ── Liquid LFM2.5-Encoder backend (requires the Python sidecar at base_url) ──
 
-#[cfg(feature = "llama")]
-mod llama_backend {
+mod liquid_backend {
     use super::*;
-    use crate::llama::LlamaDetector;
+    use crate::pii::liquid::LiquidPiiClient;
 
-    pub struct LlamaBenchmarkDetector {
-        inner: crate::llama::LlamaDetector,
+    pub struct LiquidBenchmarkDetector {
+        client: LiquidPiiClient,
     }
 
-    impl LlamaBenchmarkDetector {
-        pub async fn new(gguf_path: &str) -> Result<Self, String> {
-            let inner = crate::llama::LlamaDetector::new(gguf_path)
-                .await
-                .map_err(|e| e.to_string())?;
-            Ok(Self { inner })
+    impl LiquidBenchmarkDetector {
+        pub async fn new(base_url: &str) -> Result<Self, String> {
+            let client = LiquidPiiClient::new(base_url.to_string(), true);
+            Ok(Self { client })
         }
     }
 
     #[async_trait::async_trait]
-    impl Detector for LlamaBenchmarkDetector {
+    impl Detector for LiquidBenchmarkDetector {
         async fn detect(&self, text: &str) -> Result<Vec<PiiMatch>, String> {
-            self.inner.detect(text).await.map_err(|e| e.to_string())
-        }
-    }
-}
-
-#[cfg(not(feature = "llama"))]
-mod llama_backend {
-    use super::*;
-
-    pub struct LlamaBenchmarkDetector;
-
-    impl LlamaBenchmarkDetector {
-        pub async fn new(_: &str) -> Result<Self, String> {
-            Err("llama backend not compiled — enable feature 'llama' and provide llama-server".to_string())
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl Detector for LlamaBenchmarkDetector {
-        async fn detect(&self, _text: &str) -> Result<Vec<PiiMatch>, String> {
-            Err("llama backend not compiled".to_string())
+            self.client
+                .analyze_with_error(text)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "Liquid PII returned no result".to_string())
         }
     }
 }
@@ -323,9 +304,9 @@ pub async fn benchmark_pii_run(
             ];
             Box::new(RegexDetector::new(&patterns).await?)
         }
-        BackendKind::Llama => {
-            let gguf = config.gguf_path.clone().ok_or("gguf_path required for llama backend")?;
-            Box::new(llama_backend::LlamaBenchmarkDetector::new(&gguf).await?)
+        BackendKind::Liquid => {
+            let url = config.presidio_url.clone().unwrap_or_else(|| "http://127.0.0.1:3000".into());
+            Box::new(liquid_backend::LiquidBenchmarkDetector::new(&url).await?)
         }
     };
 

@@ -9,6 +9,7 @@ use crate::lists::ListManager;
 use crate::perf::benchmark::LatencyBenchmark;
 use crate::perf::cache::PiiCache;
 use crate::pii::{PiiEngine, PresidioService};
+use crate::policy::LiquidPolicyClient;
 use crate::security::audit::KeyLifecycleAuditor;
 use crate::security::rate_limit::RateLimiter;
 use crate::session::SessionManager;
@@ -46,6 +47,9 @@ pub struct AppState {
     pub pii_engine: Arc<RwLock<PiiEngine>>,
     /// Presidio Python service lifecycle manager
     pub presidio_service: Arc<parking_lot::Mutex<PresidioService>>,
+    /// Liquid LFM2.5-Encoder-350M-Policy-Linter client. Shares the same sidecar
+    /// as Presidio. Enabled/disabled at runtime via `settings.liquid_policy_enabled`.
+    pub policy_client: Arc<RwLock<LiquidPolicyClient>>,
     /// Token usage statistics tracker
     pub token_usage_tracker: Arc<TokenUsageTracker>,
     /// Persistent token usage store (SQLite)
@@ -143,6 +147,10 @@ impl AppState {
             )),
             pii_engine: shared_pii_engine,
             presidio_service: Arc::new(parking_lot::Mutex::new(PresidioService::new())),
+            policy_client: Arc::new(RwLock::new(LiquidPolicyClient::new(
+                "http://127.0.0.1:3000".into(),
+                settings.liquid_policy_enabled,
+            ))),
             token_usage_tracker,
             token_usage_store,
             alert_thresholds,

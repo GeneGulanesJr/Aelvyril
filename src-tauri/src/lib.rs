@@ -8,6 +8,7 @@ pub mod llama;
 pub mod lists;
 pub mod perf;
 pub mod pii;
+pub mod policy;
 pub mod providers;
 pub mod pseudonym;
 pub mod security;

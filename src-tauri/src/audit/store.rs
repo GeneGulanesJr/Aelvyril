@@ -50,7 +50,24 @@ impl AuditStore {
             );
 
             CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_entries(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_entries(session_id);",
+            CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_entries(session_id);
+
+            CREATE TABLE IF NOT EXISTS policy_events (
+                id              TEXT PRIMARY KEY,
+                timestamp       TEXT NOT NULL,
+                session_id      TEXT,
+                rule_text       TEXT NOT NULL,
+                action          TEXT NOT NULL,
+                token_text      TEXT NOT NULL,
+                start_pos       INTEGER NOT NULL,
+                end_pos         INTEGER NOT NULL,
+                score           REAL NOT NULL,
+                blocked         INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_policy_timestamp ON policy_events(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_policy_session ON policy_events(session_id);
+            CREATE INDEX IF NOT EXISTS idx_policy_action ON policy_events(action);",
         )
         .map_err(|e| format!("Failed to create audit schema: {}", e))?;
 
@@ -226,6 +243,84 @@ impl AuditStore {
         }
         Ok(csv)
     }
+
+    // ── Policy events ──────────────────────────────────────────────────────
+
+    /// Record a single policy violation. Used for both `warn` and `block` events.
+    pub fn record_policy_event(
+        &self,
+        event: &PolicyEvent,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO policy_events
+                (id, timestamp, session_id, rule_text, action, token_text,
+                 start_pos, end_pos, score, blocked)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                event.id,
+                event.timestamp.to_rfc3339(),
+                event.session_id,
+                event.rule_text,
+                event.action,
+                event.token_text,
+                event.start as i64,
+                event.end as i64,
+                event.score,
+                event.blocked as i64,
+            ],
+        )
+        .map_err(|e| format!("Failed to insert policy event: {}", e))?;
+        Ok(())
+    }
+
+    /// Fetch the most recent policy events (newest first).
+    pub fn get_policy_events(&self, limit: usize) -> Result<Vec<PolicyEvent>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, timestamp, session_id, rule_text, action, token_text,
+                        start_pos, end_pos, score, blocked
+                 FROM policy_events
+                 ORDER BY timestamp DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| format!("Policy events query failed: {}", e))?;
+        let rows = stmt
+            .query_map(params![limit as i64], |row| {
+                let ts_str: String = row.get(1)?;
+                Ok(PolicyEvent {
+                    id: row.get(0)?,
+                    timestamp: DateTime::parse_from_rfc3339(&ts_str)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    session_id: row.get(2)?,
+                    rule_text: row.get(3)?,
+                    action: row.get(4)?,
+                    token_text: row.get(5)?,
+                    start: row.get::<_, i64>(6)? as usize,
+                    end: row.get::<_, i64>(7)? as usize,
+                    score: row.get(8)?,
+                    blocked: row.get::<_, i64>(9)? != 0,
+                })
+            })
+            .map_err(|e| format!("Policy events map failed: {}", e))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Policy events collect failed: {}", e))
+    }
+
+    /// Count blocked events (for dashboard).
+    pub fn count_blocked_events(&self) -> Result<usize, String> {
+        let conn = self.conn.lock();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM policy_events WHERE blocked = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to count blocked events: {}", e))?;
+        Ok(count as usize)
+    }
 }
 
 /// Aggregate stats for the dashboard
@@ -234,4 +329,20 @@ pub struct AuditStats {
     pub total_requests: usize,
     pub total_entities: usize,
     pub entity_breakdown: Vec<(String, i64)>,
+}
+
+/// A recorded policy violation (warn or block) — stored in `policy_events`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PolicyEvent {
+    pub id: String,
+    pub timestamp: DateTime<Utc>,
+    pub session_id: Option<String>,
+    pub rule_text: String,
+    /// `"warn"` or `"block"`.
+    pub action: String,
+    pub token_text: String,
+    pub start: usize,
+    pub end: usize,
+    pub score: f64,
+    pub blocked: bool,
 }

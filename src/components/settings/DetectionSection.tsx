@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Eye, Monitor } from "lucide-react";
+import { Eye, Monitor, Cpu, ShieldAlert } from "lucide-react";
 import { useSettings, useClipboard } from "../../hooks/useTauri";
 import { ToggleRow } from "./components";
 import styles from "../../pages/Settings.module.css";
@@ -37,6 +37,20 @@ export function DetectionSection() {
     const enabled = !settings.clipboard_monitoring;
     await clipboard.toggle(enabled);
     await update({ ...settings, clipboard_monitoring: enabled });
+  };
+
+  const handleToggleLiquidPii = async () => {
+    await update({
+      ...settings,
+      liquid_pii_enabled: !settings.liquid_pii_enabled,
+    });
+  };
+
+  const handleToggleLiquidPolicy = async () => {
+    await update({
+      ...settings,
+      liquid_policy_enabled: !settings.liquid_policy_enabled,
+    });
   };
 
   return (
@@ -79,6 +93,34 @@ export function DetectionSection() {
           enabled={settings.clipboard_monitoring}
           onToggle={handleToggleClipboard}
         />
+      </div>
+
+      <div className={styles.subSection}>
+        <h3 className={styles.subTitle}>
+          <Cpu size={16} />
+          Liquid LFM2.5 Encoder Backends
+        </h3>
+        <p className={styles.subDesc}>
+          Enable the locally-hosted Liquid LFM2.5-Encoder models (auto-downloaded from
+          Hugging Face). The PII encoder runs as a token-classification layer ahead of
+          Presidio; the policy linter gates outbound user messages against your rules.
+        </p>
+        <ToggleRow
+          label="Liquid PII encoder (LFM2.5-Encoder-350M-PII-Detector)"
+          enabled={!!settings.liquid_pii_enabled}
+          onToggle={handleToggleLiquidPii}
+        />
+        <ToggleRow
+          label="Liquid policy linter (LFM2.5-Encoder-350M-Policy-Linter)"
+          enabled={!!settings.liquid_policy_enabled}
+          onToggle={handleToggleLiquidPolicy}
+        />
+        {settings.liquid_policy_enabled && (
+          <p className={styles.hint}>
+            <ShieldAlert size={12} /> Author policy rules in the{" "}
+            <strong>Policy</strong> tab.
+          </p>
+        )}
       </div>
 
       <div className={styles.subSection}>

@@ -14,6 +14,12 @@ pub struct PresidioService {
     child: Option<Child>,
     host: String,
     port: String,
+    /// Enable the Liquid LFM2.5-Encoder-350M-PII-Detector sidecar endpoint.
+    pub liquid_pii_enabled: bool,
+    /// Enable the Liquid LFM2.5-Encoder-350M-Policy-Linter sidecar endpoint.
+    pub liquid_policy_enabled: bool,
+    /// Override the Liquid model cache directory.
+    pub liquid_model_dir: Option<String>,
 }
 
 impl Default for PresidioService {
@@ -28,6 +34,9 @@ impl PresidioService {
             child: None,
             host: DEFAULT_HOST.to_string(),
             port: DEFAULT_PORT.to_string(),
+            liquid_pii_enabled: false,
+            liquid_policy_enabled: false,
+            liquid_model_dir: None,
         }
     }
 
@@ -37,6 +46,9 @@ impl PresidioService {
             child: None,
             host: host.to_string(),
             port: port.to_string(),
+            liquid_pii_enabled: false,
+            liquid_policy_enabled: false,
+            liquid_model_dir: None,
         }
     }
 
@@ -124,12 +136,28 @@ impl PresidioService {
         };
 
         let mut command = Command::new(&cmd);
-        let child = command
+        command
             .args(&args)
             .env("PRESIDIO_HOST", &self.host)
             .env("PRESIDIO_PORT", &self.port)
             .env("AELVYRIL_PRESIDIO_HOST", &self.host)
             .env("AELVYRIL_PRESIDIO_PORT", &self.port)
+            .env(
+                "AELVYRIL_LIQUID_PII_ENABLED",
+                if self.liquid_pii_enabled { "1" } else { "0" },
+            )
+            .env(
+                "AELVYRIL_LIQUID_POLICY_ENABLED",
+                if self.liquid_policy_enabled {
+                    "1"
+                } else {
+                    "0"
+                },
+            );
+        if let Some(ref dir) = self.liquid_model_dir {
+            command.env("AELVYRIL_LIQUID_MODEL_DIR", dir);
+        }
+        let child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

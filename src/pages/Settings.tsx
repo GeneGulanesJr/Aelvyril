@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Shield, Eye, ListFilter, Power, Bot } from "lucide-react";
+import { Shield, Eye, ListFilter, Power, Bot, ShieldCheck } from "lucide-react";
 import { Key } from "lucide-react";
 import {
   ProvidersSection,
@@ -8,16 +8,25 @@ import {
   DetectionSection,
   BehaviorSection,
   OrchestratorSection,
+  PolicySection,
 } from "../components/settings";
 import styles from "./Settings.module.css";
 
-type SettingsTab = "providers" | "gateway" | "lists" | "detection" | "behavior" | "orchestrator";
+type SettingsTab =
+  | "providers"
+  | "gateway"
+  | "lists"
+  | "detection"
+  | "behavior"
+  | "policy"
+  | "orchestrator";
 
 const tabs: { id: SettingsTab; label: string; icon: typeof Shield }[] = [
   { id: "providers", label: "Providers", icon: Shield },
   { id: "gateway", label: "Gateway Key", icon: Key },
   { id: "lists", label: "Allow / Deny Lists", icon: ListFilter },
   { id: "detection", label: "Detection", icon: Eye },
+  { id: "policy", label: "Policy", icon: ShieldCheck },
   { id: "behavior", label: "Startup & Behavior", icon: Power },
   { id: "orchestrator", label: "Orchestrator", icon: Bot },
 ];
@@ -51,6 +60,7 @@ export function Settings() {
       {activeTab === "gateway" && <GatewayKeySection />}
       {activeTab === "lists" && <ListsSection />}
       {activeTab === "detection" && <DetectionSection />}
+      {activeTab === "policy" && <PolicySection />}
       {activeTab === "behavior" && <BehaviorSection />}
       {activeTab === "orchestrator" && <OrchestratorSection />}
     </div>

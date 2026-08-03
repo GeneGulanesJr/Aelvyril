@@ -42,35 +42,6 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let rt = Runtime::new()?;
 
-    // Initialize LLM PII backend if a GGUF model is available.
-    // Wrapped in a single block_on call so all async ops run in one
-    // runtime context (avoids "no reactor running" panics).
-    #[cfg(feature = "llama")]
-    {
-        use aelvyril_lib::pii::PiiEngine;
-        use std::path::PathBuf;
-        let model_path = PathBuf::from("resources/models/pii-q4_k_m.gguf");
-        if model_path.exists() {
-            println!("[INFO] Initializing LLM PII backend from {:?} (30s timeout)...", model_path);
-            rt.block_on(async {
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    PiiEngine::init_llama(&model_path.to_string_lossy()),
-                ).await {
-                    Ok(Ok(detector)) => {
-                        let mut state = app_state.write().await;
-                        state.pii_engine.write().await.set_llama_detector(detector);
-                        println!("[INFO] LLM PII backend loaded successfully");
-                    }
-                    Ok(Err(e)) => eprintln!("[WARN] Failed to init LLM backend: {}", e),
-                    Err(_) => eprintln!("[WARN] LLM backend init timed out (30s) — continuing without it"),
-                }
-            });
-        } else {
-            eprintln!("[INFO] No LLM model found at {} — skipping LLM backend", model_path.display());
-        }
-    }
-
     // Build GatewayState with current lib API (all cloning is cheap Arc)
     let pii_engine = {
         let state_guard = rt.block_on(app_state.read());
@@ -104,8 +75,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 max_concurrent_requests: 1_000,
             },
         );
-        // Enable Presidio directly — analyzer will lazy-init on first call
+        // Enable Presidio + Liquid PII encoder directly — both live in the same
+        // sidecar; the analyzer will lazy-init on first call and the Liquid
+        // model is downloaded on first /liquid/pii request.
         state.pii_engine.write().await.set_presidio_enabled(true);
+        state.pii_engine.write().await.set_liquid_pii_enabled(true);
     });
 
     // Start HTTP gateway immediately

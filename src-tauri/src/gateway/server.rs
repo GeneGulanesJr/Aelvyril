@@ -407,6 +407,16 @@ async fn handle_chat_completions(
     // Release the read lock early — we don't need it for the remaining pipeline
     drop(app_state_guard);
 
+    // 3.5 Policy lint (post-PII, user messages only, pre-forward).
+    // `block` violations short-circuit the request; `warn` violations are audited
+    // and forwarded normally. Failures degrade silently (the linter returns
+    // `None` on any error).
+    if let Some(block_resp) =
+        enforce_policy_pre_forward(&gw, &session_id, &sanitized_body).await
+    {
+        return block_resp;
+    }
+
     // ── Normal streaming/non-streaming path (re-acquire read lock) ───────────
     let app_state_guard = gw.app_state.read().await;
 
@@ -677,4 +687,141 @@ async fn sanitize_passthrough_body(
         matches.len()
     );
     s_body
+}
+
+// ── Policy enforcement ─────────────────────────────────────────────────────
+
+/// Extract the concatenation of all `role: "user"` message text from a chat body.
+/// Returns `None` if there are no user messages.
+fn extract_user_messages(body: &serde_json::Value) -> Option<String> {
+    let messages = body.get("messages")?.as_array()?;
+    let mut out = String::new();
+    let mut found_user = false;
+    for msg in messages {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        if role != "user" {
+            continue;
+        }
+        found_user = true;
+        if let Some(content) = msg.get("content") {
+            match content {
+                serde_json::Value::String(s) => {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(s);
+                }
+                serde_json::Value::Array(parts) => {
+                    for part in parts {
+                        if part.get("type").and_then(|v| v.as_str()) == Some("text") {
+                            if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+                                if !out.is_empty() {
+                                    out.push('\n');
+                                }
+                                out.push_str(t);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if found_user { Some(out) } else { None }
+}
+
+/// Run the policy linter on user-role messages (post-PII pseudonymization).
+/// * `warn` → audit each violation, continue forwarding.
+/// * `block` → audit each violation, return `Some(400 response)` to short-circuit.
+///
+/// All failures degrade silently — the linter returns `None` on errors and
+/// we forward the request unchanged.
+async fn enforce_policy_pre_forward(
+    gw: &GatewayState,
+    session_id: &str,
+    sanitized_body: &serde_json::Value,
+) -> Option<Response> {
+    use axum::http::StatusCode;
+
+    let state_guard = gw.app_state.read().await;
+
+    // Only enforce if explicitly enabled.
+    if !state_guard.settings.liquid_policy_enabled {
+        return None;
+    }
+    let rules = state_guard.settings.policy_rules.clone();
+    if rules.is_empty() {
+        return None;
+    }
+
+    let user_text = match extract_user_messages(sanitized_body) {
+        Some(t) if !t.is_empty() => t,
+        _ => return None,
+    };
+
+    let client = state_guard.policy_client.read().await;
+    let violations = match client.lint(&user_text, &rules).await {
+        Some(v) => v,
+        None => return None, // graceful: sidecar down or disabled
+    };
+    drop(client);
+
+    if violations.is_empty() {
+        return None;
+    }
+
+    // Record every violation in the audit log.
+    let mut blocked = false;
+    let mut first_block_summary: Option<String> = None;
+    if let Some(audit) = state_guard.audit_store.as_ref() {
+        for v in &violations {
+            let is_block = v.action == crate::policy::PolicyAction::Block;
+            if is_block {
+                blocked = true;
+                if first_block_summary.is_none() {
+                    first_block_summary =
+                        Some(format!("{} (matched `{}`)", v.rule_text, v.token_text));
+                }
+            }
+            let event = crate::audit::PolicyEvent {
+                id: uuid::Uuid::new_v4().to_string(),
+                timestamp: chrono::Utc::now(),
+                session_id: Some(session_id.to_string()),
+                rule_text: v.rule_text.clone(),
+                action: v.action.as_str().to_string(),
+                token_text: v.token_text.clone(),
+                start: v.start,
+                end: v.end,
+                score: v.score,
+                blocked: is_block,
+            };
+            if let Err(e) = audit.record_policy_event(&event) {
+                tracing::warn!("Failed to record policy event: {}", e);
+            }
+        }
+    }
+
+    if blocked {
+        let detail = first_block_summary.unwrap_or_else(|| "policy violation".into());
+        tracing::warn!(
+            session_id,
+            detail = %detail,
+            "Request blocked by policy linter"
+        );
+        let body = serde_json::json!({
+            "error": {
+                "message": format!("Request blocked by policy: {detail}"),
+                "type": "policy_violation",
+            }
+        });
+        return Some((StatusCode::BAD_REQUEST, axum::Json(body)).into_response());
+    }
+
+    // Warn-only: continue.
+    tracing::info!(
+        session_id,
+        count = violations.len(),
+        "Policy linter emitted warnings; continuing"
+    );
+    None
 }

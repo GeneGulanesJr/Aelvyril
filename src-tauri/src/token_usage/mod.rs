@@ -33,10 +33,6 @@ pub enum ToolName {
     ChatCompletions,
     /// Direct proxy pass-through (no PII processing).
     Passthrough,
-    /// Orchestrator planning model call.
-    OrchestratorPlan,
-    /// Orchestrator executor model call.
-    OrchestratorExecute,
 }
 
 impl ToolName {
@@ -45,8 +41,6 @@ impl ToolName {
         match self {
             ToolName::ChatCompletions => "chat_completions",
             ToolName::Passthrough => "passthrough",
-            ToolName::OrchestratorPlan => "orchestrator_plan",
-            ToolName::OrchestratorExecute => "orchestrator_execute",
         }
     }
 }

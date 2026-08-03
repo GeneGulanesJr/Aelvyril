@@ -74,15 +74,6 @@ Sessions are tied to conversation context. A new chat starts a fresh session wit
 
 Every request is logged locally — what was detected, entity type, token mapping, upstream provider, and timestamp. The log never stores original sensitive values. Users can review, filter, and export the audit log from the desktop app.
 
-### Orchestrator — Plan & Execute Coding Agent
-
-A built-in coding agent that breaks tasks into subtasks, executes them via [pi](https://github.com/badlogic/pi-mono), and validates results:
-
-- **Planning** — An LLM call through Aelvyril's gateway generates a structured plan with subtasks, allowed files, constraints, test commands, and acceptance criteria
-- **Execution** — Each subtask spawns a `pi --mode rpc` subprocess for autonomous code editing with scoped file access
-- **Validation** — Whitelisted test commands (cargo check, npm test, pytest, etc.) run after each subtask, with shell metacharacter injection prevention
-- **Recovery** — Automatic replanning on failure, scope violations, or test failures; blocked state prompts user for guidance
-
 ### Clipboard Monitoring
 
 A system-level clipboard listener scans pasted content for PII across all platforms:
@@ -176,73 +167,6 @@ flowchart TD
     F3 --> G1
 ```
 
-### Orchestrator Pipeline
-
-```mermaid
-flowchart TD
-    subgraph Input["User Task"]
-        A1["User submits<br/>coding task"]
-    end
-
-    subgraph Decompose["Ticket Agent"]
-        B1["Decompose request<br/>into subtask tickets"]
-        B2["Generate concurrency plan<br/>(waves, dependencies)"]
-    end
-
-    subgraph Board["Board Manager"]
-        C1["Kanban board<br/>backlog → in_progress →<br/>testing → in_review → done"]
-        C2["Wave Executor<br/>Dispatch tickets in parallel"]
-    end
-
-    subgraph Execute["Main Agent"]
-        D1["Create git branch<br/>per ticket"]
-        D2["Spawn sub-agents<br/>for code editing"]
-    end
-
-    subgraph Validate["Test Agent"]
-        E1["Run whitelisted<br/>test commands"]
-        E2{"Tests pass?"}
-    end
-
-    subgraph Review["Review Agent"]
-        F1["Collect diffs"]
-        F2{"Approved?"}
-    end
-
-    subgraph Monitor["Watchdog Agent"]
-        G1["Monitor progress"]
-        G2["Detect stuck agents"]
-        G3["Intervene / escalate"]
-    end
-
-    subgraph Supervisor["Supervisor Agent"]
-        H1["Route messages"]
-        H2["Handle redirects &<br/>status checks"]
-    end
-
-    A1 --> B1
-    B1 --> B2
-    B2 --> C1
-    C1 --> C2
-    C2 --> D1
-    D1 --> D2
-    D2 --> E1
-    E1 --> E2
-    E2 -- "Yes" --> F1
-    E2 -- "No" --> D2
-    F1 --> F2
-    F2 -- "Yes" --> C1
-    F2 -- "No" --> D2
-    G1 --> G2
-    G2 --> G3
-    G3 -.-> C1
-    H1 --> H2
-    H2 -.-> C1
-
-    style E2 fill:#f9f,stroke:#333
-    style F2 fill:#f9f,stroke:#333
-```
-
 ### Architecture (Text)
 
 ```
@@ -273,10 +197,10 @@ Clean response back to client
 |-------|-----------|
 | Desktop shell | **Tauri v2** (Rust) |
 | Backend | **Rust** — axum HTTP server, tokio async runtime |
-| Frontend | **React 19** + TypeScript, Vite, React Router |
+| Frontend | **React 18** + TypeScript, Vite, React Router |
 | PII Detection | Presidio (Python microservice) + native Rust regex recognizers |
 | Key Storage | `keyring` crate (OS-native: Keychain, Credential Manager, libsecret) |
-| Persistence | SQLite (rusqlite) for audit log, token usage, and orchestrator state |
+| Persistence | SQLite (rusqlite) for audit log and token usage |
 | Browser Extension | Manifest V3 (Chrome/Firefox), WebSocket bridge to desktop app |
 | Styling | CSS Modules with design system tokens (dark theme) |
 
@@ -294,10 +218,10 @@ src-tauri/src/
 ├── clipboard/        # System-level clipboard monitoring
 ├── security/         # Rate limiting, TLS, key lifecycle auditing
 ├── token_usage/      # Token tracking, cost estimation, aggregation
-├── orchestrator/     # Plan-and-execute coding agent (state machine, planner, executor, validator)
 ├── lists/            # Allow/deny list manager
 ├── perf/             # Latency benchmarking, PII detection cache
-├── model/            # Contextual signal classifier (feature-based regex + llama.cpp GGUF)
+├── policy/           # Liquid LFM2.5-Encoder-350M PII detector + policy linter
+├── llama/            # Local LLM integration (feature-gated)
 ├── commands/         # Tauri IPC commands
 ├── bridge/           # WebSocket bridge for browser extension
 ├── bootstrap/        # App initialization and setup
@@ -311,7 +235,8 @@ src-tauri/src/
 | **Dashboard** | Live stats — requests processed, entities detected, sessions, providers, token usage, entity type breakdown |
 | **Audit Log** | Filterable request history with entity types, providers, and pseudonymization details |
 | **Sessions** | Active session list with creation time, last activity, timeout config, and manual clearing |
-| **Settings** | Provider management, PII recognizer toggles, sensitivity thresholds, allow/deny lists, rate limits, orchestrator config |
+| **Settings** | Provider management, PII recognizer toggles, sensitivity thresholds, allow/deny lists, rate limits, policy rules |
+| **Security** | Rate-limit status, key lifecycle audit, TLS status, latency stats |
 | **Onboarding** | Guided setup wizard with tool auto-detection |
 
 ## Screenshots
@@ -384,198 +309,6 @@ The extension ships alongside the desktop app and supports Chrome and Firefox. I
 - Character.AI
 - You.com
 - HuggingFace Chat
-
-## Orchestrator
-
-The built-in orchestrator is a plan-and-execute coding agent that leverages Aelvyril's privacy pipeline for all LLM calls.
-
-### How It Works
-
-1. User submits a coding task through the Aelvyril UI
-2. A planning model (via Aelvyril's gateway) generates a structured plan with subtasks
-3. Each subtask is executed by spawning `pi --mode rpc` as a subprocess
-4. After execution, whitelisted test commands validate the changes
-5. On failure, the orchestrator replans with error context or prompts the user
-
-### Configuration
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `enabled` | `false` | Enable the orchestrator |
-| `planning_model` | — | Model for plan generation (routed through gateway) |
-| `executor_model` | — | Model for pi's code execution (routed through gateway) |
-| `max_subtask_retries` | `2` | Retries before replanning |
-| `max_files_per_subtask` | `6` | File scope limit per subtask |
-| `executor_timeout_secs` | `600` | Per-subtask timeout (10 min) |
-| `max_tool_calls` | `30` | Tool call limit before abort |
-
-
-
- Aelvyril — Overview Plan                                                                                                                                                                                                                           
-                                                                                                                                                                                                                                                    
- ```                                                                                                                                                                                                                                                
-   ┌─────────────────────────────────────────────────────────┐                                                                                                                                                                                      
-   │                        AELVYRIL                         │                                                                                                                                                                                      
-   │                   (localhost:4000)                        │                                                                                                                                                                                    
-   │                                                         │                                                                                                                                                                                      
-   │  ┌─────────┐    ┌──────────┐    ┌──────────┐           │                                                                                                                                                                                       
-   │  │  PII     │    │  Router  │    │  Key     │           │                                                                                                                                                                                      
-   │  │  Detect  │───►│  & Proxy │───►│  Vaults  │           │                                                                                                                                                                                      
-   │  │  & Mask  │    │          │    │          │           │                                                                                                                                                                                      
-   │  └─────────┘    └──────────┘    └──────────┘           │                                                                                                                                                                                       
-   │       ▲               │                │                │                                                                                                                                                                                      
-   └───────│───────────────│────────────────│────────────────┘                                                                                                                                                                                      
-           │               │                │                                                                                                                                                                                                       
-           │         ┌─────┴─────┐    ┌──────┴──────┐                                                                                                                                                                                               
-      Pi sends      │           │    │  OS Keychain  │                                                                                                                                                                                              
-      prompt with   │  Route to: │    │  (or .env)   │                                                                                                                                                                                              
-      real PII      │           │    │              │                                                                                                                                                                                               
-           │        │  ┌─OpenAI │    │  OPENAI_KEY  │                                                                                                                                                                                               
-           │        │  ├─Anthropic   │  ANTHROPIC_KEY│                                                                                                                                                                                              
-           │        │  └─Ollama  │    └──────────────┘                                                                                                                                                                                              
-           │        │           │                                                                                                                                                                                                                   
-           ▼        └─────┬─────┘                                                                                                                                                                                                                   
-     ┌──────────┐         │                                                                                                                                                                                                                         
-     │ Sanitize │    ┌────┴─────┐                                                                                                                                                                                                                   
-     │ [EMAIL_1]│    │ Response  │                                                                                                                                                                                                                  
-     │ [SSN_2]  │    │ Rehydrate │                                                                                                                                                                                                                  
-     │ [PHONE_3]│    │ [EMAIL_1] │──► "john@real.com"                                                                                                                                                                                               
-     └──────────┘    └──────────┘                                                                                                                                                                                                                   
- ```
-────────────────────────────────────────────────────────────────────────────────                                                                                                                                                                   
-                                                                                                                                                                                                                                                    
- ### The 3 Core Jobs                                                                                                                                                                                                                                
-                                                                                                                                                                                                                                                    
- ┌───┬───────────────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────┐                                                                                                              
- │ # │ Job               │ What it does                                                                                              │                                                                                                              
- ├───┼───────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤                                                                                                              
- │ 1 │ PII Detect & Mask │ Scan outgoing prompts → find emails, SSNs, phones, names, etc. → replace with typed tokens like [EMAIL_1] │                                                                                                              
- ├───┼───────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤                                                                                                              
- │ 2 │ Route & Proxy     │ Forward the now-sanitized request to the right LLM provider based on model alias                          │                                                                                                              
- ├───┼───────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤                                                                                                              
- │ 3 │ Rehydrate         │ When the response comes back, swap [EMAIL_1] → john@real.com so Pi sees the real data                     │                                                                                                              
- └───┴───────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────┘                                                                                                              
-                                                                                                                                                                                                                                                    
- API keys never leave Aelvyril. Pi never sees them.                                                                                                                                                                                                 
-                                                                                                                                                                                                                                                    
- ────────────────────────────────────────────────────────────────────────────────                                                                                                                                                                   
-                                                                                                                                                                                                                                                    
- ### Data Flow                                                                                                                                                                                                                                      
-                                                                                                                                                                                                                                                    
- ```                                                                                                                                                                                                                                                
-   Pi sends:  "Contact john@acme.com at 555-1234"                                                                                                                                                                                                   
-                   │                                                                                                                                                                                                                                
-                   ▼                                                                                                                                                                                                                                
-   Step 1 — PII Detect & Mask:                                                                                                                                                                                                                      
-            "Contact [EMAIL_1] at [PHONE_1]"                                                                                                                                                                                                        
-            Token map: { EMAIL_1: "john@acme.com", PHONE_1: "555-1234" }                                                                                                                                                                            
-                   │                                                                                                                                                                                                                                
-                   ▼                                                                                                                                                                                                                                
-   Step 2 — Route & Proxy (using OS keychain for API key):                                                                                                                                                                                          
-            → OpenAI API with real key                                                                                                                                                                                                              
-                   │                                                                                                                                                                                                                                
-                   ▼                                                                                                                                                                                                                                
-   LLM responds: "I'll email [EMAIL_1] and call [PHONE_1]"                                                                                                                                                                                          
-                   │                                                                                                                                                                                                                                
-                   ▼                                                                                                                                                                                                                                
-   Step 3 — Rehydrate:                                                                                                                                                                                                                              
-            "I'll email john@acme.com and call 555-1234"                                                                                                                                                                                            
-                   │                                                                                                                                                                                                                                
-                   ▼                                                                                                                                                                                                                                
-   Pi receives: "I'll email john@acme.com and call 555-1234"                                                                                                                                                                                        
- ```                                                                                                                                                                                                                                                
-                                                                                                                                                                                                                                                    
- ────────────────────────────────────────────────────────────────────────────────                                                                                                                                                                   
-                                                                                                                                                                                                                                                    
- ### Language Choice: Go (least packages)                                                                                                                                                                                                           
-                                                                                                                                                                                                                                                    
- ┌───────────────────────┬──────────────────────────────────────────────┐                                                                                                                                                                           
- │ Need                  │ Go stdlib covers it?                         │                                                                                                                                                                           
- ├───────────────────────┼──────────────────────────────────────────────┤                                                                                                                                                                           
- │ HTTP server           │ ✅ net/http                                  │                                                                                                                                                                           
- ├───────────────────────┼──────────────────────────────────────────────┤                                                                                                                                                                           
- │ JSON parse            │ ✅ encoding/json                             │                                                                                                                                                                           
- ├───────────────────────┼──────────────────────────────────────────────┤                                                                                                                                                                           
- │ Regex (PII detection) │ ✅ regexp                                    │                                                                                                                                                                           
- ├───────────────────────┼──────────────────────────────────────────────┤                                                                                                                                                                           
- │ Reverse proxy         │ ✅ net/http/httputil                         │                                                                                                                                                                           
- ├───────────────────────┼──────────────────────────────────────────────┤                                                                                                                                                                           
- │ OS keychain           │ ⚠️ 1 package: github.com/keybase/go-keychain │                                                                                                                                                                           
- ├───────────────────────┼──────────────────────────────────────────────┤                                                                                                                                                                           
- │ TOML/YAML config      │ ⚠️ 1 package: gopkg.in/yaml.v3               │                                                                                                                                                                           
- └───────────────────────┴──────────────────────────────────────────────┘                                                                                                                                                                           
-                                                                                                                                                                                                                                                    
- Total external packages: 2. Everything else is stdlib. Single binary output. No runtime needed.                                                                                                                                                    
-                                                                                                                                                                                                                                                    
- ────────────────────────────────────────────────────────────────────────────────                                                                                                                                                                   
-                                                                                                                                                                                                                                                    
- ### PII Detection (pure regex, no packages)                                                                                                                                                                                                        
-                                                                                                                                                                                                                                                    
- ```go                                                                                                                                                                                                                                              
-   var piiPatterns = map[string]string{                                                                                                                                                                                                             
-       "EMAIL":  `[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`,                                                                                                                                                                                  
-       "PHONE":  `\b\d{3}[-.]?\d{3}[-.]?\d{4}\b`,                                                                                                                                                                                                   
-       "SSN":    `\b\d{3}-\d{2}-\d{4}\b`,                                                                                                                                                                                                           
-       "CC":     `\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b`,                                                                                                                                                                                      
-       "APIKEY": `(sk-\w{20,}|sk-ant-\w{20,})`,                                                                                                                                                                                                     
-   }                                                                                                                                                                                                                                                
-   // Replace with [TYPE_N], keep map for rehydration                                                                                                                                                                                               
- ```                                                                                                                                                                                                                                                
-                                                                                                                                                                                                                                                    
- ────────────────────────────────────────────────────────────────────────────────                                                                                                                                                                   
-                                                                                                                                                                                                                                                    
- ### File Structure (tiny)                                                                                                                                                                                                                          
-                                                                                                                                                                                                                                                    
- ```                                                                                                                                                                                                                                                
-   aelvyril/                                                                                                                                                                                                                                        
-   ├── main.go          ← entry point, config, start server                                                                                                                                                                                         
-   ├── pii.go           ← detect + mask + rehydrate                                                                                                                                                                                                 
-   ├── proxy.go         ← route to OpenAI/Anthropic/Ollama                                                                                                                                                                                          
-   ├── keys.go          ← OS keychain access                                                                                                                                                                                                        
-   ├── config.yaml      ← model routes + PII rules                                                                                                                                                                                                  
-   └── go.mod           ← 2 dependencies                                                                                                                                                                                                            
- ```                                                                                                                                                                                                                                                
-                                                                                                                                                                                                                                                    
- ~4 Go files. 2 external packages. 1 binary. Zero runtime.                                                                                                                                                                                          
-                                                                                                                                                                                                                                                    
- ────────────────────────────────────────────────────────────────────────────────                                                                                                                                                                   
-                                                                                                                                                                                                                                                    
- ### Config file                                                                                                                                                                                                                                    
-                                                                                                                                                                                                                                                    
- ```yaml                                                                                                                                                                                                                                            
-   # config.yaml                                                                                                                                                                                                                                    
-   listen: ":4000"                                                                                                                                                                                                                                  
-                                                                                                                                                                                                                                                    
-   routes:                                                                                                                                                                                                                                          
-     smart:                                                                                                                                                                                                                                         
-       provider: openai                                                                                                                                                                                                                             
-       model: gpt-4                                                                                                                                                                                                                                 
-     fast:                                                                                                                                                                                                                                          
-       provider: anthropic                                                                                                                                                                                                                          
-       model: claude-3-haiku                                                                                                                                                                                                                        
-     local:                                                                                                                                                                                                                                         
-       provider: ollama                                                                                                                                                                                                                             
-       model: llama3                                                                                                                                                                                                                                
-                                                                                                                                                                                                                                                    
-   pii:                                                                                                                                                                                                                                             
-     enabled: true                                                                                                                                                                                                                                  
-     types: [email, phone, ssn, apikey]                                                                                                                                                                                                             
-                                                                                                                                                                                                                                                    
-   keys:                                                                                                                                                                                                                                            
-     openai: os_keychain    # or env:OPENAI_KEY                                                                                                                                                                                                     
-     anthropic: os_keychain                                                                                                                                                                                                                         
-     ollama: none                                                                                                                                                                                                                                   
- ```                                                                                                                                                                                                                                                
-                                                                                                                                                                                                                                                    
- ────────────────────────────────────────────────────────────────────────────────                                                                  
-
-### Safeguards
-
-- Executor file changes validated against `allowed_files` scope
-- Test commands restricted to a whitelist (npm, cargo, pytest, etc.) with shell metacharacter injection prevention
-- Automatic abort and kill on timeout or tool call limit
-- All LLM calls pass through Aelvyril's PII pipeline automatically
-- Pi subprocess fresh-spawned per subtask (clean state, no cross-contamination)
 
 ---
 

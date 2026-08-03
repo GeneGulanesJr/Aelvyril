@@ -47,9 +47,6 @@ pub struct AppSettings {
     pub alert_abnormal_retry_rate: f64,
     /// Alert threshold: absolute daily cost (cents) for daily spike alert (0 = disabled)
     pub alert_daily_cost_spike_cents: u64,
-    /// Orchestrator settings (plan-and-execute agent)
-    #[serde(default)]
-    pub orchestrator: crate::orchestrator::types::OrchestratorSettings,
     // ── Liquid LFM2.5 encoder settings ─────────────────────────────────────
     /// Enable the Liquid LFM2.5-Encoder-350M-PII-Detector as the Layer 0 NLP detector.
     /// Requires the Python sidecar to be running with `AELVYRIL_LIQUID_PII_ENABLED=1`.
@@ -102,7 +99,6 @@ impl Default for AppSettings {
             alert_cost_spike_multiplier: 5.0,    // 5× session average
             alert_abnormal_retry_rate: 0.30,     // 30%
             alert_daily_cost_spike_cents: 1_000, // $10.00 daily spike
-            orchestrator: crate::orchestrator::types::OrchestratorSettings::default(),
             liquid_pii_enabled: false,
             liquid_policy_enabled: false,
             liquid_model_dir: None,

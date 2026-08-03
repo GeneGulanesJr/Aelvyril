@@ -6,7 +6,6 @@ import {
   Settings,
   Shield,
   Gauge,
-  Bot,
   HelpCircle,
   Info,
   Sun,
@@ -20,7 +19,6 @@ const navItems = [
   { to: "/", icon: Activity, label: "Dashboard" },
   { to: "/sessions", icon: Clock, label: "Sessions" },
   { to: "/audit", icon: FileText, label: "Audit Log" },
-  { to: "/orchestrator", icon: Bot, label: "Orchestrator" },
   { to: "/security", icon: Gauge, label: "Security" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ];

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Shield, Eye, ListFilter, Power, Bot, ShieldCheck } from "lucide-react";
+import { Shield, Eye, ListFilter, Power, ShieldCheck } from "lucide-react";
 import { Key } from "lucide-react";
 import {
   ProvidersSection,
@@ -7,7 +7,6 @@ import {
   ListsSection,
   DetectionSection,
   BehaviorSection,
-  OrchestratorSection,
   PolicySection,
 } from "../components/settings";
 import styles from "./Settings.module.css";
@@ -18,8 +17,7 @@ type SettingsTab =
   | "lists"
   | "detection"
   | "behavior"
-  | "policy"
-  | "orchestrator";
+  | "policy";
 
 const tabs: { id: SettingsTab; label: string; icon: typeof Shield }[] = [
   { id: "providers", label: "Providers", icon: Shield },
@@ -28,7 +26,6 @@ const tabs: { id: SettingsTab; label: string; icon: typeof Shield }[] = [
   { id: "detection", label: "Detection", icon: Eye },
   { id: "policy", label: "Policy", icon: ShieldCheck },
   { id: "behavior", label: "Startup & Behavior", icon: Power },
-  { id: "orchestrator", label: "Orchestrator", icon: Bot },
 ];
 
 export function Settings() {
@@ -62,7 +59,6 @@ export function Settings() {
       {activeTab === "detection" && <DetectionSection />}
       {activeTab === "policy" && <PolicySection />}
       {activeTab === "behavior" && <BehaviorSection />}
-      {activeTab === "orchestrator" && <OrchestratorSection />}
     </div>
   );
 }

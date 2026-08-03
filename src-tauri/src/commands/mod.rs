@@ -2,7 +2,6 @@ pub mod audit;
 pub mod clipboard;
 pub mod lists;
 pub mod onboarding;
-pub mod orchestrator;
 // pub mod pattern_mining;
 pub mod providers;
 pub mod rate_limit;
@@ -16,7 +15,6 @@ pub use audit::*;
 pub use clipboard::*;
 pub use lists::*;
 pub use onboarding::*;
-pub use orchestrator::*;
 // pub use pattern_mining::*;
 pub use providers::*;
 pub use rate_limit::*;
@@ -89,16 +87,5 @@ pub fn invoke_handler<R: tauri::Runtime>(
         purge_token_usage_events,
         get_token_usage_config,
         check_cost_alerts,
-        // ── Orchestrator ──
-        start_orchestrator_task,
-        get_orchestrator_state,
-        get_orchestrator_task_list,
-        get_orchestrator_plan,
-        cancel_orchestrator_task,
-        respond_to_blocked,
-        get_orchestrator_settings,
-        update_orchestrator_settings,
-        get_execution_result,
-        get_validation_result,
     ]
 }

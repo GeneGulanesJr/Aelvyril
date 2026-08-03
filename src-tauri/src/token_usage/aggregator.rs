@@ -304,8 +304,6 @@ fn default_session_stats(id: &str) -> SessionTokenStats {
 /// inference attacks based on tool_name + token volume combos.
 fn generalize_tool_name(tool: &str) -> String {
     match tool {
-        // Orchestrator calls are generalized
-        "orchestrator_plan" | "orchestrator_execute" => "agent".to_string(),
         // All chat-style calls are lumped together
         "chat_completions" | "chat" => "llm".to_string(),
         // Passthrough stays as-is (it's already generic)

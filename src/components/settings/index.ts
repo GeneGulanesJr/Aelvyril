@@ -3,7 +3,6 @@ export { GatewayKeySection } from "./GatewayKeySection";
 export { ListsSection } from "./ListsSection";
 export { DetectionSection } from "./DetectionSection";
 export { BehaviorSection } from "./BehaviorSection";
-export { OrchestratorSection } from "./OrchestratorSection";
 export { PolicySection } from "./PolicySection";
 export type { Rule, RuleRowProps } from "./RuleRow";
 export { RuleRow } from "./RuleRow";

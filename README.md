@@ -109,7 +109,7 @@ Aelvyril auto-detects common tools (Cursor, VS Code, Claude CLI) and shows tool-
 ```mermaid
 flowchart TD
     subgraph UserInput["User Input"]
-        A1["Browser Extension<br/>Copy-paste intercept"]
+        A1["Browser Extension<br/>(planned) Copy-paste intercept"]
         A2["Clipboard Monitor<br/>System-level PII scan"]
         A3["CLI / Coding Agent<br/>Prompt submission"]
     end

@@ -18,7 +18,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let handle = app.handle().clone();
 
     let presidio_url = start_presidio(app);
-    spawn_presidio_healthcheck(app, presidio_url);
+    spawn_presidio_healthcheck(app, presidio_url.clone());
 
     // Liquid LFM2.5-Encoder-350M PII detector + Policy-Linter live in the same Python
     // sidecar as Presidio. Wait for the sidecar to come up, then enable the Liquid

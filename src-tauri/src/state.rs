@@ -127,6 +127,8 @@ impl AppState {
             daily_cost_spike_cents: settings.alert_daily_cost_spike_cents,
         };
 
+        let liquid_policy_enabled = settings.liquid_policy_enabled;
+
         Self {
             gateway_key: None,
             gateway_port: settings.gateway_port,
@@ -149,7 +151,7 @@ impl AppState {
             presidio_service: Arc::new(parking_lot::Mutex::new(PresidioService::new())),
             policy_client: Arc::new(RwLock::new(LiquidPolicyClient::new(
                 "http://127.0.0.1:3000".into(),
-                settings.liquid_policy_enabled,
+                liquid_policy_enabled,
             ))),
             token_usage_tracker,
             token_usage_store,

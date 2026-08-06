@@ -65,3 +65,6 @@ jobs:
         # --locked intentionally omitted: the lockfile may still be pruned by
         # cargo after dependency removals.
         run: cargo check --all-targets --manifest-path src-tauri/Cargo.toml
+
+      - name: Cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml

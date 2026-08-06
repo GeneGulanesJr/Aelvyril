@@ -113,6 +113,13 @@ impl SessionManager {
     where
         F: FnOnce(&mut MappingTable) -> R,
     {
+        // Create the mapping table on first use if the session does not exist
+        // yet. pseudonymize_and_store runs before record_request() creates the
+        // session, so a missing table would silently drop mappings and break
+        // response rehydration on the session's first request.
+        self.mapping_tables
+            .entry(session_id.to_string())
+            .or_insert_with(MappingTable::with_default_ttl);
         let mut entry = self.mapping_tables.get_mut(session_id)?;
         Some(f(entry.value_mut()))
     }

@@ -96,7 +96,6 @@ class _LiquidState:
                 "*.py",
                 "*.md",
             ],
-            trust_remote_code=True,
         )
 
     def get_pii(self):

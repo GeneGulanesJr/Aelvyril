@@ -406,17 +406,20 @@ fn type_specificity(pii_type: &PiiType) -> u8 {
         IdentityPersonName | IdentityNationalId | IdentityPassport | IdentityDriversLicense
         | IdentityDateOfBirth | IdentityTaxId | ContactEmail | ContactPhone | ContactAddress
         | ContactPostalCode | ContactIpAddress | FinancialCreditCard | FinancialIban
-        | FinancialBankAccount | FinancialSwiftBic | FinancialCryptoWallet | FinancialAmount
+        | FinancialBankAccount | FinancialSwiftBic | FinancialCryptoWallet
         | CredentialApiKey | CredentialPassword | CredentialPrivateKey | CredentialJwt
         | CredentialConnectionString | DeveloperLoginCredentials => 3,
         // Liquid encoder — Device / Location / Healthcare / Org / Legal (specific)
         DeviceMacAddress | DeviceImei | DeveloperDeviceId | LocationGpsCoordinates
-        | HealthcareMedicalRecord | HealthcareCondition | HealthcareMedication
-        | HealthcareHealthPlanId | OrgCompanyName | LegalCaseNumber => 3,
-        // Liquid encoder — Online (moderately specific)
-        OnlineUsername | OnlineUrl => 2,
-        // Liquid encoder — Special category (sensitive; treat as specific)
-        SpecialReligion | SpecialPolitical | SpecialOrientation | SpecialHealthStatus => 3,
+        | HealthcareMedicalRecord | HealthcareHealthPlanId | OrgCompanyName
+        | LegalCaseNumber => 3,
+        // Liquid encoder — Online: URL is specific, Username is moderate
+        OnlineUrl => 3,
+        // Moderately specific — amount, username, and clinical context
+        FinancialAmount | OnlineUsername | HealthcareCondition
+        | HealthcareMedication => 2,
+        // Liquid encoder — Special category (sensitive but low precision)
+        SpecialReligion | SpecialPolitical | SpecialOrientation | SpecialHealthStatus => 1,
         // Generic / ambiguous
         Date | Person | Location | Organization | Custom(_) => 1,
         // Fallthrough for any future variant
@@ -661,5 +664,32 @@ mod tests {
         assert_eq!(type_specificity(&PiiType::Date), 1);
         assert_eq!(type_specificity(&PiiType::Person), 1);
         assert_eq!(type_specificity(&PiiType::IpAddress), 2);
+        // Explicit arms for the new/tightened recognizers (full 40-type coverage)
+        assert_eq!(type_specificity(&PiiType::CredentialJwt), 3);
+        assert_eq!(type_specificity(&PiiType::CredentialPrivateKey), 3);
+        assert_eq!(type_specificity(&PiiType::CredentialPassword), 3);
+        assert_eq!(type_specificity(&PiiType::CredentialConnectionString), 3);
+        assert_eq!(type_specificity(&PiiType::DeveloperLoginCredentials), 3);
+        assert_eq!(type_specificity(&PiiType::FinancialCryptoWallet), 3);
+        assert_eq!(type_specificity(&PiiType::DeviceImei), 3);
+        assert_eq!(type_specificity(&PiiType::DeveloperDeviceId), 3);
+        assert_eq!(type_specificity(&PiiType::IdentityTaxId), 3);
+        assert_eq!(type_specificity(&PiiType::IdentityPassport), 3);
+        assert_eq!(type_specificity(&PiiType::IdentityDriversLicense), 3);
+        assert_eq!(type_specificity(&PiiType::IdentityNationalId), 3);
+        assert_eq!(type_specificity(&PiiType::HealthcareHealthPlanId), 3);
+        assert_eq!(type_specificity(&PiiType::HealthcareMedicalRecord), 3);
+        assert_eq!(type_specificity(&PiiType::FinancialBankAccount), 3);
+        assert_eq!(type_specificity(&PiiType::LegalCaseNumber), 3);
+        assert_eq!(type_specificity(&PiiType::LocationGpsCoordinates), 3);
+        assert_eq!(type_specificity(&PiiType::OnlineUrl), 3);
+        assert_eq!(type_specificity(&PiiType::FinancialAmount), 2);
+        assert_eq!(type_specificity(&PiiType::OnlineUsername), 2);
+        assert_eq!(type_specificity(&PiiType::HealthcareCondition), 2);
+        assert_eq!(type_specificity(&PiiType::HealthcareMedication), 2);
+        assert_eq!(type_specificity(&PiiType::SpecialReligion), 1);
+        assert_eq!(type_specificity(&PiiType::SpecialPolitical), 1);
+        assert_eq!(type_specificity(&PiiType::SpecialOrientation), 1);
+        assert_eq!(type_specificity(&PiiType::SpecialHealthStatus), 1);
     }
 }

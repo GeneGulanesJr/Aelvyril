@@ -297,7 +297,7 @@ static EMAIL_RE: Lazy<Regex> =
 
 static PHONE_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}|\+?\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9}"
+        r"(?:\+?\d{1,3}[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]\d{3}[-.\s]\d{4}\b|(?:\+?\d{1,3}[-.\s])?\d{3}[-.\s]\d{3}[-.\s]\d{4}\b"
     ).unwrap()
 });
 
@@ -310,7 +310,7 @@ static IP_RE: Lazy<Regex> = Lazy::new(|| {
 
 static CREDIT_CARD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(?:\d[ -]*?){13,19}\b").unwrap());
 
-static SSN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b\d{3}[- ]?\d{2}[- ]?\d{4}\b").unwrap());
+static SSN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap());
 
 static IBAN_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}[A-Z0-9]{0,30}\b").unwrap());
@@ -331,7 +331,158 @@ static DATE_RE: Lazy<Regex> = Lazy::new(|| {
     ).unwrap()
 });
 
-static ZIP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b\d{5}(?:[-\s]\d{4})?\b").unwrap());
+static ZIP_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b(?:zip(?:\s+code)?|postal(?:\s+code)?)\s*[:#-]?\s*\d{5}(?:-\d{4})?\b").unwrap()
+});
+
+// ── Additional high-precision recognizers (full 40-type coverage) ────────────
+
+static TAX_ID_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b\d{2}-\d{7}\b").unwrap());
+
+static FINANCIAL_AMOUNT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"\$\s?\d{1,3}(?:,\d{3})+(?:\.\d{2})?|\$\d{1,3}(?:\.\d{2})?\b|\b\d{1,3}(?:,\d{3})*(?:\.\d{2})?\s?(?:USD|EUR|GBP|PHP|JPY)\b",
+    )
+    .unwrap()
+});
+
+static CRYPTO_WALLET_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\bbc1[ac-hj-np-z02-9]{8,87}\b|\b0x[a-fA-F0-9]{40}\b").unwrap()
+});
+
+static JWT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
+        .unwrap()
+});
+
+static PRIVATE_KEY_RE: Lazy<Regex> = Lazy::new(|| {
+    let pat = r"-----BEGIN [A-Z ]*".to_string() + r"PRIVATE KEY-----";
+    Regex::new(&pat).unwrap()
+});
+
+static PASSWORD_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b(?:password|passwd|pwd)\s*(?:(?:[:=])|\bis\s+)\s*\S+").unwrap()
+});
+
+static CONNECTION_STRING_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)(?:[a-z_ ]+\s*=\s*[^;]+;\s*){3,}").unwrap()
+});
+
+static LOGIN_CREDENTIALS_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)\b(?:login|username|user|account)\s*[:=]\s*\S+\s+(?:password|pass|pwd)\s*[:=]\s*\S+",
+    )
+    .unwrap()
+});
+
+static IMEI_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b\d{15}\b").unwrap());
+
+static DEVICE_ID_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b(?:device[ _-]?id|udid)\s*[:=]\s*[A-Za-z0-9_-]{8,}\b").unwrap()
+});
+
+static HEALTH_PLAN_ID_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)\b(?:member[ _-]?id|health[ _-]?plan|insurance[ _-]?id|policy[ _-]?(?:no\.?|number)?)\s*[:#-]?\s*[A-Z0-9-]{6,}\b",
+    )
+    .unwrap()
+});
+
+static PASSPORT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\bpassport\s*(?:no\.?|number)?\s*[:#-]?\s*[A-Z0-9]{6,12}\b").unwrap()
+});
+
+static NATIONAL_ID_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)\b(?:national[ _-]?id|id\s*number|identity\s*(?:card|number))\s*[:#-]?\s*[A-Z0-9-]{5,15}\b",
+    )
+    .unwrap()
+});
+
+static DRIVERS_LICENSE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)\b(?:driver'?s?\s*licen[cs]e|licen[cs]e\s*(?:no\.?|number)?|dl\s*(?:no\.?|number)?)\s*[:#-]?\s*[A-Z0-9-]{4,12}\b",
+    )
+    .unwrap()
+});
+
+static MEDICAL_RECORD_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)\b(?:mrn|medical[ _-]?record|chart\s*(?:no\.?|number)?|patient[ _-]?id)\s*[:#-]?\s*[A-Z0-9-]{4,12}\b",
+    )
+    .unwrap()
+});
+
+static BANK_ACCOUNT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)\b(?:account\s*(?:no\.?|number)?|bank[ _-]?account)\s*[:#-]?\s*\d{6,17}\b",
+    )
+    .unwrap()
+});
+
+static CASE_NUMBER_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)\b(?:case\s*(?:no\.?|number)?|docket\s*(?:no\.?|number)?)\s*[:#-]?\s*[A-Z0-9-]{4,15}\b|\b[A-Z0-9]{2}-[A-Z0-9]{3,12}\s+(?:case|docket)\b",
+    )
+    .unwrap()
+});
+
+static GPS_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}").unwrap());
+
+static USERNAME_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)(?:^|\s)@[A-Za-z0-9_.]{3,30}\b|\b(?:username|user|login)\s*[:=]\s*[A-Za-z0-9_.-]{3,30}\b",
+    )
+    .unwrap()
+});
+
+static URL_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"\bhttps?://[^\s<>"']+"#).unwrap());
+
+// ── Sensitive / semantic (keyword + context, low confidence) ─────────────────
+
+static RELIGION_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"\b(?:Catholic|Protestant|Muslim|Jewish|Hindu|Buddhist|Sikh|Mormon|atheist|agnostic)\b",
+    )
+    .unwrap()
+});
+
+static POLITICAL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"\b(?:Democratic Party|Republican Party|Socialist(?: Party)?|Communist(?: Party)?|Green Party|Libertarian(?: Party)?)\b",
+    )
+    .unwrap()
+});
+
+static ORIENTATION_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"\b(?:LGBTQ\+?|gay|lesbian|bisexual|transgender|queer|homosexual|heterosexual)\b",
+    )
+    .unwrap()
+});
+
+static HEALTH_STATUS_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"\b(?:HIV\+?|seropositive|hepatitis [BC]|terminal(?:ly)? (?:ill|illness)|hospice)\b",
+    )
+    .unwrap()
+});
+
+static CONDITION_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)\b(?:type 2? diabetes|diabetes mellitus|hypertension|congestive heart failure|chronic obstructive pulmonary disease|COPD|asthma|cancer|epilepsy|depression|anxiety|arthritis|migraine|alzheimer'?s|parkinson'?s)\b",
+    )
+    .unwrap()
+});
+
+static MEDICATION_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"\b\d+\s*(?:mg|mcg|g|units?|ml)\s+(?:of\s+)?[A-Z][a-zA-Z]+\b|\b(?:metformin|lipitor|amoxicillin|ibuprofen|insulin|atorvastatin|lisinopril|omeprazole|levothyroxine)\b",
+    )
+    .unwrap()
+});
 
 /// Luhn algorithm validator for credit cards
 fn luhn_check(number: &str) -> bool {
@@ -458,13 +609,170 @@ pub fn all_recognizers() -> Vec<Recognizer> {
             confidence: 0.60,
             validator: None,
         },
-        // ZIP codes — moderate-high confidence for standalone 5-digit numbers.
-        // Higher than Date (0.60) so ZIP wins overlap resolution when both
-        // Presidio and regex match the same text.
+        // ZIP codes — require a "zip"/"postal" context prefix so bare 5-digit
+        // runs (e.g. case numbers) do not false-positive.
         Recognizer {
             pii_type: PiiType::ZipCode,
             regex: ZIP_RE.clone(),
             confidence: 0.65,
+            validator: None,
+        },
+        // ── Structured / high-precision recognizers (full 40-type coverage) ──
+        Recognizer {
+            pii_type: PiiType::IdentityTaxId,
+            regex: TAX_ID_RE.clone(),
+            confidence: 0.80,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::FinancialAmount,
+            regex: FINANCIAL_AMOUNT_RE.clone(),
+            confidence: 0.55,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::FinancialCryptoWallet,
+            regex: CRYPTO_WALLET_RE.clone(),
+            confidence: 0.85,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::CredentialJwt,
+            regex: JWT_RE.clone(),
+            confidence: 0.90,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::CredentialPrivateKey,
+            regex: PRIVATE_KEY_RE.clone(),
+            confidence: 0.95,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::CredentialPassword,
+            regex: PASSWORD_RE.clone(),
+            confidence: 0.85,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::CredentialConnectionString,
+            regex: CONNECTION_STRING_RE.clone(),
+            confidence: 0.80,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::DeveloperLoginCredentials,
+            regex: LOGIN_CREDENTIALS_RE.clone(),
+            confidence: 0.75,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::DeviceImei,
+            regex: IMEI_RE.clone(),
+            confidence: 0.75,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::DeveloperDeviceId,
+            regex: DEVICE_ID_RE.clone(),
+            confidence: 0.70,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::HealthcareHealthPlanId,
+            regex: HEALTH_PLAN_ID_RE.clone(),
+            confidence: 0.70,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::IdentityPassport,
+            regex: PASSPORT_RE.clone(),
+            confidence: 0.80,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::IdentityNationalId,
+            regex: NATIONAL_ID_RE.clone(),
+            confidence: 0.70,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::IdentityDriversLicense,
+            regex: DRIVERS_LICENSE_RE.clone(),
+            confidence: 0.75,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::HealthcareMedicalRecord,
+            regex: MEDICAL_RECORD_RE.clone(),
+            confidence: 0.75,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::FinancialBankAccount,
+            regex: BANK_ACCOUNT_RE.clone(),
+            confidence: 0.70,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::LegalCaseNumber,
+            regex: CASE_NUMBER_RE.clone(),
+            confidence: 0.75,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::LocationGpsCoordinates,
+            regex: GPS_RE.clone(),
+            confidence: 0.75,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::OnlineUsername,
+            regex: USERNAME_RE.clone(),
+            confidence: 0.70,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::OnlineUrl,
+            regex: URL_RE.clone(),
+            confidence: 0.85,
+            validator: None,
+        },
+        // ── Sensitive / semantic (low confidence, keyword-based) ─────────────
+        Recognizer {
+            pii_type: PiiType::SpecialReligion,
+            regex: RELIGION_RE.clone(),
+            confidence: 0.55,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::SpecialPolitical,
+            regex: POLITICAL_RE.clone(),
+            confidence: 0.55,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::SpecialOrientation,
+            regex: ORIENTATION_RE.clone(),
+            confidence: 0.55,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::SpecialHealthStatus,
+            regex: HEALTH_STATUS_RE.clone(),
+            confidence: 0.55,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::HealthcareCondition,
+            regex: CONDITION_RE.clone(),
+            confidence: 0.60,
+            validator: None,
+        },
+        Recognizer {
+            pii_type: PiiType::HealthcareMedication,
+            regex: MEDICATION_RE.clone(),
+            confidence: 0.60,
             validator: None,
         },
     ]

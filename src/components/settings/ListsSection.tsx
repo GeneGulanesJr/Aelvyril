@@ -30,7 +30,7 @@ export function ListsSection() {
     try {
       new RegExp(pattern);
       return { valid: true };
-    } catch (e) {
+    } catch {
       return { valid: false, error: "Invalid regex pattern" };
     }
   };

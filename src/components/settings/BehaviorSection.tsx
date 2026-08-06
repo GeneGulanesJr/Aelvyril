@@ -25,16 +25,17 @@ export function BehaviorSection() {
   } | null>(null);
   const [saving, setSaving] = useState(false);
 
-  if (!settings) return null;
-
   const effectiveDraft = useMemo(() => {
+    if (!settings) return null;
     if (draft) return draft;
     return {
       perMinute: String(settings.rate_limit_max_requests_per_minute ?? 60),
       perHour: String(settings.rate_limit_max_requests_per_hour ?? 1000),
       concurrent: String(settings.rate_limit_max_concurrent_requests ?? 10),
     };
-  }, [draft, settings.rate_limit_max_requests_per_minute, settings.rate_limit_max_requests_per_hour, settings.rate_limit_max_concurrent_requests]);
+  }, [draft, settings]);
+
+  if (!settings || !effectiveDraft) return null;
 
   const toggle = async (key: BooleanKey) => {
     await update({ ...settings, [key]: !settings[key] });

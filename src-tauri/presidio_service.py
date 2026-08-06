@@ -229,10 +229,20 @@ def get_presidio():
             return _presidio
         try:
             from presidio_analyzer import AnalyzerEngine  # type: ignore
+            from presidio_analyzer.nlp_engine import NlpEngineProvider  # type: ignore
         except ImportError as e:
             raise RuntimeError(f"presidio-analyzer not available: {e}") from e
         try:
-            _presidio = AnalyzerEngine()
+            # Default AnalyzerEngine() uses en_core_web_lg (a ~600 MB download
+            # on first init). Our requirements pin the small model — wire it
+            # explicitly so first init is fast and offline-friendly.
+            provider = NlpEngineProvider(
+                nlp_configuration={
+                    "nlp_engine_name": "spacy",
+                    "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
+                }
+            )
+            _presidio = AnalyzerEngine(nlp_engine=provider.create_engine())
         except Exception as e:  # noqa: BLE001
             log.warning("Presidio init failed: %s", e)
             raise

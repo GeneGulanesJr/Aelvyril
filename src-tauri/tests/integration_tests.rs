@@ -290,7 +290,7 @@ async fn test_no_overlapping_tokens_on_repeated_values() {
     // Same email should produce same token
     let email_tokens: Vec<_> = sanitized
         .split_whitespace()
-        .filter(|s| s.starts_with("[Email_"))
+        .filter(|s| s.starts_with("[EMAIL_ADDRESS_"))
         .collect();
 
     assert_eq!(email_tokens.len(), 2);

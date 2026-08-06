@@ -330,8 +330,6 @@ fn resolve_overlaps(matches: &mut Vec<PiiMatch>) {
             }
 
             // There is overlap. Decide who wins.
-            let span_m = m.end - m.start;
-            let span_e = existing.end - existing.start;
 
             // Same span — pick by specificity then confidence
             if m.start == existing.start && m.end == existing.end {
@@ -356,17 +354,25 @@ fn resolve_overlaps(matches: &mut Vec<PiiMatch>) {
                 }
             }
 
-            // Partial overlap — prefer shorter span (more precise match)
-            if span_m < span_e {
-                // New match is more precise — but only if it fits inside
-                if m.start >= existing.start && m.end <= existing.end {
-                    *existing = m.clone();
-                    dominated = true;
-                    break;
-                }
+            // Strict containment — the containing match wins: an entity that fully
+            // contains another is the more complete detection (email > its domain).
+            if m.start >= existing.start && m.end <= existing.end {
+                dominated = true;
+                break; // existing (containing) wins
             }
-
-            // Otherwise existing (higher confidence from sort) wins
+            if existing.start >= m.start && existing.end <= m.end {
+                *existing = m.clone();
+                dominated = true;
+                break; // m (containing) wins
+            }
+            // True partial overlap — specificity, then confidence
+            let spec_m = type_specificity(&m.pii_type);
+            let spec_e = type_specificity(&existing.pii_type);
+            if spec_m > spec_e {
+                *existing = m.clone();
+            } else if spec_m == spec_e && m.confidence > existing.confidence {
+                *existing = m.clone();
+            }
             dominated = true;
             break;
         }
@@ -481,8 +487,8 @@ mod tests {
         let engine = PiiEngine::with_presidio("http://localhost:9999".into(), false);
         let matches = engine.detect("a@b.com and c@d.com and 192.168.1.1").await;
         let summary = summarize_matches(&matches);
-        assert_eq!(*summary.get("Email").unwrap(), 2);
-        assert_eq!(*summary.get("IP_Address").unwrap(), 1);
+        assert_eq!(*summary.get("EMAIL_ADDRESS").unwrap(), 2);
+        assert_eq!(*summary.get("IP_ADDRESS").unwrap(), 1);
     }
 
     #[tokio::test]
@@ -529,9 +535,9 @@ mod tests {
             },
         ];
         let summary = summarize_matches(&matches);
-        assert_eq!(summary.get("Person"), Some(&1));
-        assert_eq!(summary.get("Location"), Some(&1));
-        assert_eq!(summary.get("Organization"), Some(&1));
+        assert_eq!(summary.get("PERSON"), Some(&1));
+        assert_eq!(summary.get("LOCATION"), Some(&1));
+        assert_eq!(summary.get("ORGANIZATION"), Some(&1));
     }
 
     #[test]
@@ -561,6 +567,37 @@ mod tests {
             matches[0].pii_type,
             PiiType::ZipCode,
             "ZipCode should win over Date for 5-digit number"
+        );
+    }
+
+    #[test]
+    fn test_resolve_overlaps_email_beats_contained_domain() {
+        // Regression: EMAIL_RE matches "alice@example.com" (0.90), while
+        // DOMAIN_RE matches the contained "example.com" (0.50). The email is
+        // the containing detection and must win — the domain must be dropped,
+        // NOT promoted over the email.
+        let mut matches = vec![
+            PiiMatch {
+                pii_type: PiiType::Email,
+                text: "alice@example.com".into(),
+                start: 11,
+                end: 28,
+                confidence: 0.90,
+            },
+            PiiMatch {
+                pii_type: PiiType::Domain,
+                text: "example.com".into(),
+                start: 17,
+                end: 28,
+                confidence: 0.50,
+            },
+        ];
+        resolve_overlaps(&mut matches);
+        assert_eq!(matches.len(), 1, "Should keep exactly one match");
+        assert_eq!(
+            matches[0].pii_type,
+            PiiType::Email,
+            "Containing email must beat its contained domain"
         );
     }
 

@@ -113,10 +113,10 @@ mod tests {
         let mut p = Pseudonymizer::new();
         let matches = vec![make_match(PiiType::Email, "john@acme.com", 6, 0.9)];
         let (result, mappings) = p.pseudonymize("Email john@acme.com here", &matches);
-        assert_eq!(result, "Email [Email_1] here");
+        assert_eq!(result, "Email [EMAIL_ADDRESS_1] here");
         assert_eq!(mappings.len(), 1);
         assert_eq!(mappings[0].original, "john@acme.com");
-        assert_eq!(mappings[0].token, "[Email_1]");
+        assert_eq!(mappings[0].token, "[EMAIL_ADDRESS_1]");
     }
 
     #[test]
@@ -127,7 +127,7 @@ mod tests {
             make_match(PiiType::IpAddress, "192.168.1.1", 17, 0.9),
         ];
         let (result, mappings) = p.pseudonymize("john@acme.com IP 192.168.1.1", &matches);
-        assert_eq!(result, "[Email_1] IP [IP_Address_1]");
+        assert_eq!(result, "[EMAIL_ADDRESS_1] IP [IP_ADDRESS_1]");
         assert_eq!(mappings.len(), 2);
     }
 
@@ -140,7 +140,7 @@ mod tests {
             make_match(PiiType::Email, "john@acme.com", 18, 0.9),
         ];
         let (result, mappings) = p.pseudonymize(text, &matches);
-        assert_eq!(result, "[Email_1] and [Email_1]");
+        assert_eq!(result, "[EMAIL_ADDRESS_1] and [EMAIL_ADDRESS_1]");
         assert_eq!(mappings.len(), 1); // Only one mapping — deduped
     }
 

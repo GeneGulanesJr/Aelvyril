@@ -67,4 +67,4 @@ jobs:
         run: cargo check --all-targets --manifest-path src-tauri/Cargo.toml
 
       - name: Cargo test
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast

@@ -366,6 +366,6 @@ mod tests {
     fn test_http_constants_used() {
         assert!(HTTP_OK_MIN < HTTP_OK_MAX);
         assert!(HTTP_BAD_REQUEST < HTTP_SERVICE_UNAVAILABLE);
-        assert!(HTTP_INTERNAL_ERROR > HTTP_SERVICE_UNAVAILABLE);
+        assert!(HTTP_INTERNAL_ERROR < HTTP_SERVICE_UNAVAILABLE);
     }
 }

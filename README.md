@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Aelvyril.jpeg" alt="Aelvyril" width="600"/>
+  <img src="public/aelvyril-mark.svg" alt="Aelvyril" width="120"/>
 </p>
 
 <h1 align="center">Aelvyril</h1>
@@ -20,7 +20,7 @@ Built with **Tauri v2** (Rust backend + React/TypeScript frontend), Aelvyril run
 
 Aelvyril runs as a background desktop app and exposes a local OpenAI-compatible API endpoint with a gateway-issued API key. Users plug that key into coding agents, editors, or other AI clients instead of using upstream provider keys directly. The gateway authenticates the request, inspects the content, automatically pseudonymizes any detected sensitive data, forwards only the sanitized version to the real upstream provider, and rehydrates the response before delivering it back — all transparently.
 
-Aelvyril also intercepts copy-paste events at the clipboard level and through a companion browser extension, catching accidental leaks at the moment sensitive content enters the workflow — before it even becomes part of a prompt.
+Aelvyril also intercepts copy-paste events at the clipboard level (a companion browser extension is planned for a future release to catch leaks at the moment sensitive content enters the workflow inside web-based tools).
 
 ## The Problem It Solves
 
@@ -85,7 +85,7 @@ When sensitive content is detected, an OS notification alerts the user.
 
 ### Browser Extension
 
-A Manifest V3 companion extension intercepts copy-paste events in web-based AI tools (ChatGPT, Claude, Gemini, Perplexity, and others). It communicates with the desktop app via a local WebSocket bridge and shows inline warning banners when sensitive content is detected.
+A Manifest V3 companion extension is planned (not yet shipped in this repository) to intercept copy-paste events in web-based AI tools. The desktop app already exposes the local WebSocket bridge (`src-tauri/src/bridge/`) that the extension will use to show inline warning banners when sensitive content is detected.
 
 ### Security
 
@@ -100,9 +100,9 @@ A Manifest V3 companion extension intercepts copy-paste events in web-based AI t
 Three-step guided setup:
 1. Add your first upstream provider and paste your API key
 2. Copy the Aelvyril-issued local key into your tool
-3. Optionally install the companion browser extension
+3. Optionally install the companion browser extension (when available in a future release)
 
-Aelvyril auto-detects common tools (Cursor, VS Code, Claude CLI, pi) and shows tool-specific setup instructions.
+Aelvyril auto-detects common tools (Cursor, VS Code, Claude CLI) and shows tool-specific setup instructions.
 
 ## How It Works
 
@@ -201,7 +201,7 @@ Clean response back to client
 | PII Detection | Presidio (Python microservice) + native Rust regex recognizers |
 | Key Storage | `keyring` crate (OS-native: Keychain, Credential Manager, libsecret) |
 | Persistence | SQLite (rusqlite) for audit log and token usage |
-| Browser Extension | Manifest V3 (Chrome/Firefox), WebSocket bridge to desktop app |
+| Browser Extension | Manifest V3 (Chrome/Firefox), WebSocket bridge to desktop app (planned; not yet shipped) |
 | Styling | CSS Modules with design system tokens (dark theme) |
 
 ### Backend Modules
@@ -256,7 +256,7 @@ src-tauri/src/
 
 ```bash
 # Clone the repo
-git clone https://github.com/GulanesKorp/Aelvyril.git
+git clone https://github.com/GeneGulanesJr/Aelvyril.git
 cd Aelvyril
 
 # Install frontend dependencies
@@ -295,20 +295,9 @@ All settings are managed from the desktop app's Settings page and persisted to `
 | `AELVYRIL_GATEWAY_PORT` | Override gateway port |
 | `AELVYRIL_GATEWAY_BIND` | Override bind address |
 
-## Browser Extension
+## Browser Extension (planned)
 
-The extension ships alongside the desktop app and supports Chrome and Firefox. It intercepts clipboard events on popular AI chat sites (ChatGPT, Claude, Gemini, Poe, Perplexity, and more) and communicates with the desktop app via WebSocket.
-
-### Supported Sites
-
-- ChatGPT / chat.openai.com
-- Claude (claude.ai)
-- Gemini (gemini.google.com)
-- Poe (poe.com)
-- Perplexity (perplexity.ai)
-- Character.AI
-- You.com
-- HuggingFace Chat
+A companion browser extension is **not** included in this repository yet. It is planned for a future release. When shipped, it will intercept clipboard events on popular AI chat sites and communicate with the desktop app via a local WebSocket bridge.
 
 ---
 

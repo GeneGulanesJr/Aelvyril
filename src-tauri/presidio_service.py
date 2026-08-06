@@ -227,15 +227,20 @@ def presidio_analyze(text: str, language: str, entities: list[str], score_thresh
 
 def liquid_pii_analyze(text: str) -> list[dict]:
     tok, model, hd = _STATE.get_pii()
-    spans = hd.predict(text, tok, model, threshold=PII_THRESHOLD)
+    # The model repo's pii_hybrid_decode.predict(text, tok, model, hybrid=True)
+    # takes no threshold kwarg and returns spans as {start, end, type, text}
+    # (no per-span score) — match its actual API.
+    spans = hd.predict(text, tok, model)
     out = []
     for s in spans:
         out.append(
             {
-                "entity_type": str(s.get("label") or s.get("entity_type") or "UNKNOWN"),
+                "entity_type": str(s.get("type") or s.get("label") or s.get("entity_type") or "UNKNOWN"),
                 "start": int(s.get("start", 0)),
                 "end": int(s.get("end", 0)),
-                "score": float(s.get("score", 0.0)),
+                # Hybrid decode emits no confidence; treat model-detected
+                # spans as confident (1.0).
+                "score": float(s.get("score", 1.0)),
             }
         )
     return out

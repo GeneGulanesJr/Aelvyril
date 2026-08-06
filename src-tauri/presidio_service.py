@@ -153,14 +153,49 @@ class _LiquidState:
                 from transformers import AutoTokenizer  # type: ignore
 
                 repo_dir = self._snapshot(LIQUID_POLICY_REPO)
-                train_file = os.path.join(repo_dir, "train_bizlint_v02.py")
-                if not os.path.exists(train_file):
-                    raise FileNotFoundError(f"train_bizlint_v02.py not found in {repo_dir}")
+                # The model repo ships Lfm2BidirForRuleMatching in
+                # modeling_bizlint_rule_matching.py; the README's
+                # train_bizlint_v02.py import is training-repo code that is not
+                # part of the snapshot. Try both names for forward/back compat.
+                train_file = next(
+                    (
+                        os.path.join(repo_dir, cand)
+                        for cand in ("modeling_bizlint_rule_matching.py", "train_bizlint_v02.py")
+                        if os.path.exists(os.path.join(repo_dir, cand))
+                    ),
+                    None,
+                )
+                if train_file is None:
+                    raise FileNotFoundError(
+                        f"no model module (modeling_bizlint_rule_matching.py / train_bizlint_v02.py) in {repo_dir}"
+                    )
 
-                spec = importlib.util.spec_from_file_location("train_bizlint_v02", train_file)
-                m = importlib.util.module_from_spec(spec)
-                _sys.modules["train_bizlint_v02"] = m
-                spec.loader.exec_module(m)  # type: ignore
+                # Stage the model's .py files into an importable package so the
+                # module's relative import (from .modeling_lfm2_bidirectional
+                # import ...) resolves. spec_from_file_location() loads modules
+                # without a parent package and breaks on relative imports.
+                import tempfile
+                import shutil
+
+                pkg_name = "liquid_policy_model"
+                pkg_dir = os.path.join(tempfile.gettempdir(), pkg_name)
+                os.makedirs(pkg_dir, exist_ok=True)
+                for fn in os.listdir(repo_dir):
+                    if fn.endswith(".py"):
+                        shutil.copy(os.path.join(repo_dir, fn), os.path.join(pkg_dir, fn))
+                init_py = os.path.join(pkg_dir, "__init__.py")
+                if not os.path.exists(init_py):
+                    open(init_py, "a").close()
+                parent = os.path.dirname(pkg_dir)
+                if parent not in _sys.path:
+                    _sys.path.insert(0, parent)
+
+                main_module = (
+                    "modeling_bizlint_rule_matching"
+                    if train_file.endswith("modeling_bizlint_rule_matching.py")
+                    else "train_bizlint_v02"
+                )
+                m = importlib.import_module(f"{pkg_name}.{main_module}")
 
                 tok = AutoTokenizer.from_pretrained(repo_dir, trust_remote_code=True)
                 model_cls = getattr(m, "Lfm2BidirForRuleMatching")

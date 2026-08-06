@@ -341,11 +341,15 @@ mod tests {
             mgr.with_mapping_table("session-1", |table| table.lookup("[Email_1]").is_some());
         assert_eq!(found, Some(true));
 
-        // Clearing session removes mapping table
+        // Clearing session removes the mapping table. with_mapping_table()
+        // now recreates an empty table on first use (so pseudonymization can
+        // store mappings before the session record exists), so assert the
+        // table itself is gone via get_mapping_table().
         mgr.clear("session-1");
+        assert!(mgr.get_mapping_table("session-1").is_none());
         let found_after =
             mgr.with_mapping_table("session-1", |table| table.lookup("[Email_1]").is_some());
-        assert_eq!(found_after, None);
+        assert_eq!(found_after, Some(false), "mapping must not survive clear()");
     }
 
     #[test]

@@ -74,13 +74,49 @@ fn build_prompt(text: &str, model_dir: &str) -> Result<String, LlamaError> {
         LlamaError::PromptBuildFailed("SYSTEM_PROMPT environment variable not set".into())
     })?;
 
-    // Resolve helper path: $CARGO_MANIFEST_DIR/src/llama/prompt_helper.py
+    // Resolve helper path. In priority order:
+    //   (a) compiled-in manifest dir (dev mode: $CARGO_MANIFEST_DIR/src/llama/prompt_helper.py)
+    //   (b) next to the executable
+    //   (c) ../ and ../../ relative to the executable
+    //   (d) a few common relative dirs
+    // Mirrors presidio_service.rs's candidate list. If none exist, the
+    // ChatML fallback below still applies gracefully.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let helper_path = manifest_dir.join("src").join("llama").join("prompt_helper.py");
+    let manifest_helper = manifest_dir.join("src").join("llama").join("prompt_helper.py");
+    let manifest_venv = manifest_dir.join(".venv").join("bin").join("python");
 
-    // Resolve venv: $CARGO_MANIFEST_DIR/.venv/bin/python
-    let venv_dir = manifest_dir.join(".venv");
-    let venv_python = venv_dir.join("bin").join("python");
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let helper_candidates = [
+        manifest_helper.clone(),
+        exe_dir.join("prompt_helper.py"),
+        exe_dir.join("..").join("prompt_helper.py"),
+        exe_dir.join("..").join("..").join("prompt_helper.py"),
+        std::path::PathBuf::from("prompt_helper.py"),
+    ];
+    let helper_path = match helper_candidates.iter().find(|p| p.exists()) {
+        Some(p) => p.clone(),
+        None => {
+            tracing::warn!(
+                candidates = ?helper_candidates,
+                "prompt_helper.py not found in any candidate location — falling back to ChatML"
+            );
+            return Ok(format!(
+                "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+                system_prompt, text
+            ));
+        }
+    };
+
+    // Resolve venv: prefer $CARGO_MANIFEST_DIR/.venv/bin/python (dev), else the venv next to exe
+    let venv_python = if manifest_venv.exists() {
+        manifest_venv
+    } else {
+        exe_dir.join(".venv").join("bin").join("python")
+    };
 
     // Decide whether to use `uv run --python <venv_python>` or plain `python3`
     let (cmd, args): (std::path::PathBuf, Vec<std::path::PathBuf>) = if venv_python.exists() {

@@ -49,24 +49,8 @@ __pycache__/
 *.pyc
 
 # Virtual environments
-.bench-venv/
-.venv_bench/
-
-# Benchmark generated data (not source)
-benchmarks/data/
-benchmarks/results/
-benchmarks/.venv/
-benchmarks/pii_bench/results/
-benchmarks/presidio_research/results/
-benchmarks/compliance_report_1000/*.json
-benchmarks/compliance_report_1000/*.log
+.venv/
 
 # Tauri model files (large, downloaded separately)
 src-tauri/resources/model/
-
-# Root-level design assets (not needed at runtime)
-LandingPageTemplate.*
-Dark.png
-Light.png
-landing/HeroBackground.png
 .worktrees

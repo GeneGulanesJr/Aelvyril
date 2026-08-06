@@ -8,7 +8,7 @@
 
 **Tech Stack:** `llama-server` (from llama.cpp), reqwest HTTP client, serde_json, tokio process management, existing PiiEngine layer system
 
-**GGUF Model:** `~/Documents/GulanesKorp/huggingface/hub/gguf-pii-lfm350m/model-q4_k_m.gguf` (218.7 MB)
+**GGUF Model:** `~/Documents/huggingface/hub/gguf-pii-lfm350m/model-q4_k_m.gguf` (218.7 MB)
 
 ---
 
@@ -737,13 +737,13 @@ llama-server --help | head -3
 
 ```bash
 mkdir -p ~/.local/share/aelvyril/models
-cp ~/Documents/GulanesKorp/huggingface/hub/gguf-pii-lfm350m/model-q4_k_m.gguf ~/.local/share/aelvyril/models/pii-q4_k_m.gguf
+cp ~/Documents/huggingface/hub/gguf-pii-lfm350m/model-q4_k_m.gguf ~/.local/share/aelvyril/models/pii-q4_k_m.gguf
 ```
 
 - [ ] **Step 4: Run unit tests**
 
 ```bash
-cd ~/Documents/GulanesKorp/Aelvyril/src-tauri
+cd ~/Documents/Aelvyril/src-tauri
 cargo test -p aelvyril_lib llama:: --features llama 2>&1 | tail -20
 ```
 

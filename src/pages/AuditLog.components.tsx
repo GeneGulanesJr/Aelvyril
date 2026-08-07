@@ -11,6 +11,7 @@ interface AuditLogHeaderProps {
   exporting: boolean;
   onExportJson: () => void;
   onExportCsv: () => void;
+  onExportPolicyCsv: () => void;
   onClearAll: () => void;
 }
 
@@ -19,6 +20,7 @@ export function AuditLogHeader({
   exporting,
   onExportJson,
   onExportCsv,
+  onExportPolicyCsv,
   onClearAll,
 }: AuditLogHeaderProps) {
   return (
@@ -46,6 +48,14 @@ export function AuditLogHeader({
         >
           <Download size={14} />
           CSV
+        </button>
+        <button
+          className="exportBtn"
+          onClick={onExportPolicyCsv}
+          disabled={exporting || entriesCount === 0}
+        >
+          <Download size={14} />
+          Export policy events (CSV)
         </button>
         {entriesCount > 0 && (
           <button className="clearBtn" onClick={onClearAll}>

@@ -26,6 +26,7 @@ pub async fn export_audit_log(
     if let Some(ref store) = s.audit_store {
         match format.as_str() {
             "csv" => store.export_csv(),
+            "policy-csv" => store.export_policy_csv(),
             _ => store.export_json(),
         }
     } else {

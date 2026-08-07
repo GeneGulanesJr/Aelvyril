@@ -96,7 +96,6 @@ class _LiquidState:
                 "*.py",
                 "*.md",
             ],
-            trust_remote_code=True,
         )
 
     def get_pii(self):
@@ -154,14 +153,49 @@ class _LiquidState:
                 from transformers import AutoTokenizer  # type: ignore
 
                 repo_dir = self._snapshot(LIQUID_POLICY_REPO)
-                train_file = os.path.join(repo_dir, "train_bizlint_v02.py")
-                if not os.path.exists(train_file):
-                    raise FileNotFoundError(f"train_bizlint_v02.py not found in {repo_dir}")
+                # The model repo ships Lfm2BidirForRuleMatching in
+                # modeling_bizlint_rule_matching.py; the README's
+                # train_bizlint_v02.py import is training-repo code that is not
+                # part of the snapshot. Try both names for forward/back compat.
+                train_file = next(
+                    (
+                        os.path.join(repo_dir, cand)
+                        for cand in ("modeling_bizlint_rule_matching.py", "train_bizlint_v02.py")
+                        if os.path.exists(os.path.join(repo_dir, cand))
+                    ),
+                    None,
+                )
+                if train_file is None:
+                    raise FileNotFoundError(
+                        f"no model module (modeling_bizlint_rule_matching.py / train_bizlint_v02.py) in {repo_dir}"
+                    )
 
-                spec = importlib.util.spec_from_file_location("train_bizlint_v02", train_file)
-                m = importlib.util.module_from_spec(spec)
-                _sys.modules["train_bizlint_v02"] = m
-                spec.loader.exec_module(m)  # type: ignore
+                # Stage the model's .py files into an importable package so the
+                # module's relative import (from .modeling_lfm2_bidirectional
+                # import ...) resolves. spec_from_file_location() loads modules
+                # without a parent package and breaks on relative imports.
+                import tempfile
+                import shutil
+
+                pkg_name = "liquid_policy_model"
+                pkg_dir = os.path.join(tempfile.gettempdir(), pkg_name)
+                os.makedirs(pkg_dir, exist_ok=True)
+                for fn in os.listdir(repo_dir):
+                    if fn.endswith(".py"):
+                        shutil.copy(os.path.join(repo_dir, fn), os.path.join(pkg_dir, fn))
+                init_py = os.path.join(pkg_dir, "__init__.py")
+                if not os.path.exists(init_py):
+                    open(init_py, "a").close()
+                parent = os.path.dirname(pkg_dir)
+                if parent not in _sys.path:
+                    _sys.path.insert(0, parent)
+
+                main_module = (
+                    "modeling_bizlint_rule_matching"
+                    if train_file.endswith("modeling_bizlint_rule_matching.py")
+                    else "train_bizlint_v02"
+                )
+                m = importlib.import_module(f"{pkg_name}.{main_module}")
 
                 tok = AutoTokenizer.from_pretrained(repo_dir, trust_remote_code=True)
                 model_cls = getattr(m, "Lfm2BidirForRuleMatching")
@@ -195,10 +229,20 @@ def get_presidio():
             return _presidio
         try:
             from presidio_analyzer import AnalyzerEngine  # type: ignore
+            from presidio_analyzer.nlp_engine import NlpEngineProvider  # type: ignore
         except ImportError as e:
             raise RuntimeError(f"presidio-analyzer not available: {e}") from e
         try:
-            _presidio = AnalyzerEngine()
+            # Default AnalyzerEngine() uses en_core_web_lg (a ~600 MB download
+            # on first init). Our requirements pin the small model — wire it
+            # explicitly so first init is fast and offline-friendly.
+            provider = NlpEngineProvider(
+                nlp_configuration={
+                    "nlp_engine_name": "spacy",
+                    "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
+                }
+            )
+            _presidio = AnalyzerEngine(nlp_engine=provider.create_engine())
         except Exception as e:  # noqa: BLE001
             log.warning("Presidio init failed: %s", e)
             raise
@@ -228,15 +272,20 @@ def presidio_analyze(text: str, language: str, entities: list[str], score_thresh
 
 def liquid_pii_analyze(text: str) -> list[dict]:
     tok, model, hd = _STATE.get_pii()
-    spans = hd.predict(text, tok, model, threshold=PII_THRESHOLD)
+    # The model repo's pii_hybrid_decode.predict(text, tok, model, hybrid=True)
+    # takes no threshold kwarg and returns spans as {start, end, type, text}
+    # (no per-span score) — match its actual API.
+    spans = hd.predict(text, tok, model)
     out = []
     for s in spans:
         out.append(
             {
-                "entity_type": str(s.get("label") or s.get("entity_type") or "UNKNOWN"),
+                "entity_type": str(s.get("type") or s.get("label") or s.get("entity_type") or "UNKNOWN"),
                 "start": int(s.get("start", 0)),
                 "end": int(s.get("end", 0)),
-                "score": float(s.get("score", 0.0)),
+                # Hybrid decode emits no confidence; treat model-detected
+                # spans as confident (1.0).
+                "score": float(s.get("score", 1.0)),
             }
         )
     return out

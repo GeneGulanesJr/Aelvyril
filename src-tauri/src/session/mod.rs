@@ -113,6 +113,13 @@ impl SessionManager {
     where
         F: FnOnce(&mut MappingTable) -> R,
     {
+        // Create the mapping table on first use if the session does not exist
+        // yet. pseudonymize_and_store runs before record_request() creates the
+        // session, so a missing table would silently drop mappings and break
+        // response rehydration on the session's first request.
+        self.mapping_tables
+            .entry(session_id.to_string())
+            .or_insert_with(MappingTable::with_default_ttl);
         let mut entry = self.mapping_tables.get_mut(session_id)?;
         Some(f(entry.value_mut()))
     }
@@ -334,11 +341,15 @@ mod tests {
             mgr.with_mapping_table("session-1", |table| table.lookup("[Email_1]").is_some());
         assert_eq!(found, Some(true));
 
-        // Clearing session removes mapping table
+        // Clearing session removes the mapping table. with_mapping_table()
+        // now recreates an empty table on first use (so pseudonymization can
+        // store mappings before the session record exists), so assert the
+        // table itself is gone via get_mapping_table().
         mgr.clear("session-1");
+        assert!(mgr.get_mapping_table("session-1").is_none());
         let found_after =
             mgr.with_mapping_table("session-1", |table| table.lookup("[Email_1]").is_some());
-        assert_eq!(found_after, None);
+        assert_eq!(found_after, Some(false), "mapping must not survive clear()");
     }
 
     #[test]

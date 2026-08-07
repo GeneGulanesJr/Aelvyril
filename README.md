@@ -167,6 +167,35 @@ flowchart TD
     F3 --> G1
 ```
 
+### PII Detection Coverage (what's actually shipped)
+
+The Liquid encoder model's shipped `label_schema.json` emits **27 entity types**, not the
+40 the enum/taxonomy claims. The Rust `PiiType` enum has 40 Liquid-namespaced variants; the
+remaining **13 are covered only by the regex layer** (the always-on safety net):
+
+- `identity.tax_id`, `financial.crypto_wallet`, `financial.amount`, `credential.password`,
+  `credential.private_key`, `credential.jwt`, `credential.connection_string`,
+  `credential.login_credentials`, `device.imei`, `device.device_id`,
+  `healthcare.health_plan_id`, `special.orientation`, `special.health_status`.
+
+Combined detection (encoder + Presidio + regex) covers all 40 types on the test corpus.
+
+Two naming notes worth flagging:
+
+- `identity.ssn` maps to the legacy `SSN` variant.
+- The encoder's `developer.login_credentials` / `developer.device_id` namespaces are used
+  verbatim — they match the actual model card, which differs from the plan's guessed names.
+
+**Honest caveat.** `healthcare.condition`, `healthcare.medication`, `special.political`,
+and `special.religion` were historically weak across all layers on synthetic English
+samples; keyword regexes (commit `b79f69a`) cover them at phrase level but are brittle
+beyond that.
+
+Policy rules only enforce when the **Liquid policy linter** is enabled in Settings. The
+shipped starter pack ships disabled by design — block rules can disrupt legitimate
+workflows such as coding agents. Use **Settings → Policy → Load starter pack** to add the
+starter rules, then enable the ones you want.
+
 ### Architecture (Text)
 
 ```

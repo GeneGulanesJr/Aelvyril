@@ -187,7 +187,13 @@ impl PiiType {
     /// * Presidio uppercase names (`EMAIL_ADDRESS`, `CITY`, `US_STATE`)
     /// * Legacy Aelvyril display names (`Email`, `City`, `US_State`)
     /// * Liquid encoder domain-prefixed labels (`identity.person_name`, `contact.email`,
-    ///   `credential.api_key`, etc.) — all 40 encoder entity types.
+    ///   `credential.api_key`, etc.). The shipped encoder `label_schema.json` emits 27 of
+    ///   these types; the remaining 13 (`identity.tax_id`, `financial.crypto_wallet`,
+    ///   `financial.amount`, `credential.password`, `credential.private_key`,
+    ///   `credential.jwt`, `credential.connection_string`, `credential.login_credentials`,
+    ///   `device.imei`, `device.device_id`, `healthcare.health_plan_id`,
+    ///   `special.orientation`, `special.health_status`) arrive from the always-on regex
+    ///   layer. Combined coverage spans all 40 `PiiType` variants.
     pub fn from_str(s: &str) -> PiiType {
         match s {
             // Presidio / benchmark namespace

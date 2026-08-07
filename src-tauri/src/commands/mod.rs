@@ -53,6 +53,7 @@ pub fn invoke_handler<R: tauri::Runtime>(
         // ── Settings ──
         get_settings,
         update_settings,
+        get_default_policy_rules,
         // ── Clipboard ──
         get_clipboard_status,
         toggle_clipboard_monitor,

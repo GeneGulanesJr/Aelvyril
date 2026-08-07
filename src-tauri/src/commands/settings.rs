@@ -48,3 +48,8 @@ pub async fn update_settings(
     Ok(())
 }
 
+#[tauri::command]
+pub fn get_default_policy_rules() -> Vec<crate::policy::PolicyRule> {
+    crate::policy::default_policy_rules()
+}
+

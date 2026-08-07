@@ -9,5 +9,5 @@ pub mod linter;
 
 pub use linter::{
     LiquidPolicyClient, LiquidPolicyClientBuilder, PolicyAction, PolicyError, PolicyRule,
-    PolicyViolation,
+    PolicyViolation, default_policy_rules,
 };

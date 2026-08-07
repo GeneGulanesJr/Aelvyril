@@ -102,7 +102,7 @@ impl Default for AppSettings {
             liquid_pii_enabled: false,
             liquid_policy_enabled: false,
             liquid_model_dir: None,
-            policy_rules: Vec::new(),
+            policy_rules: crate::policy::default_policy_rules(),
         }
     }
 }
@@ -211,7 +211,12 @@ mod tests {
         let settings = AppSettings::default();
         assert!(!settings.liquid_pii_enabled);
         assert!(!settings.liquid_policy_enabled);
-        assert!(settings.policy_rules.is_empty());
+        // Starter pack ships disabled by default (fresh installs get the pack,
+        // existing installs keep whatever is in their settings.json).
+        assert!(!settings.policy_rules.is_empty());
+        for rule in &settings.policy_rules {
+            assert!(!rule.enabled, "starter rules must be disabled by default");
+        }
     }
 }
 

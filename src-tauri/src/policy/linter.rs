@@ -53,6 +53,118 @@ fn default_true() -> bool {
     true
 }
 
+/// Starter rule pack shipped with the app. All rules are `enabled: false` by
+/// default: the linter enforces nothing until the user explicitly enables rules
+/// (or clicks "Load starter pack" in Settings → Policy). Actions mix `warn`
+/// (audit + forward) and `block` (short-circuit with 400).
+pub fn default_policy_rules() -> Vec<PolicyRule> {
+    // Credentials / secrets — Block
+    // "api key", "bearer token", "client secret", "private key",
+    // "BEGIN PRIVATE KEY", "connection string", "password"
+    // Batch-PII extraction — Warn
+    // "social security number", "credit card number", "bank account number",
+    // "passport number", "national id", "customer data", "phone numbers"
+    // Health information — Warn
+    // "medical history", "diagnosis", "prescription", "medication", "mental health"
+    vec![
+        PolicyRule {
+            text: "api key".into(),
+            action: PolicyAction::Block,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "bearer token".into(),
+            action: PolicyAction::Block,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "client secret".into(),
+            action: PolicyAction::Block,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "private key".into(),
+            action: PolicyAction::Block,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "BEGIN PRIVATE KEY".into(),
+            action: PolicyAction::Block,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "connection string".into(),
+            action: PolicyAction::Block,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "password".into(),
+            action: PolicyAction::Block,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "social security number".into(),
+            action: PolicyAction::Warn,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "credit card number".into(),
+            action: PolicyAction::Warn,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "bank account number".into(),
+            action: PolicyAction::Warn,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "passport number".into(),
+            action: PolicyAction::Warn,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "national id".into(),
+            action: PolicyAction::Warn,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "customer data".into(),
+            action: PolicyAction::Warn,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "phone numbers".into(),
+            action: PolicyAction::Warn,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "medical history".into(),
+            action: PolicyAction::Warn,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "diagnosis".into(),
+            action: PolicyAction::Warn,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "prescription".into(),
+            action: PolicyAction::Warn,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "medication".into(),
+            action: PolicyAction::Warn,
+            enabled: false,
+        },
+        PolicyRule {
+            text: "mental health".into(),
+            action: PolicyAction::Warn,
+            enabled: false,
+        },
+    ]
+}
+
 /// A single token-level policy violation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyViolation {
@@ -312,6 +424,35 @@ mod tests {
         assert_eq!(PolicyAction::parse("warn"), PolicyAction::Warn);
         assert_eq!(PolicyAction::parse("BLOCK"), PolicyAction::Block);
         assert_eq!(PolicyAction::parse("other"), PolicyAction::Warn);
+    }
+
+    #[test]
+    fn test_default_policy_rules() {
+        let rules = default_policy_rules();
+        assert!(
+            rules.len() >= 15,
+            "starter pack should have at least 15 rules, got {}",
+            rules.len()
+        );
+        // All disabled by default.
+        for r in &rules {
+            assert!(!r.enabled, "rule {:?} should be disabled by default", r.text);
+            // Action must be a valid PolicyAction variant.
+            assert!(
+                r.action == PolicyAction::Warn || r.action == PolicyAction::Block,
+                "rule {:?} has invalid action",
+                r.text
+            );
+        }
+        // No duplicate texts (case-insensitive).
+        let mut seen = std::collections::HashSet::new();
+        for r in &rules {
+            let key = r.text.to_ascii_lowercase();
+            assert!(
+                seen.insert(key),
+                "duplicate rule text detected in starter pack"
+            );
+        }
     }
 
     #[test]

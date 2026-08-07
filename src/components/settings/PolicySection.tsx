@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Shield, AlertOctagon, Info } from "lucide-react";
 import { useSettings } from "../../hooks/tauri/settings";
+import { tauriInvoke } from "../../hooks/tauri/invoke";
 import styles from "../../pages/Settings.module.css";
 
 type PolicyAction = "warn" | "block";
@@ -72,6 +73,22 @@ export function PolicySection() {
     await persist(rules.filter((_, i) => i !== idx));
   };
 
+  const handleLoadDefaults = async () => {
+    setError("");
+    try {
+      const defaults = await tauriInvoke<PolicyRule[]>("get_default_policy_rules");
+      const existing = new Set(rules.map((r) => r.text.toLowerCase()));
+      const missing = defaults.filter((d) => !existing.has(d.text.toLowerCase()));
+      if (missing.length === 0) {
+        console.log("Starter rules already present");
+        return;
+      }
+      await persist([...rules, ...missing.map((m) => ({ ...m, enabled: true }))]);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   return (
     <div className={styles.section}>
       <p className={styles.sectionDescription}>
@@ -122,6 +139,9 @@ export function PolicySection() {
           </div>
           <button className={styles.smallBtn} onClick={handleAdd}>
             Add
+          </button>
+          <button className={styles.smallBtn} onClick={handleLoadDefaults}>
+            Load starter pack
           </button>
         </div>
 

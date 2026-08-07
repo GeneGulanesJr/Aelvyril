@@ -244,6 +244,31 @@ impl AuditStore {
         Ok(csv)
     }
 
+    /// Export policy events as CSV (sanitized).
+    pub fn export_policy_csv(&self) -> Result<String, String> {
+        // A limit of 0 yields no rows in `get_policy_events`, so request everything.
+        let events = self.get_policy_events(usize::MAX)?;
+        let mut csv = String::from(
+            "id,timestamp,session_id,rule_text,action,token_text,start,end,score,blocked\n",
+        );
+        for e in &events {
+            csv.push_str(&format!(
+                "{},{},\"{}\",\"{}\",\"{}\",\"{}\",{},{},{},{}\n",
+                e.id,
+                e.timestamp.to_rfc3339(),
+                csv_escape(e.session_id.as_deref().unwrap_or("")),
+                csv_escape(&e.rule_text),
+                csv_escape(&e.action),
+                csv_escape(&e.token_text),
+                e.start,
+                e.end,
+                e.score,
+                e.blocked,
+            ));
+        }
+        Ok(csv)
+    }
+
     // ── Policy events ──────────────────────────────────────────────────────
 
     /// Record a single policy violation. Used for both `warn` and `block` events.
@@ -331,6 +356,11 @@ pub struct AuditStats {
     pub entity_breakdown: Vec<(String, i64)>,
 }
 
+/// Escape a string field for CSV: wrap in double quotes and double any embedded quotes.
+fn csv_escape(s: &str) -> String {
+    s.replace('"', "\"\"")
+}
+
 /// A recorded policy violation (warn or block) — stored in `policy_events`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PolicyEvent {
@@ -345,4 +375,99 @@ pub struct PolicyEvent {
     pub end: usize,
     pub score: f64,
     pub blocked: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn unique_db_path(label: &str) -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        let name = format!(
+            "aelvyril-test-{}-{}-{}.db",
+            label,
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or(0),
+        );
+        p.push(name);
+        p
+    }
+
+    fn sample_policy_event(blocked: bool) -> PolicyEvent {
+        PolicyEvent {
+            id: format!("pol-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0)),
+            timestamp: Utc::now(),
+            session_id: Some("sess-1".to_string()),
+            rule_text: "No SSN in output".to_string(),
+            action: "block".to_string(),
+            token_text: "SSN_1".to_string(),
+            start: 10,
+            end: 20,
+            score: 0.95,
+            blocked,
+        }
+    }
+
+    #[test]
+    fn export_policy_csv_header_and_row() {
+        let path = unique_db_path("policy-csv");
+        let _ = std::fs::remove_file(&path);
+        let store = AuditStore::open(&path).expect("open store");
+
+        store
+            .record_policy_event(&sample_policy_event(true))
+            .expect("record event");
+
+        let csv = store.export_policy_csv().expect("export policy csv");
+
+        assert_eq!(
+            csv.lines().next().unwrap(),
+            "id,timestamp,session_id,rule_text,action,token_text,start,end,score,blocked"
+        );
+        let row = csv.lines().nth(1).unwrap();
+        assert!(row.contains("\"No SSN in output\""));
+        assert!(row.contains("\"block\""));
+        assert!(row.trim_end().ends_with(",true"));
+    }
+
+    #[test]
+    fn export_policy_csv_none_session_emitted_empty() {
+        let path = unique_db_path("policy-csv-none");
+        let _ = std::fs::remove_file(&path);
+        let store = AuditStore::open(&path).expect("open store");
+
+        let mut ev = sample_policy_event(false);
+        ev.session_id = None;
+        ev.rule_text = "warn rule".to_string();
+        ev.action = "warn".to_string();
+        store.record_policy_event(&ev).expect("record event");
+
+        let csv = store.export_policy_csv().expect("export policy csv");
+        let row = csv.lines().nth(1).unwrap();
+        // empty session_id still wrapped in quotes ("")
+        assert!(row.contains(",\"\","));
+        assert!(row.contains("\"warn rule\""));
+        assert!(row.trim_end().ends_with(",false"));
+    }
+
+    #[test]
+    fn export_csv_unaffected_by_policy_events() {
+        let path = unique_db_path("policy-csv-audit");
+        let _ = std::fs::remove_file(&path);
+        let store = AuditStore::open(&path).expect("open store");
+
+        // Only a policy event, no audit entries.
+        store
+            .record_policy_event(&sample_policy_event(true))
+            .expect("record event");
+
+        let audit_csv = store.export_csv().expect("export audit csv");
+        assert_eq!(
+            audit_csv.lines().next().unwrap(),
+            "id,timestamp,session_id,provider,model,total_entities,streaming,entity_types,tokens"
+        );
+        // Header only (no data rows).
+        assert_eq!(audit_csv.lines().count(), 1);
+    }
 }

@@ -15,12 +15,15 @@ export function AuditLog() {
     try {
       const data = await exportLog(format);
       const blob = new Blob([data], {
-        type: format === "csv" ? "text/csv" : "application/json",
+        type: format === "csv" || format === "policy-csv" ? "text/csv" : "application/json",
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `aelvyril-audit-log.${format}`;
+      a.download =
+        format === "policy-csv"
+          ? "aelvyril-policy-log.csv"
+          : `aelvyril-audit-log.${format}`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -45,6 +48,7 @@ export function AuditLog() {
         exporting={exporting}
         onExportJson={() => handleExport("json")}
         onExportCsv={() => handleExport("csv")}
+        onExportPolicyCsv={() => handleExport("policy-csv")}
         onClearAll={clearAll}
       />
 

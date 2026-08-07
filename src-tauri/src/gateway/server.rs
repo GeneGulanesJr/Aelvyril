@@ -48,6 +48,43 @@ pub struct GatewayState {
 
 // ── Server Setup ────────────────────────────────────────────────────────────
 
+/// Build the gateway `axum::Router` from a [`GatewayState`].
+///
+/// This is extracted so it can be exercised in-process by integration tests
+/// via `tower::ServiceExt::oneshot`. The returned router has its state applied
+/// and implements `tower::Service`.
+pub fn build_gateway_router(gateway_state: GatewayState) -> Router {
+    let api_routes = Router::new()
+        .route("/v1/chat/completions", post(handle_chat_completions))
+        .route("/v1/{*path}", any(handle_passthrough))
+        .layer(axum::middleware::from_fn_with_state(
+            gateway_state.clone(),
+            super::auth::rate_limit_middleware,
+        ));
+
+    let ws_routes = crate::bridge::ws_router();
+
+    Router::new()
+        .merge(api_routes)
+        .merge(ws_routes)
+        .route(
+            "/health",
+            get(|| async { Json(serde_json::json!({"status": "ok"})) }),
+        )
+        .layer(
+            CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::OPTIONS,
+                ])
+                .allow_headers(tower_http::cors::Any),
+        )
+        .layer(TraceLayer::new_for_http())
+        .with_state(gateway_state)
+}
+
 /// Start the gateway HTTP server.
 pub async fn start_server(
     app_handle: tauri::AppHandle,
@@ -70,35 +107,7 @@ pub async fn start_server(
         (s.gateway_bind_address.clone(), s.gateway_port)
     };
 
-    let api_routes = Router::new()
-        .route("/v1/chat/completions", post(handle_chat_completions))
-        .route("/v1/{*path}", any(handle_passthrough))
-        .layer(axum::middleware::from_fn_with_state(
-            gateway_state.clone(),
-            super::auth::rate_limit_middleware,
-        ));
-
-    let ws_routes = crate::bridge::ws_router();
-
-    let app = Router::new()
-        .merge(api_routes)
-        .merge(ws_routes)
-        .route(
-            "/health",
-            get(|| async { Json(serde_json::json!({"status": "ok"})) }),
-        )
-        .layer(
-            CorsLayer::new()
-                .allow_origin(tower_http::cors::Any)
-                .allow_methods([
-                    axum::http::Method::GET,
-                    axum::http::Method::POST,
-                    axum::http::Method::OPTIONS,
-                ])
-                .allow_headers(tower_http::cors::Any),
-        )
-        .layer(TraceLayer::new_for_http())
-        .with_state(gateway_state);
+    let app = build_gateway_router(gateway_state);
 
     let host_ip: std::net::IpAddr = host
         .parse()
@@ -125,35 +134,7 @@ pub async fn run_gateway(
     let addr = std::net::SocketAddr::from((host_ip, port));
     tracing::info!("🛡️  Aelvyril gateway listening on http://{}", addr);
 
-    let api_routes = Router::new()
-        .route("/v1/chat/completions", post(handle_chat_completions))
-        .route("/v1/{*path}", any(handle_passthrough))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            super::auth::rate_limit_middleware,
-        ));
-
-    let ws_routes = crate::bridge::ws_router();
-
-    let app = Router::new()
-        .merge(api_routes)
-        .merge(ws_routes)
-        .route(
-            "/health",
-            get(|| async { Json(serde_json::json!({"status": "ok"})) }),
-        )
-        .layer(
-            CorsLayer::new()
-                .allow_origin(tower_http::cors::Any)
-                .allow_methods([
-                    axum::http::Method::GET,
-                    axum::http::Method::POST,
-                    axum::http::Method::OPTIONS,
-                ])
-                .allow_headers(tower_http::cors::Any),
-        )
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+    let app = build_gateway_router(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

@@ -6,4 +6,4 @@ pub mod server;
 pub mod session_id;
 pub mod streaming;
 
-pub use server::{start_server, run_gateway, GatewayState};
+pub use server::{build_gateway_router, run_gateway, start_server, GatewayState};

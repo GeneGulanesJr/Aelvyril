@@ -169,32 +169,44 @@ flowchart TD
 
 ### PII Detection Coverage (what's actually shipped)
 
-The Liquid encoder model's shipped `label_schema.json` emits **27 entity types**, not the
-40 the enum/taxonomy claims. The Rust `PiiType` enum has 40 Liquid-namespaced variants; the
-remaining **13 are covered only by the regex layer** (the always-on safety net):
+The Liquid encoder package implements the **full 40-type taxonomy**, but through two
+mechanisms rather than one label schema:
 
-- `identity.tax_id`, `financial.crypto_wallet`, `financial.amount`, `credential.password`,
-  `credential.private_key`, `credential.jwt`, `credential.connection_string`,
-  `credential.login_credentials`, `device.imei`, `device.device_id`,
-  `healthcare.health_plan_id`, `special.orientation`, `special.health_status`.
+- The token-classification head (`label_schema.json` — 27 types: contact.*, credential.api_key,
+  device.mac_address, financial.{bank_account,credit_card,iban,swift_bic},
+  healthcare.{condition,medical_record,medication}, identity.{person_name,ssn,national_id,
+  passport,drivers_license,date_of_birth}, legal.case_number, location.gps_coordinates,
+  online.{url,username}, org.company_name, special.{political,religion}).
+- The shipped decode helpers extend it: `pii_hybrid_decode.py` (19 shape/cue types:
+  `credential.jwt`, `credential.private_key`, `credential.connection_string`,
+  `financial.crypto_wallet`, `device.imei`, `financial.amount`, …) and `context_cued.py`
+  (16 types: `credential.password`, `identity.tax_id`, `developer.login_credentials`,
+  `developer.device_id`, `healthcare.health_plan_id`, `legal.case_number`, …).
 
-Combined detection (encoder + Presidio + regex) covers all 40 types on the test corpus.
+Live verification (one sample per type, 2026-08-07): **26/40 returned the exact label**;
+**31/40 flagged the content under some PII label** (the rest are caught by Presidio and the
+always-on regex layer). Honest caveats:
 
-Two naming notes worth flagging:
+- `special.orientation` and `special.health_status` appear on the model card but exist in
+  NEITHER the head NOR the decode helpers — the model has no output path for them, and the
+  regex layer does not cover them either. They are the only true gaps.
+- `financial.amount` is declared in the decode helpers but did not fire on any realistic
+  money sample — the regex layer carries it.
+- `identity.tax_id` detects on "TIN" / "Tax identification number" phrasing but missed
+  "employer EIN" (context-dependent).
+- `healthcare.condition`, `healthcare.medication`, `legal.case_number`, `org.company_name`,
+  `special.political` are in the head but were not detected in short samples; keyword regexes
+  (commit `b79f69a`) cover them at phrase level but are brittle beyond that.
+- Neighbor-label hits (content still flagged, category differs): `credential.password` and
+  `credential.connection_string` → `developer.login_credentials`,
+  `developer.login_credentials` → `online.username`, `device.imei` → phone/device.
 
-- `identity.ssn` maps to the legacy `SSN` variant.
-- The encoder's `developer.login_credentials` / `developer.device_id` namespaces are used
-  verbatim — they match the actual model card, which differs from the plan's guessed names.
+Naming notes: `identity.ssn` maps to the legacy `SSN` variant; the encoder's
+`developer.login_credentials` / `developer.device_id` namespaces match the actual model card.
 
-**Honest caveat.** `healthcare.condition`, `healthcare.medication`, `special.political`,
-and `special.religion` were historically weak across all layers on synthetic English
-samples; keyword regexes (commit `b79f69a`) cover them at phrase level but are brittle
-beyond that.
-
-Policy rules only enforce when the **Liquid policy linter** is enabled in Settings. The
-shipped starter pack ships disabled by design — block rules can disrupt legitimate
-workflows such as coding agents. Use **Settings → Policy → Load starter pack** to add the
-starter rules, then enable the ones you want.
+Policy rules only enforce when **Liquid policy linter** is enabled in Settings; the shipped
+starter pack ships disabled by design (block rules can disrupt legitimate workflows such as
+coding agents).
 
 ### Architecture (Text)
 

@@ -157,6 +157,31 @@ mod recognizer_tests {
     }
 
     #[test]
+    fn test_login_credentials_colon_form() {
+        let r = find(PiiType::DeveloperLoginCredentials);
+        assert!(
+            r.regex
+                .find("login: example-user / password: example-pass")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn test_mac_address() {
+        let r = find(PiiType::DeviceMacAddress);
+        // Colon form (E2E corpus sample).
+        assert!(
+            r.regex
+                .find("The device MAC address is 00:1A:2B:3C:4D:5E.")
+                .is_some()
+        );
+        // Hyphen form.
+        assert!(r.regex.find("00-1A-2B-3C-4D-5E").is_some());
+        // Bare 12-hex run without separators must NOT match.
+        assert!(r.regex.find("001A2B3C4D5E").is_none());
+    }
+
+    #[test]
     fn test_imei() {
         let r = find(PiiType::DeviceImei);
         assert!(r.regex.find("The phone IMEI is 356789012345678").is_some());

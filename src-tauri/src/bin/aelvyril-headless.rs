@@ -75,6 +75,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 max_concurrent_requests: 1_000,
             },
         );
+        // Point the engine's Presidio + Liquid PII clients at the sidecar. The desktop
+        // app does this in bootstrap after the health check; headless must do it itself.
+        // Honors the same env vars the sidecar uses (presidio_service.py):
+        // PRESIDIO_HOST (default 127.0.0.1), PRESIDIO_PORT (default 3000).
+        let sidecar_host = std::env::var("PRESIDIO_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let sidecar_port = std::env::var("PRESIDIO_PORT").unwrap_or_else(|_| "3000".to_string());
+        let sidecar_url = format!("http://{}:{}", sidecar_host, sidecar_port);
+        state.pii_engine.write().await.set_presidio_url(sidecar_url);
         // Enable Presidio + Liquid PII encoder directly — both live in the same
         // sidecar; the analyzer will lazy-init on first call and the Liquid
         // model is downloaded on first /liquid/pii request.

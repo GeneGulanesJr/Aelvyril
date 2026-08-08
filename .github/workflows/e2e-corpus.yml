@@ -173,6 +173,16 @@ jobs:
             "123-45-6789" \
             "DE89370400440532013000" \
             "sk-1234567890abcdef" \
+            # ── multilingual samples (Brief M) ──────────────────────────
+            "张三" \
+            "田中太郎" \
+            "أحمد محمد" \
+            "José Antonio García" \
+            "müller@example.de" \
+            "tanaka@example.jp" \
+            "kim@example.kr" \
+            "+7 912 345-67-89" \
+            "555-123-4567" \
             ; do
             if grep -qF -- "$term" "$MOCK_LOG" 2>/dev/null; then
               echo "::error::Raw PII term reached the wire: $term"

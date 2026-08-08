@@ -405,7 +405,9 @@ static MAC_ADDRESS_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
-static IMEI_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b\d{15}\b").unwrap());
+static IMEI_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\b(?:\d{15}|\d{2}[ -]?\d{6}[ -]?\d{6}[ -]?\d{1})\b").unwrap()
+});
 
 static DEVICE_ID_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\b(?:device[ _-]?id|udid)\s*[:=]\s*[A-Za-z0-9_-]{8,}\b").unwrap()

@@ -188,6 +188,34 @@ mod recognizer_tests {
     }
 
     #[test]
+    fn test_imei_grouped_forms() {
+        let r = find(PiiType::DeviceImei);
+        // Bare 15-digit form.
+        assert_eq!(
+            r.regex
+                .find("The phone IMEI is 356789012345678.")
+                .map(|m| m.as_str()),
+            Some("356789012345678")
+        );
+        // Grouped hyphen form.
+        assert_eq!(
+            r.regex
+                .find("The phone IMEI is 35-209900-176148-1.")
+                .map(|m| m.as_str()),
+            Some("35-209900-176148-1")
+        );
+        // Grouped space form.
+        assert_eq!(
+            r.regex.find("IMEI 35 209900 176148 1").map(|m| m.as_str()),
+            Some("35 209900 176148 1")
+        );
+        // A 15-digit run inside a longer number must NOT match.
+        assert!(r.regex.find("12345678901234567890").is_none());
+        // A phone-like 10-digit number must NOT match.
+        assert!(r.regex.find("5551234567").is_none());
+    }
+
+    #[test]
     fn test_device_id() {
         let r = find(PiiType::DeveloperDeviceId);
         assert!(r.regex.find("device_id: ABCD1234efgh").is_some());

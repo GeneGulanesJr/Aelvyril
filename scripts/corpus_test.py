@@ -39,6 +39,7 @@ Expects sidecar(3031) + mock(9999) + headless gateway(4242) already running.
 import json
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -158,29 +159,47 @@ def gateway_roundtrip(model_type, sample, req_id):
 
     ``req_id`` is appended as a unique marker ``[[req-<id>]]`` AFTER the sample
     so the wire log block for THIS request can be identified unambiguously.
+
+    Transient failures (HTTPError/exception, or no wire block for the request)
+    are retried once after a short sleep so mid-burst hiccups self-heal.
     """
     marker = f" [[req-{req_id}]]"
     content = f"{sample}{marker}"
     body = {"model": "none", "messages": [{"role": "user", "content": content}]}
-    req = urllib.request.Request(
-        GATEWAY,
-        data=json.dumps(body).encode(),
-        headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            parsed = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        msg = e.read().decode()[:300]
-        return f"<HTTP {e.code}: {msg}>", []
-    except Exception as e:  # noqa: BLE001
-        return f"<ERROR: {e}>", []
 
-    reply = parsed["choices"][0]["message"]["content"]
-    # Select the wire block whose content contains THIS request's marker.
-    wire = _select_block_for_marker(marker)
-    tokens = TOKEN_RE.findall(wire) if wire else []
+    def _attempt():
+        """Return (reply_text, wire_tokens, retryable)."""
+        req = urllib.request.Request(
+            GATEWAY,
+            data=json.dumps(body).encode(),
+            headers={
+                "Authorization": f"Bearer {KEY}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                parsed = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            msg = e.read().decode()[:300]
+            return f"<HTTP {e.code}: {msg}>", [], True
+        except Exception as e:  # noqa: BLE001
+            return f"<ERROR: {e}>", [], True
+
+        reply = parsed["choices"][0]["message"]["content"]
+        wire = _select_block_for_marker(marker)
+        if not wire:
+            # No wire block for this request → likely a transient drop; retry.
+            return reply, [], True
+        tokens = TOKEN_RE.findall(wire)
+        return reply, tokens, False
+
+    reply, tokens, retryable = _attempt()
+    if retryable:
+        print("RETRY", file=sys.stderr)
+        time.sleep(1)
+        reply, tokens, _ = _attempt()
     return reply, tokens
 
 

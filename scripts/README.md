@@ -10,10 +10,27 @@ scripts run identically in dev and CI.
 | `mock_upstream.py` | Mock OpenAI-compatible upstream. Logs full request bodies (the wire evidence) and echoes user content back so the gateway can rehydrate it. |
 | `corpus_test.py` | Full **40-type** PII corpus with per-layer coverage output (LIQUID + GATEWAY). |
 | `e2e_test.py` | Focused single-request smoke test: asserts originals restored + no token leaks. Run this first to confirm the harness is wired, then the corpus for coverage. |
+| `e2e_stack.sh` | One-shot bring-up of the whole stack (sidecar + mock + headless), runs the corpus, then tears down by PID. The single-command way to run the live E2E. |
 
 ## How to run the live E2E
 
-You need four processes. Open four terminals (or run them backgrounded):
+You need four processes. Open four terminals (or run them backgrounded) — or
+just use the **one-shot bring-up script**:
+
+```sh
+# Builds nothing itself — build the headless binary first (see below).
+scripts/e2e_stack.sh
+```
+
+`e2e_stack.sh` starts the sidecar (3031), the mock upstream (9999), the
+headless gateway (4242), health-checks all three, runs `corpus_test.py`,
+prints the headless log tail, and kills the three processes by PID on exit
+(`trap … EXIT`). It honors `REPO`, `SIDECAR_VENV`, `PORT_SIDECAR`,
+`PORT_MOCK`, `PORT_HEADLESS`, and `*_LOG` env overrides. `bash -n
+scripts/e2e_stack.sh` validates its syntax.
+
+To run the four processes manually instead, open four terminals (or run them
+backgrounded):
 
 **1. Presidio sidecar (port 3031) — the analyzer + Liquid PII encoder.**
 
@@ -110,4 +127,5 @@ Two namespaces of token names coexist and are both accepted by `corpus_test.py`:
 
 ```sh
 python3 -m py_compile scripts/*.py
+bash -n scripts/e2e_stack.sh
 ```

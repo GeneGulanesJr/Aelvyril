@@ -375,7 +375,32 @@ static CONNECTION_STRING_RE: Lazy<Regex> = Lazy::new(|| {
 
 static LOGIN_CREDENTIALS_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"(?i)\b(?:login|username|user|account)\s*[:=]\s*\S+\s+(?:password|pass|pwd)\s*[:=]\s*\S+",
+        // Branch 1 (existing): space-separated key=value style, e.g.
+        //   `username=example-user password=example-pass`
+        // Branch 2 (colon phrasing with a `/` separator), e.g.
+        //   `login: example-user / password: example-pass`
+        // Both branches accept `:` or `=` as the key/value delimiter and allow
+        // the common aliases login|user|username|account and password|pass|pwd.
+        // (Fixture values use the reserved "example-*" placeholder wording so
+        // GitGuardian's generic username/password detectors do not flag them.)
+        &(r"(?i)\b(?:login|username|user|account)\s*[:=]\s*\S+\s+(?:password|pass|pwd)\s*[:=]\s*\S+".to_string()
+            + r"|"
+            + r"(?i)(?:login|username|user|account)\s*[:=]\s*\S+\s*/\s*(?:password|pass|pwd)\s*[:=]\s*\S+"),
+    )
+    .unwrap()
+});
+
+static MAC_ADDRESS_RE: Lazy<Regex> = Lazy::new(|| {
+    // Common MAC address formats: colon-separated (`00:1A:2B:3C:4D:5E`) and
+    // hyphen-separated (`00-1A-2B-3C-4D-5E`). The separator style is matched
+    // consistently within a single address (no mixing) via two explicit
+    // alternation branches (the `regex` crate does not support backreferences),
+    // and word boundaries plus the required separators guard against bare hex
+    // runs such as `001A2B3C4D5E`.
+    Regex::new(
+        &(r"\b[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\b".to_string()
+            + r"|"
+            + r"\b[0-9A-Fa-f]{2}-[0-9A-Fa-f]{2}-[0-9A-Fa-f]{2}-[0-9A-Fa-f]{2}-[0-9A-Fa-f]{2}-[0-9A-Fa-f]{2}\b"),
     )
     .unwrap()
 });
@@ -669,6 +694,13 @@ pub fn all_recognizers() -> Vec<Recognizer> {
             pii_type: PiiType::DeveloperLoginCredentials,
             regex: LOGIN_CREDENTIALS_RE.clone(),
             confidence: 0.75,
+            validator: None,
+        },
+        // MAC address (device) — colon/hyphen separated forms
+        Recognizer {
+            pii_type: PiiType::DeviceMacAddress,
+            regex: MAC_ADDRESS_RE.clone(),
+            confidence: 0.85,
             validator: None,
         },
         Recognizer {

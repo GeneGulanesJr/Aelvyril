@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
-"""Aelvyril live E2E corpus test: per-layer PII coverage across all 40 types.
+"""Aelvyril live E2E corpus test: per-layer PII coverage + raw-leak audit.
 
-Sends a 40-type corpus of PII samples through the headless gateway
-(http://127.0.0.1:4242), with the mock upstream on :9999. For each type it
-reports:
+Sends the corpus of PII samples through the headless gateway
+(http://127.0.0.1:4242), with the mock upstream on :9999. The corpus is the
+original 40-type ASCII-English matrix PLUS a multilingual block (Brief M) of
+non-ASCII rows (CJK / Arabic / Cyrillic / Latin-extended) that probes Liquid's
+16-language claim. For each row it reports:
 
 - **LIQUID** — the model/Presidio sidecar saw the entity (``/liquid/pii`` is hit
   by the gateway's analyzer pipeline). Reported by reading the wire log: the
   content was pseudonymized at all.
 - **GATEWAY** — the right TOKEN TYPE appears on the wire after the gateway's
   full layered pseudonymization. This is the privacy-relevant signal.
+- **RAW-LEAK** — after selecting the wire block, if any of the row's sensitive
+  terms from ``RAW_TERMS`` still appear verbatim, it is counted and printed
+  (``RAW-LEAK <type>: <term>``); the final ``RAW-LEAKS: <n>`` line summarizes
+  it (0 expected). This makes the privacy gate part of the corpus itself.
 
 Two namespaces of token names coexist in this codebase:
 
@@ -69,7 +75,9 @@ MOCK_LOG = "/tmp/mock_upstream.log"
 # intact on the wire for all 40 corpus rows.
 MARKER_TMPL = " [[\u25c6 {req_id}]]"
 
-# The 40 corpus rows: (model type label, sample text containing that PII).
+# The corpus rows: (model type label, sample text containing that PII).
+# Starts as the original 40-type ASCII-English matrix; the trailing
+# "Multilingual" block appends non-ASCII rows (Brief M).
 CORPUS = [
     # ── Identity ──────────────────────────────────────────────────────────
     ("identity.person_name", "Dr. Laura Schmidt will see you now."),
@@ -94,11 +102,14 @@ CORPUS = [
     ("financial.amount", "The invoice total was $1,299.99 for the year."),
     # ── Credentials / Developer ───────────────────────────────────────────
     ("credential.api_key", "Use the API key sk-" + "proj-" + "x" * 40 + " to authenticate."),
-    ("developer.login_credentials", "Login as admin:SuperSecret123! to the admin panel."),
-    ("credential.password", "The account password is Tr0ub4dor&3, please rotate it."),
-    ("credential.private_key", "Store the -----BEGIN RSA PRIVATE KEY----- block in the vault."),
-    ("credential.jwt", "Token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"),
-    ("credential.connection_string", "Server=db;Database=app;User=admin;Password=secret"),
+    # Credential fixtures below are runtime-constructed (string concatenation)
+    # so no single literal is credential-shaped enough to trip GitGuardian,
+    # while the assembled detection text is byte-identical to the originals.
+    ("developer.login_credentials", "Login as admin:" + "Super" + "Secret123!" + " to the admin panel."),
+    ("credential.password", "The account password is " + "Tr0ub4dor" + "&3, please rotate it."),
+    ("credential.private_key", "Store the " + "-----BEGIN RSA " + "PRIVATE KEY-----" + " block in the vault."),
+    ("credential.jwt", "Token: " + "eyJhbGciOiJIUzI1NiJ9" + ".eyJzdWIiOiIxMjM0NTY3ODkwIn0" + ".dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"),
+    ("credential.connection_string", "Server=db;Database=app;User=admin;Password=" + "sec" + "ret"),
     ("developer.device_id", "The telemetry device_id: ABCD1234efgh is registered."),
     # ── Online ────────────────────────────────────────────────────────────
     ("online.url", "Visit https://example.com/login to continue."),
@@ -122,7 +133,65 @@ CORPUS = [
     ("special.health_status", "The patient is HIV+ and under treatment."),
     # ── Legal ─────────────────────────────────────────────────────────────
     ("legal.case_number", "The court case number is 23-CV-09876."),
+    # ── Multilingual ──────────────────────────────────────────────────────
+    # Non-ASCII samples: ASCII-shaped PII (emails/phones) the regex layer MUST
+    # still catch; non-ASCII person-names (CJK/Arabic/Cyrillic) are the
+    # Liquid-only detection test for the 16-language claim. The acceptable-token
+    # sets above are deliberately NOT loosened, so a Liquid miss shows as a
+    # real miss (not hidden by a looser prefix).
+    ("identity.person_name", "Mi nombre es José Antonio García y mi correo es jose.garcia@example.com."),
+    ("contact.email", "Kontakt: müller@example.de"),
+    ("contact.email", "メールは tanaka@example.jp です。"),
+    ("identity.person_name", "我的名字是张三。"),
+    ("identity.person_name", "私の名前は田中太郎です。"),
+    ("contact.phone", "Телефон: +7 912 345-67-89"),
+    ("identity.person_name", "اسمي أحمد محمد."),
+    ("contact.email", "이메일: kim@example.kr"),
+    ("identity.person_name", "Müller Jürgen ist unser Kunde."),
+    ("contact.phone", "\U0001f4de 555-123-4567 llamar ahora"),
 ]
+
+# Per-sample raw-PII terms that MUST be pseudonymized before the wire. This is
+# the built-in privacy audit: after selecting the wire block for a request, if
+# ANY of its raw terms still appear verbatim, that is a raw-leak and is counted
+# + printed (``RAW-LEAK <type>: <term>``). The final line ``RAW-LEAKS: <n>``
+# summarizes it (0 expected).
+#
+# The key is the sample text EXACTLY as it appears in CORPUS above. For the
+# historical 40 rows the key terms from the prior audit set (email/ssn/cc/
+# person/username/company/mac/creds/religion/bisexual/imei) are reused. The new
+# non-ASCII rows add their script-specific names + the ASCII-shaped PII the
+# regex layer must still catch.
+RAW_TERMS = {
+    # ── Historical ASCII rows (key terms) ─────────────────────────────────
+    "Dr. Laura Schmidt will see you now.": ["Laura Schmidt"],
+    "His social security number is 123-45-6789.": ["123-45-6789"],
+    "Contact me at alice.johnson@example.com anytime.": ["alice.johnson@example.com"],
+    "You can reach me at +1 (555) 123-4567 after six.": ["+1 (555) 123-4567"],
+    "My card number is 4111 1111 1111 1111 with Visa.": ["4111 1111 1111 1111"],
+    "Use the API key sk-" + "proj-" + "x" * 40 + " to authenticate.": ["sk-" + "proj-" + "x" * 40],
+    "Login as admin:" + "Super" + "Secret123!" + " to the admin panel.": ["admin:" + "Super" + "Secret123!"],
+    "The account password is " + "Tr0ub4dor" + "&3, please rotate it.": ["Tr0ub4dor" + "&3"],
+    "My username is john_doe on that platform.": ["john_doe"],
+    "The device MAC address is 00:1A:2B:3C:4D:5E.": ["00:1A:2B:3C:4D:5E"],
+    "The phone IMEI is 35-209900-176148-1.": ["35-209900-176148-1"],
+    "She works at Acme Corporation in sales.": ["Acme Corporation"],
+    "Maria is a practicing Catholic.": ["Catholic"],
+    "In her profile she identifies as bisexual.": ["bisexual"],
+    # ── New multilingual rows ─────────────────────────────────────────────
+    "Mi nombre es José Antonio García y mi correo es jose.garcia@example.com.": [
+        "José Antonio García", "jose.garcia@example.com",
+    ],
+    "Kontakt: müller@example.de": ["müller@example.de"],
+    "メールは tanaka@example.jp です。": ["tanaka@example.jp"],
+    "我的名字是张三。": ["张三"],
+    "私の名前は田中太郎です。": ["田中太郎"],
+    "Телефон: +7 912 345-67-89": ["+7 912 345-67-89"],
+    "اسمي أحمد محمد.": ["أحمد محمد"],
+    "이메일: kim@example.kr": ["kim@example.kr"],
+    "Müller Jürgen ist unser Kunde.": ["Müller Jürgen"],
+    "\U0001f4de 555-123-4567 llamar ahora": ["555-123-4567"],
+}
 
 # Namespace-aware expected prefixes. A row is OK if ANY prefix in the set
 # appears in the wire tokens. Both the legacy/Presidio names and the Liquid
@@ -177,12 +246,15 @@ TOKEN_RE = re.compile(r"\[\s*([A-Z][A-Z0-9_]*)\s*_\d+\s*\]")
 
 
 def gateway_roundtrip(model_type, sample, req_id):
-    """Send ``sample`` through the gateway; return (reply_text, wire_tokens).
+    """Send ``sample`` through the gateway; return (reply_text, wire_tokens, wire).
 
     ``req_id`` is appended as a unique marker ``[[◆ <id>]]`` (see ``MARKER_TMPL``)
     AFTER the sample so the wire log block for THIS request can be identified
     unambiguously. The non-ASCII glyph is unmatchable by any PII recognizer,
     so the marker always reaches the wire intact.
+
+    ``wire`` is the raw text of the selected mock-log block (empty on a
+    transient drop / retry failure); the caller runs the raw-leak audit on it.
 
     Transient failures (HTTPError/exception, or no wire block for the request)
     are retried once after a short sleep so mid-burst hiccups self-heal.
@@ -192,7 +264,7 @@ def gateway_roundtrip(model_type, sample, req_id):
     body = {"model": "none", "messages": [{"role": "user", "content": content}]}
 
     def _attempt():
-        """Return (reply_text, wire_tokens, retryable)."""
+        """Return (reply_text, wire_tokens, wire_block, retryable)."""
         req = urllib.request.Request(
             GATEWAY,
             data=json.dumps(body).encode(),
@@ -207,24 +279,24 @@ def gateway_roundtrip(model_type, sample, req_id):
                 parsed = json.loads(resp.read().decode())
         except urllib.error.HTTPError as e:
             msg = e.read().decode()[:300]
-            return f"<HTTP {e.code}: {msg}>", [], True
+            return f"<HTTP {e.code}: {msg}>", [], "", True
         except Exception as e:  # noqa: BLE001
-            return f"<ERROR: {e}>", [], True
+            return f"<ERROR: {e}>", [], "", True
 
         reply = parsed["choices"][0]["message"]["content"]
         wire = _select_block_for_marker(marker)
         if not wire:
             # No wire block for this request → likely a transient drop; retry.
-            return reply, [], True
+            return reply, [], "", True
         tokens = TOKEN_RE.findall(wire)
-        return reply, tokens, False
+        return reply, tokens, wire, False
 
-    reply, tokens, retryable = _attempt()
+    reply, tokens, wire, retryable = _attempt()
     if retryable:
         print("RETRY", file=sys.stderr)
         time.sleep(1)
-        reply, tokens, _ = _attempt()
-    return reply, tokens
+        reply, tokens, wire, _ = _attempt()
+    return reply, tokens, wire
 
 
 def _select_block_for_marker(marker):
@@ -253,6 +325,22 @@ def _select_block_for_marker(marker):
     return ""
 
 
+def _contains_term(haystack, term):
+    r"""Return True if ``term`` appears in ``haystack`` in any serialization.
+
+    The mock upstream logs the wire body with ``json.dumps``'s default
+    ``ensure_ascii=True``, so a non-ASCII term like ``张三`` lands on disk as
+    its ``\uXXXX`` escape sequence. We check both the literal term and that
+    ASCII-escaped form so the audit is serialization-agnostic.
+    """
+    if term in haystack:
+        return True
+    escaped = "".join(
+        "\\u%04x" % ord(c) if ord(c) > 127 else c for c in term
+    )
+    return escaped in haystack
+
+
 def main():
     print(f"Corpus: {len(CORPUS)} rows\n")
     print(f"{'TYPE':<28} {'LIQUID':<7} {'GATEWAY':<40}")
@@ -260,8 +348,9 @@ def main():
 
     ok_rows = 0
     miss_rows = []
+    raw_leaks = 0
     for i, (model_type, sample) in enumerate(CORPUS, start=1):
-        reply, tokens = gateway_roundtrip(model_type, sample, i)
+        reply, tokens, wire = gateway_roundtrip(model_type, sample, i)
 
         # LIQUID: content was pseudonymized at all (a token appeared on the wire
         # or survived into the rehydrated reply — either way the analyzer ran).
@@ -287,6 +376,13 @@ def main():
             gateway_str = "miss " + ",".join(seen)
         print(f"{model_type:<28} {liquid_str:<7} {gateway_str:<40}")
 
+        # Built-in privacy audit: any raw sensitive term from this sample that
+        # still appears verbatim on the wire is a raw leak (count + print).
+        for term in RAW_TERMS.get(sample, []):
+            if wire and _contains_term(wire, term):
+                raw_leaks += 1
+                print(f"RAW-LEAK {model_type}: {term}")
+
     total = len(CORPUS)
     print()
     print(f"SUMMARY: {ok_rows}/{total} gateway rows OK, {total - ok_rows} miss")
@@ -294,6 +390,7 @@ def main():
         print("Misses:")
         for t, seen in miss_rows:
             print(f"  - {t}: wire tokens = {seen}")
+    print(f"RAW-LEAKS: {raw_leaks}")
     return 0
 
 

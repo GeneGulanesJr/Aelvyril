@@ -10,6 +10,26 @@ pub use liquid::{LiquidPiiClient, LiquidPiiClientBuilder, LiquidPiiError};
 pub use presidio::{PresidioClient, PresidioClientBuilder, PresidioError};
 pub use presidio_service::PresidioService;
 
+/// Convert a char-offset position (as returned by the Python sidecar) into a byte offset.
+///
+/// The Presidio / Liquid sidecars compute span `start`/`end` with Python `str`
+/// semantics, i.e. **character** indices. The Rust engine slices `&str` by
+/// **bytes**, so for non-ASCII (multibyte UTF-8) input a raw char offset lands
+/// inside a character: pre-safe_slice that PANICKED; with `safe_slice` it
+/// returns `None` and the span is silently skipped → the PII leaks RAW on the
+/// wire. Converting char offsets to byte offsets (always on char boundaries)
+/// at the client boundary makes `safe_slice` always return `Some` and the span
+/// survives.
+///
+/// For ASCII inputs char offsets == byte offsets, so this is a no-op there.
+/// `char_pos` beyond the string length maps to the end of the string.
+pub fn char_to_byte_offset(text: &str, char_pos: usize) -> usize {
+    text.char_indices()
+        .nth(char_pos)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len())
+}
+
 /// Char-boundary-safe substring extraction.
 ///
 /// All PII span offsets entering the engine are **byte** offsets (from regex
@@ -75,5 +95,55 @@ mod safe_slice_tests {
         assert_eq!(safe_slice("abc", 0, 99), None);
         assert_eq!(safe_slice("abc", 5, 2), None); // start > end
         assert_eq!(safe_slice("", 0, 1), None);
+    }
+}
+
+#[cfg(test)]
+mod char_to_byte_offset_tests {
+    use super::char_to_byte_offset;
+
+    #[test]
+    fn ascii_passthrough() {
+        // For ASCII, char offsets == byte offsets.
+        assert_eq!(char_to_byte_offset("abc", 0), 0);
+        assert_eq!(char_to_byte_offset("abc", 1), 1);
+        assert_eq!(char_to_byte_offset("abc", 3), 3);
+        // Past the end maps to the string length (no panic).
+        assert_eq!(char_to_byte_offset("abc", 99), 3);
+        assert_eq!(char_to_byte_offset("", 0), 0);
+    }
+
+    #[test]
+    fn latin_extended_multibyte() {
+        // "Héllo" bytes: H=0, é=1..3, l=3, l=4, o=5 (len 6).
+        // Char positions:  H=0, é=1, l=2, l=3, o=4.
+        assert_eq!(char_to_byte_offset("Héllo", 0), 0); // H
+        assert_eq!(char_to_byte_offset("Héllo", 1), 1); // é head (2 bytes: char1→byte2)
+        assert_eq!(char_to_byte_offset("Héllo", 2), 3); // first l
+        assert_eq!(char_to_byte_offset("Héllo", 5), 6); // past last char → len
+    }
+
+    #[test]
+    fn cjk_multibyte() {
+        // "我的名字是张三。" — 7 CJK chars + 1 fullwidth period = 8 chars,
+        // each CJK char is 3 bytes in UTF-8.
+        let s = "我的名字是张三。";
+        assert_eq!(s.chars().count(), 8);
+        // char5 (张) → byte 15
+        assert_eq!(char_to_byte_offset(s, 5), 15);
+        // char7 (。) → byte 21
+        assert_eq!(char_to_byte_offset(s, 7), 21);
+        // char8 is past the last char → string length (24)
+        assert_eq!(char_to_byte_offset(s, 8), 24);
+    }
+
+    #[test]
+    fn arabic_and_cyrillic() {
+        // Arabic: each char is 2 bytes in UTF-8.
+        let ar = "أحمد";
+        assert_eq!(char_to_byte_offset(ar, 2), 4);
+        // Cyrillic: each char is 2 bytes.
+        let ru = "Телефон";
+        assert_eq!(char_to_byte_offset(ru, 3), 6);
     }
 }

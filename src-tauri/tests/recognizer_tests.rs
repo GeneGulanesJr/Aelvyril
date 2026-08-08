@@ -67,6 +67,42 @@ mod recognizer_tests {
         assert!(r.regex.find("bare run 12345678").is_none());
     }
 
+    // ── International phone branch (Brief N+O Part 2) ──────────────────────
+    // A leading '+' country code is the strong cue; US local formats are
+    // untouched (handled by the existing branches). Negatives: a bare '+' or
+    // '+'+letters, and 10-digit numbers WITHOUT '+' must NOT suddenly match.
+    #[test]
+    fn test_international_phone_matches() {
+        let recognizers = all_recognizers();
+        let r = recognizers
+            .iter()
+            .find(|r| r.pii_type == PiiType::PhoneNumber)
+            .unwrap();
+        assert_eq!(
+            r.regex.find("Телефон: +7 912 345-67-89").unwrap().as_str(),
+            "+7 912 345-67-89"
+        );
+        assert!(r.regex.find("+49 30 123456").is_some());
+        assert!(r.regex.find("+86 138 0000 0000").is_some());
+        assert!(r.regex.find("+44 20 7946 0958").is_some());
+    }
+
+    #[test]
+    fn test_international_phone_negatives() {
+        let recognizers = all_recognizers();
+        let r = recognizers
+            .iter()
+            .find(|r| r.pii_type == PiiType::PhoneNumber)
+            .unwrap();
+        // A lone '+' / '+'+letters must not match.
+        assert!(r.regex.find("+").is_none());
+        assert!(r.regex.find("+1").is_none());
+        assert!(r.regex.find("+abc").is_none());
+        // A 10-digit number WITHOUT '+' must not suddenly match (existing
+        // bare-alnum regression still holds).
+        assert!(r.regex.find("bare run 12345678").is_none());
+    }
+
     #[tokio::test]
     async fn test_detect_custom_recognizers_email() {
         let engine = aelvyril_lib::pii::engine::PiiEngine::with_presidio("http://localhost:9999".into(), false);

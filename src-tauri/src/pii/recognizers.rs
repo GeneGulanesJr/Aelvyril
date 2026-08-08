@@ -278,6 +278,13 @@ impl PiiType {
 }
 
 /// A detected PII entity with position and confidence
+///
+/// Convention: `start`/`end` are **byte offsets** into the source text
+/// (UTF-8). Regex-layer spans are byte offsets natively; sidecar (Presidio /
+/// Liquid) char offsets are converted to byte offsets at the client boundary
+/// (`crate::pii::char_to_byte_offset`) before building a `PiiMatch`. Downstream
+/// consumers (`pseudonymize`/`tokenizer`/`rehydrator`) may slice `&str` with
+/// these via `safe_slice`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PiiMatch {
     pub pii_type: PiiType,
@@ -301,8 +308,14 @@ static EMAIL_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap());
 
 static PHONE_RE: Lazy<Regex> = Lazy::new(|| {
+    // International branch: a leading '+' (country code) followed by grouped
+    // digits with space/dash separators. The '+' is the strong cue that keeps
+    // US local formats untouched (handled by the existing branches below).
+    // Matches e.g. +7 912 345-67-89, +49 30 123456, +86 138 0000 0000,
+    // +44 20 7946 0958. A bare '+' or '+'+letters cannot match (needs digits
+    // and at least three digit-groups).
     Regex::new(
-        r"(?:\+?\d{1,3}[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]\d{3}[-.\s]\d{4}\b|(?:\+?\d{1,3}[-.\s])?\d{3}[-.\s]\d{3}[-.\s]\d{4}\b"
+        r"\+\d{1,3}(?:[ -]?\d{2,4}){3,4}\b|(?:\+?\d{1,3}[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]\d{3}[-.\s]\d{4}\b|(?:\+?\d{1,3}[-.\s])?\d{3}[-.\s]\d{3}[-.\s]\d{4}\b"
     ).unwrap()
 });
 

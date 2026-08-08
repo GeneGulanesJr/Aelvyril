@@ -619,30 +619,36 @@ async fn mock_sidecar_fixed_spans(
     addr
 }
 
-/// Test 7 — the Liquid PII client must not panic on a multibyte-misaligned
-/// span from the sidecar; the misaligned span is skipped and any aligned
-/// span survives.
+/// Test 7 — the Liquid PII client must not panic on a malformed span from
+/// the sidecar; the out-of-range span is skipped and any valid span survives.
+///
+/// (Pre-Part-1 this tested a byte-misaligned span. Now that the client
+/// converts sidecar CHAR offsets to BYTE offsets, char-offset spans ALWAYS
+/// land on char boundaries, so a real misalignment cannot arise from a
+/// well-formed char-offset span. The defensive `safe_slice` guard is still
+/// exercised by an out-of-range / end<start span, which is what we feed here.)
 #[test]
 fn liquid_pii_multibyte_misaligned_span_does_not_panic() {
     let rt = Runtime::new().unwrap();
     rt.block_on(async {
-        // "Mi correo es josé@x.com" — 'é' in "josé" is 2 bytes at byte
-        // offsets 16..18. We hand the client two spans: one that splits the
-        // 'é' (must be skipped), and one valid email span (must survive).
+        // "Mi correo es josé@x.com". We hand the client two spans: one
+        // out-of-range/garbage (must be skipped, never panic), and one valid
+        // email span (must survive). Both are CHAR offsets; the valid email
+        // span covers chars 13..23 which converts to bytes 13..24.
         let text = "Mi correo es josé@x.com";
-        // A span [16..17] splits the 'é' (bytes 16..18).
+        // A garbage span: end < start (after char→byte conversion still
+        // start > end) → safe_slice returns None → skipped, no panic.
         let split_span = serde_json::json!({
             "entity_type": "contact.email",
-            "start": 16,
-            "end": 17,
+            "start": 20,
+            "end": 10,
             "score": 0.99,
         });
-        // A fully valid, char-aligned email span.
-        let email_start = text.find("josé@x.com").unwrap();
+        // A fully valid, char-aligned email span (chars 13..23).
         let valid_span = serde_json::json!({
             "entity_type": "contact.email",
-            "start": email_start,
-            "end": email_start + "josé@x.com".len(),
+            "start": 13,
+            "end": 23,
             "score": 0.99,
         });
 
@@ -656,8 +662,8 @@ fn liquid_pii_multibyte_misaligned_span_does_not_panic() {
             .await
             .expect("sidecar up → Some(matches)");
 
-        // The misaligned span was dropped; the aligned email span survived
-        // with its correct text.
+        // The garbage span was dropped; the valid email span survived
+        // with its correct text (char→byte conversion yields bytes 13..24).
         let emails: Vec<&PiiMatch> = matches
             .iter()
             .filter(|m| m.pii_type == PiiType::ContactEmail)
@@ -665,7 +671,7 @@ fn liquid_pii_multibyte_misaligned_span_does_not_panic() {
         assert_eq!(
             emails.len(),
             1,
-            "misaligned span must be skipped, aligned span kept: {matches:?}"
+            "garbage span must be skipped, valid span kept: {matches:?}"
         );
         assert_eq!(emails[0].text, "josé@x.com");
     });
@@ -711,6 +717,76 @@ fn engine_detect_pseudonymize_accented_sentence_no_panic() {
         assert!(
             pseudonymized.contains("[URL_1]"),
             "a token must appear: {pseudonymized}"
+        );
+    });
+}
+
+// ── Brief N+O Part 1 regression: char→byte offset conversion ──────────────────
+// The sidecar returns CHAR offsets (Python `str` semantics). Before the fix,
+// non-ASCII input caused the byte-slice to land mid-character → safe_slice
+// returned None → the span was silently skipped → the CJK name leaked RAW on
+// the wire. After the fix the client converts char offsets to byte offsets, so
+// the span survives, the text is correct, and pseudonymization replaces it.
+
+/// Test 9 — a CJK-name sentence through the Liquid client with the sidecar
+/// returning a CHAR-offset span: the client must (a) produce a PiiMatch whose
+/// text is the actual name (not corrupted), (b) the match byte range is on a
+/// char boundary, and (c) pseudonymizing the sentence replaces the name with
+/// a token and leaves NO raw name.
+#[test]
+fn liquid_pii_cjk_char_offsets_converted_no_raw_leak() {
+    use aelvyril_lib::pseudonym::tokenizer::Pseudonymizer;
+
+    let rt = Runtime::new().unwrap();
+    rt.block_on(async {
+        // "我的名字是张三。" — 8 chars, each CJK char is 3 bytes.
+        // The name 张三 is at char positions 5..7 → byte offsets 15..21.
+        let text = "我的名字是张三。";
+        assert_eq!(text.chars().count(), 8);
+
+        // Sidecar returns CHAR offsets (Python semantics): char 5..7.
+        let name_span = serde_json::json!({
+            "entity_type": "identity.person_name",
+            "start": 5,
+            "end": 7,
+            "score": 0.99,
+        });
+        let addr = mock_sidecar_fixed_spans(vec![name_span]).await;
+        let url = format!("http://{}", addr);
+        let client = LiquidPiiClient::new(url, true);
+
+        let matches = client
+            .analyze(text)
+            .await
+            .expect("sidecar up → Some(matches)");
+
+        // (a) Exactly one person-name match whose text is the real CJK name.
+        let names: Vec<&PiiMatch> = matches
+            .iter()
+            .filter(|m| m.pii_type == PiiType::IdentityPersonName)
+            .collect();
+        assert_eq!(names.len(), 1, "expected one name match: {matches:?}");
+        assert_eq!(names[0].text, "张三", "text must be the real CJK name, not corrupted");
+        // (b) The byte range must be the converted byte offsets (15..21), and
+        // must be on a char boundary (safe_slice returns Some).
+        assert_eq!(names[0].start, 15);
+        assert_eq!(names[0].end, 21);
+        assert!(aelvyril_lib::pii::safe_slice(text, names[0].start, names[0].end).is_some());
+
+        // (c) Pseudonymize replaces the raw name with a token; NO raw leak.
+        let mut p = Pseudonymizer::new();
+        let (pseudonymized, mappings) = p.pseudonymize(text, &matches);
+        assert!(
+            mappings.iter().any(|m| m.original == "张三"),
+            "name mapping recorded: {mappings:?}"
+        );
+        assert!(
+            !pseudonymized.contains("张三"),
+            "raw CJK name must NOT survive pseudonymization: {pseudonymized}"
+        );
+        assert!(
+            pseudonymized.contains("[IDENTITY_PERSON_NAME_1]"),
+            "a typed token must appear: {pseudonymized}"
         );
     });
 }

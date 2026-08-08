@@ -174,20 +174,22 @@ impl LiquidPiiClient {
                                 .result
                                 .into_iter()
                                 .filter_map(|r| {
-                                    // Char-boundary-safe slice: a span landing
-                                    // on a non-char boundary (multibyte input)
-                                    // must NOT panic the worker. safe_slice
-                                    // returns None for out-of-range or split-
-                                    // char ranges; we skip such spans rather
-                                    // than corrupting them. ASCII spans are
-                                    // unaffected.
-                                    let span_text = match crate::pii::safe_slice(text, r.start, r.end) {
+                                    // The sidecar returns CHAR offsets (Python
+                                    // `str` semantics). Convert to BYTE
+                                    // offsets before slicing/storing so the
+                                    // span always lands on a char boundary
+                                    // (safe_slice then returns Some) and the
+                                    // PII is pseudonymized instead of leaked
+                                    // raw on non-ASCII input.
+                                    let start = crate::pii::char_to_byte_offset(text, r.start);
+                                    let end = crate::pii::char_to_byte_offset(text, r.end);
+                                    let span_text = match crate::pii::safe_slice(text, start, end) {
                                         Some(s) => s,
                                         None => {
                                             tracing::debug!(
                                                 entity = %r.entity_type,
-                                                start = r.start,
-                                                end = r.end,
+                                                start,
+                                                end,
                                                 "Liquid PII span out of range or on a non-char boundary, skipping"
                                             );
                                             return None;
@@ -196,8 +198,8 @@ impl LiquidPiiClient {
                                     Some(PiiMatch {
                                         pii_type: PiiType::from_str(&r.entity_type),
                                         text: span_text.to_string(),
-                                        start: r.start,
-                                        end: r.end,
+                                        start,
+                                        end,
                                         confidence: if r.score > 0.0 {
                                             r.score
                                         } else {

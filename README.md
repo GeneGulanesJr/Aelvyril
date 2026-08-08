@@ -183,23 +183,36 @@ mechanisms rather than one label schema:
   (16 types: `credential.password`, `identity.tax_id`, `developer.login_credentials`,
   `developer.device_id`, `healthcare.health_plan_id`, `legal.case_number`, …).
 
-Live verification (one sample per type, 2026-08-07): **26/40 returned the exact label**;
-**31/40 flagged the content under some PII label** (the rest are caught by Presidio and the
-always-on regex layer). Honest caveats:
+**Live E2E verification** (2026-08-07, real sidecar + headless gateway + mock upstream,
+one sample per type, all layers wired):
 
-- `special.orientation` and `special.health_status` appear on the model card but exist in
-  NEITHER the head NOR the decode helpers — the model has no output path for them, and the
-  regex layer does not cover them either. They are the only true gaps.
+- Direct model (`/liquid/pii`): **26/40 exact label**; 31/40 flagged under some PII label.
+- Full gateway pipeline (Presidio + Liquid + regex, wire-checked): **40/40 samples produced
+  at least one PII token on the wire** — every type is protected end-to-end. **28/40 produced
+  the exact expected token type**; the other 12 were flagged under a neighboring PII type
+  (content still pseudonymized):
+  - Liquid-namespace vs legacy names: email→`CONTACT_EMAIL`, ip→`CONTACT_IP_ADDRESS`,
+    api_key→`CREDENTIAL_API_KEY`, credit_card→`FINANCIAL_CREDIT_CARD`, iban→`FINANCIAL_IBAN`,
+    person→`IDENTITY_PERSON_NAME`, date_of_birth→`CONTACT_ADDRESS` (overlap resolution picked
+    the winning span).
+  - Overlap-resolution category shifts: `special.political` ("Democratic Party") →
+    `ORGANIZATION` (Presidio won), `special.religion` ("Maria is a practicing Catholic") →
+    `IDENTITY_PERSON_NAME` (containing span won over the "Catholic" keyword), `device.imei` →
+    `CONTACT_PHONE`, `developer.login_credentials` → `CREDENTIAL_PASSWORD`.
+
+Honest caveats:
+
+- `special.orientation` and `special.health_status` have **no model output path** (they appear
+  on the model card but in NEITHER the head NOR the decode helpers), but the keyword regexes
+  cover them at phrase level ("identifies as bisexual", "HIV positive") — verified on the wire.
 - `financial.amount` is declared in the decode helpers but did not fire on any realistic
   money sample — the regex layer carries it.
 - `identity.tax_id` detects on "TIN" / "Tax identification number" phrasing but missed
   "employer EIN" (context-dependent).
 - `healthcare.condition`, `healthcare.medication`, `legal.case_number`, `org.company_name`,
   `special.political` are in the head but were not detected in short samples; keyword regexes
-  (commit `b79f69a`) cover them at phrase level but are brittle beyond that.
-- Neighbor-label hits (content still flagged, category differs): `credential.password` and
-  `credential.connection_string` → `developer.login_credentials`,
-  `developer.login_credentials` → `online.username`, `device.imei` → phone/device.
+  (commit `b79f69a`) cover condition/medication/political at phrase level, and company_name is
+  caught by Presidio (ORGANIZATION).
 
 Naming notes: `identity.ssn` maps to the legacy `SSN` variant; the encoder's
 `developer.login_credentials` / `developer.device_id` namespaces match the actual model card.

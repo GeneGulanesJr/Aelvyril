@@ -92,9 +92,19 @@ Two namespaces of token names coexist and are both accepted by `corpus_test.py`:
   chunked bodies (falling back to `Content-Length`), so each forward produces
   **exactly one** logged block — `wire blocks == requests`, not `2 × requests`.
 - **Per-request block matching.** Each corpus request appends a unique marker
-  `[[req-<n>]]` after the PII sample (detection is unaffected; the marker is
-  not PII). The corpus selects the wire block whose content contains that
-  marker, so read-ordering flakes are impossible.
+  `[[◆ <n>]]` (BLACK DIAMOND U+25C6, then a space, then the request id) after
+  the PII sample (detection is unaffected; the non-ASCII glyph is not
+  matchable by any PII recognizer). The corpus selects the wire block whose
+  content contains that marker, so read-ordering flakes are impossible. The
+  glyph is what makes it collision-proof: a purely-ASCII tag like
+  `[[req-<n>]]` is exactly a username shape and gets pseudonymized by the
+  ONLINE_USERNAME recognizer, which then mangles the marker on the wire. The
+  **space** between the glyph and the digits is load-bearing too: a glyph
+  jammed directly against the digits (`[[◆<n>]]`) is (a) swallowed by an
+  aggressive Presidio recognizer when digit-adjacent and (b) lands on a
+  non-char byte boundary inside the gateway's byte-index span slicing
+  (`src/pii/liquid.rs`), panicking the worker; the space prevents both.
+  `[[◆ <n>]]` is verified intact on the wire for all 40 corpus rows.
 
 ## Syntax check
 

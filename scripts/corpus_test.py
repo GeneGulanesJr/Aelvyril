@@ -25,10 +25,12 @@ Per-request block matching
 --------------------------
 The mock logs one ``=== … ===``-delimited block per upstream POST. To pick the
 RIGHT block for a given corpus request (instead of blindly taking the last
-one), each request embeds a unique marker ``[[req-<n>]]`` appended AFTER the
-PII sample (so detection is unaffected). After the response we read the blocks
-and select the one whose content contains that marker. This kills the
-read-ordering flake entirely.
+one), each request embeds a unique marker ``[[◆ <n>]]`` (BLACK DIAMOND +
+space, see ``MARKER_TMPL``) appended AFTER the PII sample (so detection is
+unaffected — the non-ASCII glyph is unmatchable by any PII recognizer, and
+the separating space keeps it off the gateway's byte-span rehydrator).
+After the response we read the blocks and select the one whose content
+contains that marker. This kills the read-ordering flake entirely.
 
 Usage::
 
@@ -46,6 +48,26 @@ import urllib.request
 GATEWAY = "http://127.0.0.1:4242/v1/chat/completions"
 KEY = "aelvyril-benchmark-key"
 MOCK_LOG = "/tmp/mock_upstream.log"
+
+# Per-request marker template. The marker is appended AFTER the PII sample so
+# the wire-log block for THIS request can be identified unambiguously.
+#
+# It MUST be unmatchable by any PII recognizer so the marker survives the
+# pseudonymize -> forward -> rehydrate pipeline untouched. A purely-ASCII tag
+# like ``[[req-<n>]]`` is exactly a username shape and was eaten by the
+# ONLINE_USERNAME recognizer, which mangled the marker and broke block
+# selection (the "intermittent orientation drop" was this, not a gateway bug).
+#
+# We use a BLACK DIAMOND (\u25c6) glyph. A single glyph jammed right against
+# the request digits (``[[\u25c6<n>]]``) is itself (a) swallowed by an
+# aggressive Presidio recognizer when digit-adjacent and (b) lands on a
+# non-char byte boundary inside the gateway's byte-index rehydrator span
+# slicing (src/pii/liquid.rs), panicking the worker. Inserting a single space
+# between the glyph and the digits (``[[\u25c6 <n>]]``) fixes both: Presidio
+# no longer matches the now-separated digit run, and no PII match span crosses
+# the multi-byte glyph, so the byte/char offset bug never triggers. Verified
+# intact on the wire for all 40 corpus rows.
+MARKER_TMPL = " [[\u25c6 {req_id}]]"
 
 # The 40 corpus rows: (model type label, sample text containing that PII).
 CORPUS = [
@@ -157,13 +179,15 @@ TOKEN_RE = re.compile(r"\[\s*([A-Z][A-Z0-9_]*)\s*_\d+\s*\]")
 def gateway_roundtrip(model_type, sample, req_id):
     """Send ``sample`` through the gateway; return (reply_text, wire_tokens).
 
-    ``req_id`` is appended as a unique marker ``[[req-<id>]]`` AFTER the sample
-    so the wire log block for THIS request can be identified unambiguously.
+    ``req_id`` is appended as a unique marker ``[[◆ <id>]]`` (see ``MARKER_TMPL``)
+    AFTER the sample so the wire log block for THIS request can be identified
+    unambiguously. The non-ASCII glyph is unmatchable by any PII recognizer,
+    so the marker always reaches the wire intact.
 
     Transient failures (HTTPError/exception, or no wire block for the request)
     are retried once after a short sleep so mid-burst hiccups self-heal.
     """
-    marker = f" [[req-{req_id}]]"
+    marker = MARKER_TMPL.format(req_id=req_id)
     content = f"{sample}{marker}"
     body = {"model": "none", "messages": [{"role": "user", "content": content}]}
 
@@ -204,15 +228,27 @@ def gateway_roundtrip(model_type, sample, req_id):
 
 
 def _select_block_for_marker(marker):
-    """Return the raw text of the mock-log block whose body contains ``marker``."""
+    r"""Return the raw text of the mock-log block whose body contains ``marker``.
+
+    The mock writes the wire body as JSON with the default ``ensure_ascii=True``,
+    so the non-ASCII diamond in the marker is serialized on disk as ``\u25c6``.
+    We therefore match against BOTH the literal marker and its ASCII-escaped JSON
+    form (every non-ASCII char replaced by its ``\uXXXX`` escape) so block
+    selection works regardless of how the mock serialized the body.
+    """
     try:
         raw = open(MOCK_LOG).read()
     except FileNotFoundError:
         return ""
+    # The ASCII-escaped form of the marker as Python's json would emit it
+    # (``ensure_ascii=True``): each non-ASCII codepoint -> ``\uXXXX``.
+    escaped_marker = "".join(
+        "\\u%04x" % ord(c) if ord(c) > 127 else c for c in marker
+    )
     # Blocks are delimited by lines beginning with ``===``.
     parts = re.split(r"(?=^=== )", raw, flags=re.MULTILINE)
     for block in reversed(parts):  # most recent first
-        if marker in block:
+        if marker in block or escaped_marker in block:
             return block
     return ""
 

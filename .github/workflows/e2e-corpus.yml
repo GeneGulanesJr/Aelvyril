@@ -1,0 +1,227 @@
+# Manual live-E2E corpus verification.
+#
+# This workflow is `workflow_dispatch` ONLY — it is NOT a normal gate. It
+# needs the full ML stack (torch + transformers + spaCy + en_core_web_sm +
+# model downloads), which is too heavy and too slow (and too network-
+# dependent) to run on every push/PR. A maintainer triggers it on demand to
+# verify the live detect -> pseudonymize -> forward -> rehydrate pipeline
+# against the 40-type corpus and to confirm no raw PII reaches the wire.
+#
+# What it does:
+#   1. Build the headless gateway.
+#   2. Provision a Python venv with the sidecar stack (Presidio + Liquid
+#      encoder) and the model + spacy language model.
+#   3. Start sidecar (3031) + mock upstream (9999) + headless gateway (4242).
+#   4. Run scripts/corpus_test.py.
+#   5. Upload the corpus output + mock upstream log as artifacts (always,
+#      even on failure).
+#   6. Privacy gate: grep the mock upstream log for raw PII sample terms —
+#      if any original value reached the wire, the job FAILS.
+name: E2E Corpus (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: "Run with RUST_LOG=debug"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+# Cancel a superseded in-flight run when a maintainer re-triggers.
+concurrency:
+  group: e2e-corpus-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-corpus:
+    name: Live 40-type corpus + privacy gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_DEV_CODEGEN_UNITS: "16"
+      CARGO_BUILD_JOBS: "1"
+      PRESIDIO_PORT: "3031"
+      AELVYRIL_LIQUID_PII_ENABLED: "1"
+      AELVYRIL_KEY_BENCHMARKDUMMY: aelvyril-benchmark-key
+      MOCK_LOG: /tmp/mock_upstream.log
+      SIDECAR_LOG: /tmp/sidecar.log
+      HEADLESS_LOG: /tmp/headless.log
+      RUST_LOG: ${{ inputs.debug == 'true' && 'debug' || 'info' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri v2 + curl system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            pkg-config \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libdbus-1-dev
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-e2e-
+
+      - name: Build headless gateway
+        run: cargo build --manifest-path src-tauri/Cargo.toml --bin aelvyril-headless
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Provision sidecar venv
+        run: |
+          python3 -m venv /tmp/sidecar-venv
+          /tmp/sidecar-venv/bin/python -m pip install --upgrade pip
+          # CPU-only torch first (mirrors the devbox venv recipe +
+          # src-tauri/presidio_requirements.txt).
+          /tmp/sidecar-venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch
+          /tmp/sidecar-venv/bin/pip install \
+            transformers \
+            huggingface_hub \
+            presidio-analyzer \
+            spacy
+          /tmp/sidecar-venv/bin/python -m spacy download en_core_web_sm
+
+      - name: Start sidecar (3031)
+        working-directory: src-tauri
+        run: |
+          : > "$SIDECAR_LOG"
+          /tmp/sidecar-venv/bin/python presidio_service.py > "$SIDECAR_LOG" 2>&1 &
+          echo $! > /tmp/sidecar.pid
+
+      - name: Start mock upstream (9999)
+        run: |
+          : > "$MOCK_LOG"
+          python3 scripts/mock_upstream.py 9999 "$MOCK_LOG" > /tmp/mock.out 2>&1 &
+          echo $! > /tmp/mock.pid
+
+      - name: Start headless gateway (4242)
+        run: |
+          : > "$HEADLESS_LOG"
+          ./src-tauri/target/debug/aelvyril-headless > "$HEADLESS_LOG" 2>&1 &
+          echo $! > /tmp/headless.pid
+
+      - name: Health-check stack
+        run: |
+          ok=0
+          for i in $(seq 1 120); do
+            ok=1
+            curl -s -o /dev/null "http://127.0.0.1:3031/health" || ok=0
+            curl -s -o /dev/null "http://127.0.0.1:9999/" || ok=0
+            curl -s -o /dev/null "http://127.0.0.1:4242/health" || ok=0
+            [ "$ok" -eq 1 ] && { echo "ALL_UP after ${i}s"; break; }
+            sleep 1
+          done
+          if [ "$ok" != "1" ]; then
+            echo "STACK FAILED to come up within 120s" >&2
+            echo "--- sidecar log ---";  tail -20 "$SIDECAR_LOG"  || true
+            echo "--- mock log ---";     tail -20 "$MOCK_LOG"     || true
+            echo "--- headless log ---"; tail -20 "$HEADLESS_LOG" || true
+            exit 1
+          fi
+
+      - name: Run 40-type corpus
+        id: corpus
+        run: |
+          set +e
+          python3 scripts/corpus_test.py 2>&1 | tee /tmp/corpus_output.txt
+          echo "rc=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          exit 0   # don't fail the job here; the privacy gate + artifact upload must still run
+
+      - name: Privacy gate — no raw PII on the wire
+        # The mock upstream log is the wire evidence. If any ORIGINAL corpus
+        # sample value appears in it verbatim, the gateway leaked raw PII
+        # instead of a token → fail the job regardless of corpus score.
+        if: always()
+        run: |
+          set +e
+          leaks=0
+          # Representative raw PII sample values from the corpus. If any
+          # survive into the mock log (i.e. were NOT pseudonymized), that is
+          # a privacy violation.
+          for term in \
+            "john.doe@example.com" \
+            "jane@acme.com" \
+            "555-867-5309" \
+            "192.168.1.100" \
+            "4532-1234-5678-9010" \
+            "123-45-6789" \
+            "DE89370400440532013000" \
+            "sk-1234567890abcdef" \
+            ; do
+            if grep -qF -- "$term" "$MOCK_LOG" 2>/dev/null; then
+              echo "::error::Raw PII term reached the wire: $term"
+              leaks=$((leaks+1))
+            fi
+          done
+          if [ "$leaks" -gt 0 ]; then
+            echo "::error::$leaks raw PII term(s) found on the wire — privacy gate FAILED"
+            exit 1
+          fi
+          echo "Privacy gate PASSED — no raw PII sample terms on the wire."
+
+      - name: Fail job if the corpus itself failed
+        if: steps.corpus.outputs.rc != '0'
+        run: |
+          echo "::error::corpus_test.py exited non-zero (rc=${{ steps.corpus.outputs.rc }})"
+          exit 1
+
+      - name: Upload corpus output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-output
+          path: |
+            /tmp/corpus_output.txt
+            /tmp/mock.out
+          if-no-files-found: ignore
+
+      - name: Upload mock upstream log (wire evidence)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mock-upstream-log
+          path: /tmp/mock_upstream.log
+          if-no-files-found: ignore
+
+      - name: Upload sidecar + headless logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-logs
+          path: |
+            /tmp/sidecar.log
+            /tmp/headless.log
+          if-no-files-found: ignore
+
+      - name: Tear down stack
+        if: always()
+        run: |
+          for pidfile in /tmp/sidecar.pid /tmp/mock.pid /tmp/headless.pid; do
+            [ -f "$pidfile" ] && kill "$(cat "$pidfile")" 2>/dev/null || true
+          done

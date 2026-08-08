@@ -265,12 +265,33 @@ impl PresidioClient {
                             let matches: Vec<PiiMatch> = body
                                 .result
                                 .into_iter()
-                                .map(|r| PiiMatch {
-                                    pii_type: presidio_entity_to_pii_type(&r.entity_type),
-                                    text: text[r.start..r.end].to_string(),
-                                    start: r.start,
-                                    end: r.end,
-                                    confidence: r.score,
+                                .filter_map(|r| {
+                                    // Char-boundary-safe slice: a span landing
+                                    // on a non-char boundary (multibyte input)
+                                    // must NOT panic the worker. safe_slice
+                                    // returns None for out-of-range or split-
+                                    // char ranges; we skip such spans rather
+                                    // than corrupting them. ASCII spans are
+                                    // unaffected.
+                                    let span_text = match crate::pii::safe_slice(text, r.start, r.end) {
+                                        Some(s) => s,
+                                        None => {
+                                            tracing::debug!(
+                                                entity = %r.entity_type,
+                                                start = r.start,
+                                                end = r.end,
+                                                "Presidio span out of range or on a non-char boundary, skipping"
+                                            );
+                                            return None;
+                                        }
+                                    };
+                                    Some(PiiMatch {
+                                        pii_type: presidio_entity_to_pii_type(&r.entity_type),
+                                        text: span_text.to_string(),
+                                        start: r.start,
+                                        end: r.end,
+                                        confidence: r.score,
+                                    })
                                 })
                                 .collect();
 

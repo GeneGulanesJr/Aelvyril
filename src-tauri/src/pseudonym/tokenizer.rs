@@ -66,9 +66,21 @@ impl Pseudonymizer {
     fn apply_replacements(text: &str, replacements: Vec<(usize, usize, String)>) -> String {
         let mut result = text.to_string();
         for (start, end, token) in replacements {
-            if start <= result.len() && end <= result.len() {
-                result.replace_range(start..end, &token);
+            // Char-boundary-safe replacement: `replace_range` panics (like
+            // direct slicing) if `start..end` is not on a UTF-8 char
+            // boundary. PII spans are byte offsets that may split a
+            // multibyte char in non-ASCII input; such a misaligned span
+            // must be skipped (the token is still emitted via the mapping)
+            // rather than panic the worker. ASCII spans are unaffected.
+            if crate::pii::safe_slice(&result, start, end).is_none() {
+                tracing::debug!(
+                    start,
+                    end,
+                    "Pseudonymize replacement span on a non-char boundary, skipping"
+                );
+                continue;
             }
+            result.replace_range(start..end, &token);
         }
         result
     }
@@ -151,5 +163,31 @@ mod tests {
         let (result, mappings) = p.pseudonymize(text, &[]);
         assert_eq!(result, text);
         assert!(mappings.is_empty());
+    }
+
+    // Regression: a PII span whose byte range splits a multibyte UTF-8 char
+    // must NOT panic the worker. The token is still emitted (via the mapping)
+    // but the misaligned replacement is skipped, leaving the original text
+    // intact at that location. ASCII inputs are unaffected.
+    #[test]
+    fn test_pseudonymize_multibyte_misaligned_span_does_not_panic() {
+        let mut p = Pseudonymizer::new();
+        // "Héllo" — 'é' is bytes 1..3. A span [1..2] splits the 'é'.
+        let text = "Héllo world";
+        // Fabricate a match with a span that starts inside 'é': byte 1..2.
+        let bad_match = PiiMatch {
+            pii_type: PiiType::Email,
+            text: "\u{00e9}".to_string(), // the 'é' — distinct text for dedup
+            start: 1,
+            end: 2,
+            confidence: 0.9,
+        };
+        // Must not panic.
+        let (result, mappings) = p.pseudonymize(text, &[bad_match]);
+        // Misaligned span is skipped — original text unchanged.
+        assert_eq!(result, text, "misaligned span must be skipped, text unchanged");
+        // The mapping is still recorded (token emitted) even though the text
+        // body was left intact — no silent data loss.
+        assert_eq!(mappings.len(), 1, "token mapping still emitted for skipped span");
     }
 }

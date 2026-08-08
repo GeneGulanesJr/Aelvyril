@@ -354,16 +354,26 @@ fn resolve_overlaps(matches: &mut Vec<PiiMatch>) {
                 }
             }
 
-            // Strict containment — the containing match wins: an entity that fully
-            // contains another is the more complete detection (email > its domain).
+            // Strict containment — the containing match usually wins
+            // (email > its domain), UNLESS the contained match is strictly more
+            // specific (an over-broad person span containing "Catholic" — the
+            // religion is the finer classification).
             if m.start >= existing.start && m.end <= existing.end {
+                // m is contained in existing
+                if type_specificity(&m.pii_type) > type_specificity(&existing.pii_type) {
+                    *existing = m.clone();
+                }
                 dominated = true;
-                break; // existing (containing) wins
+                break;
             }
             if existing.start >= m.start && existing.end <= m.end {
-                *existing = m.clone();
+                // existing is contained in m
+                if type_specificity(&existing.pii_type) <= type_specificity(&m.pii_type) {
+                    *existing = m.clone(); // m (containing) wins on tie or when more specific
+                }
+                // else: existing (contained) is strictly more specific — keep existing
                 dominated = true;
-                break; // m (containing) wins
+                break;
             }
             // True partial overlap — specificity, then confidence
             let spec_m = type_specificity(&m.pii_type);
@@ -391,12 +401,17 @@ fn resolve_overlaps(matches: &mut Vec<PiiMatch>) {
 /// (Date, PhoneNumber) when both match the same text.
 ///
 /// The scoring is:
+/// - 4: Fine-grained sensitive / shape-cued high-precision
 /// - 3: Very specific (SSN, IBAN, CreditCard, ZipCode, API key, Email)
 /// - 2: Moderately specific (IP address, Phone, Domain)
 /// - 1: Generic / ambiguous (Date, Person, Location, Organization, Custom)
 fn type_specificity(pii_type: &PiiType) -> u8 {
     use PiiType::*;
     match pii_type {
+        // Liquid encoder — fine-grained sensitive + shape-cued (must beat generic
+        // Organization/Person/Phone and synthesized 1.0-confidence ties)
+        SpecialReligion | SpecialPolitical | SpecialOrientation | SpecialHealthStatus
+        | DeviceImei | DeviceMacAddress | DeveloperDeviceId | DeveloperLoginCredentials => 4,
         // Legacy very-specific
         Ssn | Iban | CreditCard | ZipCode | ApiKey | Email | SwiftCode | UsBankNumber
         | UsPassport | UsDriverLicense | UsState | StreetAddress | City | Country
@@ -408,9 +423,9 @@ fn type_specificity(pii_type: &PiiType) -> u8 {
         | ContactPostalCode | ContactIpAddress | FinancialCreditCard | FinancialIban
         | FinancialBankAccount | FinancialSwiftBic | FinancialCryptoWallet
         | CredentialApiKey | CredentialPassword | CredentialPrivateKey | CredentialJwt
-        | CredentialConnectionString | DeveloperLoginCredentials => 3,
+        | CredentialConnectionString => 3,
         // Liquid encoder — Device / Location / Healthcare / Org / Legal (specific)
-        DeviceMacAddress | DeviceImei | DeveloperDeviceId | LocationGpsCoordinates
+        LocationGpsCoordinates
         | HealthcareMedicalRecord | HealthcareHealthPlanId | OrgCompanyName
         | LegalCaseNumber => 3,
         // Liquid encoder — Online: URL is specific, Username is moderate
@@ -418,8 +433,6 @@ fn type_specificity(pii_type: &PiiType) -> u8 {
         // Moderately specific — amount, username, and clinical context
         FinancialAmount | OnlineUsername | HealthcareCondition
         | HealthcareMedication => 2,
-        // Liquid encoder — Special category (sensitive but low precision)
-        SpecialReligion | SpecialPolitical | SpecialOrientation | SpecialHealthStatus => 1,
         // Generic / ambiguous
         Date | Person | Location | Organization | Custom(_) => 1,
         // Fallthrough for any future variant
@@ -656,6 +669,124 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_overlaps_special_beats_organization() {
+        // Same span "Democratic Party": SpecialPolitical (0.70) must beat
+        // Organization (0.95) because tier-4 specificity beats tier-1 on tie.
+        let mut matches = vec![
+            PiiMatch {
+                pii_type: PiiType::Organization,
+                text: "Democratic Party".into(),
+                start: 0,
+                end: 16,
+                confidence: 0.95,
+            },
+            PiiMatch {
+                pii_type: PiiType::SpecialPolitical,
+                text: "Democratic Party".into(),
+                start: 0,
+                end: 16,
+                confidence: 0.70,
+            },
+        ];
+        resolve_overlaps(&mut matches);
+        assert_eq!(matches.len(), 1, "Should keep exactly one match");
+        assert_eq!(
+            matches[0].pii_type,
+            PiiType::SpecialPolitical,
+            "SpecialPolitical (tier 4) should beat Organization (tier 1)"
+        );
+    }
+
+    #[test]
+    fn test_resolve_overlaps_imei_beats_phone() {
+        // Same span "356789012345678": DeviceImei (0.80) must beat
+        // ContactPhone (0.99) because tier-4 specificity beats tier-3 on tie.
+        let mut matches = vec![
+            PiiMatch {
+                pii_type: PiiType::ContactPhone,
+                text: "356789012345678".into(),
+                start: 0,
+                end: 15,
+                confidence: 0.99,
+            },
+            PiiMatch {
+                pii_type: PiiType::DeviceImei,
+                text: "356789012345678".into(),
+                start: 0,
+                end: 15,
+                confidence: 0.80,
+            },
+        ];
+        resolve_overlaps(&mut matches);
+        assert_eq!(matches.len(), 1, "Should keep exactly one match");
+        assert_eq!(
+            matches[0].pii_type,
+            PiiType::DeviceImei,
+            "DeviceImei (tier 4) should beat ContactPhone (tier 3)"
+        );
+    }
+
+    #[test]
+    fn test_resolve_overlaps_religion_beats_containing_person() {
+        // Over-broad person span [0,29) contains religion span [16,24).
+        // SpecialReligion (tier 4) is strictly more specific than Person (tier 1),
+        // so the contained religion wins — Person is dropped.
+        let mut matches = vec![
+            PiiMatch {
+                pii_type: PiiType::Person,
+                text: "Maria is a practicing Catholic.".into(),
+                start: 0,
+                end: 29,
+                confidence: 0.90,
+            },
+            PiiMatch {
+                pii_type: PiiType::SpecialReligion,
+                text: "Catholic".into(),
+                start: 16,
+                end: 24,
+                confidence: 0.70,
+            },
+        ];
+        resolve_overlaps(&mut matches);
+        assert_eq!(matches.len(), 1, "Should keep exactly one match");
+        assert_eq!(
+            matches[0].pii_type,
+            PiiType::SpecialReligion,
+            "Contained SpecialReligion should beat over-broad Person span"
+        );
+    }
+
+    #[test]
+    fn test_resolve_overlaps_login_credentials_beats_password() {
+        // Partial overlap: DeveloperLoginCredentials [0,20) (0.75) vs
+        // CredentialPassword [8,26) (0.90). Per the partial-overlap branch,
+        // the strictly more specific type (tier 4) wins.
+        let mut matches = vec![
+            PiiMatch {
+                pii_type: PiiType::CredentialPassword,
+                text: "password: hunter2".into(),
+                start: 8,
+                end: 26,
+                confidence: 0.90,
+            },
+            PiiMatch {
+                pii_type: PiiType::DeveloperLoginCredentials,
+                text: "login: admin / pass".into(),
+                start: 0,
+                end: 20,
+                confidence: 0.75,
+            },
+        ];
+        resolve_overlaps(&mut matches);
+        assert_eq!(matches.len(), 1, "Should keep exactly one match");
+        assert_eq!(
+            matches[0].pii_type,
+            PiiType::DeveloperLoginCredentials,
+            "DeveloperLoginCredentials (tier 4) should beat CredentialPassword (tier 3)"
+        );
+    }
+
+    #[test]
     fn test_type_specificity_scoring() {
         assert_eq!(type_specificity(&PiiType::ZipCode), 3);
         assert_eq!(type_specificity(&PiiType::Ssn), 3);
@@ -669,10 +800,11 @@ mod tests {
         assert_eq!(type_specificity(&PiiType::CredentialPrivateKey), 3);
         assert_eq!(type_specificity(&PiiType::CredentialPassword), 3);
         assert_eq!(type_specificity(&PiiType::CredentialConnectionString), 3);
-        assert_eq!(type_specificity(&PiiType::DeveloperLoginCredentials), 3);
+        assert_eq!(type_specificity(&PiiType::DeveloperLoginCredentials), 4);
         assert_eq!(type_specificity(&PiiType::FinancialCryptoWallet), 3);
-        assert_eq!(type_specificity(&PiiType::DeviceImei), 3);
-        assert_eq!(type_specificity(&PiiType::DeveloperDeviceId), 3);
+        assert_eq!(type_specificity(&PiiType::DeviceImei), 4);
+        assert_eq!(type_specificity(&PiiType::DeveloperDeviceId), 4);
+        assert_eq!(type_specificity(&PiiType::DeviceMacAddress), 4);
         assert_eq!(type_specificity(&PiiType::IdentityTaxId), 3);
         assert_eq!(type_specificity(&PiiType::IdentityPassport), 3);
         assert_eq!(type_specificity(&PiiType::IdentityDriversLicense), 3);
@@ -687,9 +819,9 @@ mod tests {
         assert_eq!(type_specificity(&PiiType::OnlineUsername), 2);
         assert_eq!(type_specificity(&PiiType::HealthcareCondition), 2);
         assert_eq!(type_specificity(&PiiType::HealthcareMedication), 2);
-        assert_eq!(type_specificity(&PiiType::SpecialReligion), 1);
-        assert_eq!(type_specificity(&PiiType::SpecialPolitical), 1);
-        assert_eq!(type_specificity(&PiiType::SpecialOrientation), 1);
-        assert_eq!(type_specificity(&PiiType::SpecialHealthStatus), 1);
+        assert_eq!(type_specificity(&PiiType::SpecialReligion), 4);
+        assert_eq!(type_specificity(&PiiType::SpecialPolitical), 4);
+        assert_eq!(type_specificity(&PiiType::SpecialOrientation), 4);
+        assert_eq!(type_specificity(&PiiType::SpecialHealthStatus), 4);
     }
 }

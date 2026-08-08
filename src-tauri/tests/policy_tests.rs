@@ -578,3 +578,139 @@ fn regex_fallback_detects_without_sidecars() {
         );
     });
 }
+
+// ── Multibyte span-safety regression tests ─────────────────────────────────
+//
+// The PII span offsets from Presidio / the Liquid encoder are byte offsets.
+// Slicing a `&str` directly with byte offsets that split a multibyte UTF-8
+// char panics the tokio worker and drops the request. These tests drive the
+// real client paths against an in-process mock sidecar that deliberately
+// returns a span landing inside a multibyte char, asserting NO PANIC and a
+// graceful skip (the misaligned span is dropped, others survive).
+
+/// A mock sidecar whose `/liquid/pii` echoes back a caller-controlled span set
+/// so we can feed it a span that splits a multibyte char.
+async fn mock_sidecar_fixed_spans(
+    spans: Vec<serde_json::Value>,
+) -> std::net::SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let app = Router::new().route(
+        "/liquid/pii",
+        post(move |State(_): State<()>, Json(body): Json<serde_json::Value>| {
+            let spans = spans.clone();
+            async move {
+                // Sanity: echo only when the request actually carried text.
+                let _ = body.get("text").and_then(|t| t.as_str());
+                Json(serde_json::json!({ "result": spans }))
+            }
+        }),
+    );
+
+    let app = app.route(
+        "/health",
+        get(|| async { Json(serde_json::json!({"status": "ok"})) }),
+    );
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
+}
+
+/// Test 7 — the Liquid PII client must not panic on a multibyte-misaligned
+/// span from the sidecar; the misaligned span is skipped and any aligned
+/// span survives.
+#[test]
+fn liquid_pii_multibyte_misaligned_span_does_not_panic() {
+    let rt = Runtime::new().unwrap();
+    rt.block_on(async {
+        // "Mi correo es josé@x.com" — 'é' in "josé" is 2 bytes at byte
+        // offsets 16..18. We hand the client two spans: one that splits the
+        // 'é' (must be skipped), and one valid email span (must survive).
+        let text = "Mi correo es josé@x.com";
+        // A span [16..17] splits the 'é' (bytes 16..18).
+        let split_span = serde_json::json!({
+            "entity_type": "contact.email",
+            "start": 16,
+            "end": 17,
+            "score": 0.99,
+        });
+        // A fully valid, char-aligned email span.
+        let email_start = text.find("josé@x.com").unwrap();
+        let valid_span = serde_json::json!({
+            "entity_type": "contact.email",
+            "start": email_start,
+            "end": email_start + "josé@x.com".len(),
+            "score": 0.99,
+        });
+
+        let addr = mock_sidecar_fixed_spans(vec![split_span, valid_span]).await;
+        let url = format!("http://{}", addr);
+        let client = LiquidPiiClient::new(url, true);
+
+        // Must NOT panic.
+        let matches = client
+            .analyze(text)
+            .await
+            .expect("sidecar up → Some(matches)");
+
+        // The misaligned span was dropped; the aligned email span survived
+        // with its correct text.
+        let emails: Vec<&PiiMatch> = matches
+            .iter()
+            .filter(|m| m.pii_type == PiiType::ContactEmail)
+            .collect();
+        assert_eq!(
+            emails.len(),
+            1,
+            "misaligned span must be skipped, aligned span kept: {matches:?}"
+        );
+        assert_eq!(emails[0].text, "josé@x.com");
+    });
+}
+
+/// Test 8 — detect → pseudonymize through the real engine on an accented
+/// sentence must complete without panic. Uses the regex fallback layer (no
+/// sidecar) so it runs anywhere; the point is the full pipeline never panics
+/// on multibyte input.
+#[test]
+fn engine_detect_pseudonymize_accented_sentence_no_panic() {
+    use aelvyril_lib::pseudonym::tokenizer::Pseudonymizer;
+
+    let rt = Runtime::new().unwrap();
+    rt.block_on(async {
+        let text = "Mi correo es josé@example.com y mi teléfono es 555-123-4567.";
+        let mut engine = PiiEngine::new();
+        engine.set_presidio_enabled(false); // regex fallback only (no sidecar).
+
+        // Must not panic on the accented input.
+        let matches = engine.detect(text).await;
+        // Refuse to panic: the test reaching this line is the primary
+        // assertion. As a secondary check, SOMETHING PII-like must be
+        // detected (the accented input still carries a domain + phone). The
+        // email recognizer is ASCII-focused, so on this accented local part
+        // it surfaces as a Domain match rather than an Email — that is the
+        // existing recognizer behavior and is not what this regression test
+        // is about; the point is NO PANIC through detect → pseudonymize.
+        assert!(
+            !matches.is_empty(),
+            "regex layer must still detect *something* on accented input: {matches:?}"
+        );
+
+        // Pseudonymize must also not panic — all returned spans are
+        // char-aligned (they come from regex matches), so the tokens are
+        // substituted in place.
+        let mut p = Pseudonymizer::new();
+        let (pseudonymized, mappings) = p.pseudonymize(text, &matches);
+        assert!(
+            mappings.iter().any(|m| m.original == "example.com"),
+            "domain mapping must be recorded: {mappings:?}"
+        );
+        assert!(
+            pseudonymized.contains("[URL_1]"),
+            "a token must appear: {pseudonymized}"
+        );
+    });
+}

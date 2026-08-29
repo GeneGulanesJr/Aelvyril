@@ -2,7 +2,7 @@
 # Deployed via TrueNAS Custom App (Compose from this repo).
 services:
   aelvyril-server:
-    image: node:24-bookworm-slim
+    image: node:26-bookworm-slim
     container_name: aelvyril-server
     restart: unless-stopped
     command: ["bash", "-c", "if [ -f /data/setup/setup-aelvyril.sh ]; then bash /data/setup/setup-aelvyril.sh; else apt-get update && apt-get install -y --no-install-recommends openssh-server ca-certificates curl && mkdir -p /run/sshd && /usr/sbin/sshd; fi; tail -f /dev/null"]

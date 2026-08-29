@@ -1,0 +1,42 @@
+# Aelvyril — agent memory & asset platform (server)
+# Deployed via TrueNAS Custom App (Compose from this repo).
+name: aelvyril
+
+services:
+  # Aelvyril server: Node runtime + SSH for provisioning. API/dashboard land here in later phases.
+  aelvyril-server:
+    image: node:22-bookworm-slim
+    container_name: aelvyril-server
+    restart: unless-stopped
+    command: >-
+      bash -c 'if [ -f /data/setup/setup-aelvyril.sh ]; then bash /data/setup/setup-aelvyril.sh; else bash -c "apt-get update && apt-get install -y --no-install-recommends openssh-server ca-certificates curl && mkdir -p /run/sshd && /usr/sbin/sshd"; fi; tail -f /dev/null'
+    ports:
+      - "2322:22"      # SSH for provisioning
+      - "8420:8420"    # Aelvyril API + dashboard (Phase 2-3)
+    volumes:
+      - /mnt/MasterDisk/aelvyril:/data
+    working_dir: /data
+    environment:
+      NODE_ENV: production
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+
+  # Self-hosted Turso (libSQL server) — canonical memory DB. API is the only writer.
+  aelvyril-sqld:
+    image: ghcr.io/tursodatabase/libsql-server:latest
+    container_name: aelvyril-sqld
+    restart: unless-stopped
+    ports:
+      - "8480:8080"    # libSQL wire protocol
+    volumes:
+      - /mnt/MasterDisk/aelvyril/sqld:/var/lib/sqld
+    environment:
+      SQLD_NODE_ID: "1"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M

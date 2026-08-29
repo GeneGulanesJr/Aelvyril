@@ -1,0 +1,17 @@
+{
+  "name": "aelvyril",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted agent memory & asset platform",
+  "license": "MIT",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  }
+}

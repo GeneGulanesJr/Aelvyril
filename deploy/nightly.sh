@@ -10,12 +10,5 @@ LOG=/data/reports/cron.log
 mkdir -p /data/reports
 echo "=== aelvyril nightly $(date -Is) ===" >> "$LOG"
 
-node src/merge.mjs --inbox /data/inbox --db /data/app/vault.db >> "$LOG" 2>&1
-
-# Pass B: only if GLM configured
-if [ -n "${GLM_API_KEY:-}" ]; then
-  node src/glm-consolidate.mjs --db /data/app/vault.db >> "$LOG" 2>&1
-fi
-
-node src/digest.mjs --db /data/app/vault.db --out /data/digests >> "$LOG" 2>&1
+node src/nightly.mjs --db /data/app/vault.db --inbox /data/inbox >> "$LOG" 2>&1
 echo "=== done $(date -Is) ===" >> "$LOG"

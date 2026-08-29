@@ -87,11 +87,24 @@ CREATE TABLE IF NOT EXISTS staging_observations (
   expires_at      TEXT,
   created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
-  deleted_at      TEXT
+  deleted_at      TEXT,
+  canonical_id    INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_staging_origin_source ON staging_observations(origin_instance, source_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_staging_origin_source ON staging_observations(origin_instance, source_id);
 CREATE INDEX IF NOT EXISTS idx_staging_project ON staging_observations(project);
+
+-- Supersession pairs as received in inbox batches (pre-promotion).
+-- (source_id, target_id, relation, origin_instance) where source_id is the
+-- superseded local row id and target_id is the newer local row id.
+CREATE TABLE IF NOT EXISTS staging_relations (
+  source_id       INTEGER NOT NULL,
+  target_id       INTEGER NOT NULL,
+  relation        TEXT    NOT NULL,
+  origin_instance TEXT    NOT NULL,
+  created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_staging_rel_origin ON staging_relations(origin_instance, source_id);
 
 -- ═══════════════════════════════════════════════════════════
 -- VAULT BOOKKEEPING

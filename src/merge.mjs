@@ -10,7 +10,7 @@
  * runMerge(vaultDb, inboxDir): ingest inbox/<instance>/*.json oldest-first,
  *   promote, write conflict report, archive processed files.
  */
-import { readdirSync, readFileSync, renameSync, mkdirSync } from 'node:fs';
+import { readdirSync, readFileSync, renameSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDistillable } from './lib/filter.mjs';
 
@@ -199,14 +199,9 @@ function collectConflicts(db, reportsDir, dateStamp) {
       }
       lines.push('');
     }
-    writeReport(file, lines.join('\n'));
+    writeFileSync(file, lines.join('\n'));
   }
   return conflicts;
-}
-
-import { writeFileSync } from 'node:fs';
-function writeReport(file, content) {
-  writeFileSync(file, content);
 }
 
 const DATE_STAMP = () => new Date().toISOString().slice(0, 10);

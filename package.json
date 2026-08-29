@@ -8,10 +8,7 @@
   "scripts": {
     "test": "vitest run"
   },
-  "dependencies": {
-    "better-sqlite3": "^11.0.0"
-  },
   "devDependencies": {
-    "vitest": "^2.0.0"
+    "vitest": "^3.2.7"
   }
 }

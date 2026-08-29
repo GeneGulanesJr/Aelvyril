@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Aelvyril nightly consolidation driver — CLI wrapper around merge/glm/digest.
 // Usage: node nightly.mjs --db /data/app/vault.db [--inbox /data/inbox] [--skip-glm]
-import { openVault } from "./src/lib/db.mjs";
-import { runMerge } from "./src/merge.mjs";
-import { consolidateConflicts, glmConfigFromEnv } from "./src/glm-consolidate.mjs";
-import { writeDigests } from "./src/digest.mjs";
+import { openVault } from "./lib/db.mjs";
+import { runMerge } from "./merge.mjs";
+import { consolidateConflicts, glmConfigFromEnv } from "./glm-consolidate.mjs";
+import { writeDigests } from "./digest.mjs";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 

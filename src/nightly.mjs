@@ -38,8 +38,8 @@ if (!glm) {
   log("pass B: skipped (no GLM config)");
 } else if (result.conflicts?.length) {
   try {
-    const r = await consolidateConflicts(db, result.conflicts, glm);
-    log(`pass B: merged=${r.merged ?? 0} contradicts=${r.contradicts ?? 0}`);
+    const r = await consolidateConflicts(db, result.conflicts, { ...glm, reportsDir });
+    log(`pass B: merged=${r.merged ?? 0} flagged=${r.flagged ?? r.contradicts ?? 0}`);
   } catch (e) {
     log(`pass B: error — ${e.message} (pass A output stands)`);
   }

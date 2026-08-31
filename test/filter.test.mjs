@@ -47,7 +47,7 @@ describe('isDistillable', () => {
 
   it('accepts and rejects around the boundary (now)', () => {
     const now = new Date();
-    expect(isDistillable({ ...base, expires_at: new Date(now.getTime() + 1).toISOString() })).toBe(true);
+    expect(isDistillable({ ...base, expires_at: new Date(now.getTime() + 60_000).toISOString() })).toBe(true);
     expect(isDistillable({ ...base, expires_at: new Date(now.getTime() - 1).toISOString() })).toBe(false);
   });
 

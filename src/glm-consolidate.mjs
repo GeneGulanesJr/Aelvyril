@@ -26,8 +26,9 @@ export function glmConfigFromEnv() {
   const baseUrl = process.env.GLM_BASE_URL;
   const apiKey = process.env.GLM_API_KEY;
   const model = process.env.GLM_MODEL;
+  const api = process.env.GLM_API; // 'anthropic' | undefined (openai-compatible)
   if (!baseUrl || !apiKey || !model) return null;
-  return { baseUrl, apiKey, model };
+  return { baseUrl, apiKey, model, api };
 }
 
 const SYSTEM_PROMPT = `You are a memory-consolidation assistant. Two agents recorded knowledge for the same topic. Decide whether the records can be merged into one coherent memory or whether they contradict each other.
@@ -51,24 +52,47 @@ async function callGlm(fetchFn, cfg, conflict) {
     'Merge into one memory or mark CONTRADICTS. Return JSON.',
   ].join('\n');
 
-  const res = await fetchFn(`${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${cfg.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: cfg.model,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userPrompt },
-      ],
-      temperature: 0.1,
-    }),
-  });
-  if (!res.ok) throw new Error(`GLM API error ${res.status}`);
-  const data = await res.json();
-  const raw = data.choices?.[0]?.message?.content ?? '';
+  const base = cfg.baseUrl.replace(/\/$/, '');
+  let res, data;
+  if (cfg.api === 'anthropic') {
+    res = await fetchFn(`${base}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': cfg.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: cfg.model,
+        max_tokens: 1024,
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: userPrompt }],
+        temperature: 0.1,
+      }),
+    });
+    if (!res.ok) throw new Error(`GLM API error ${res.status}`);
+    data = await res.json();
+    var raw = (data.content ?? []).map((b) => b.text ?? '').join('');
+  } else {
+    res = await fetchFn(`${base}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: cfg.model,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.1,
+      }),
+    });
+    if (!res.ok) throw new Error(`GLM API error ${res.status}`);
+    data = await res.json();
+    var raw = data.choices?.[0]?.message?.content ?? '';
+  }
   // tolerate code fences
   const jsonText = raw.replace(/^```(?:json)?\s*/m, '').replace(/```\s*$/m, '').trim();
   return JSON.parse(jsonText);

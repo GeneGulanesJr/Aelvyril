@@ -5,6 +5,8 @@ set -euo pipefail
 
 cd /data/app
 export NODE_ENV=production
+# Optional GLM config (pass B): GLM_BASE_URL, GLM_API_KEY, GLM_MODEL, GLM_API
+[ -f /data/setup/glm.env ] && . /data/setup/glm.env && export GLM_BASE_URL GLM_API_KEY GLM_MODEL GLM_API
 
 LOG=/data/reports/cron.log
 mkdir -p /data/reports

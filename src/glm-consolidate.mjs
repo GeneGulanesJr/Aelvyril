@@ -132,7 +132,7 @@ export async function consolidateConflicts(db, conflicts, opts = {}) {
   }
 
   const fetchFn = opts.fetch ?? globalThis.fetch;
-  const cfg = { baseUrl, apiKey, model };
+  const cfg = { baseUrl, apiKey, model, api: opts.api };
   let merged = 0;
   let flagged = 0;
 

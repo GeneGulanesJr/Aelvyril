@@ -18,7 +18,7 @@
 - Create: `pnpm-workspace.yaml`
 - Create: `package.json` (root)
 
-- [ ] **Step 1: Create `pnpm-workspace.yaml`**
+- [x] **Step 1: Create `pnpm-workspace.yaml`**
 
 ```yaml
 packages:
@@ -26,7 +26,7 @@ packages:
   - "packages/*"
 ```
 
-- [ ] **Step 2: Create root `package.json`**
+- [x] **Step 2: Create root `package.json`**
 
 ```json
 {
@@ -48,12 +48,12 @@ packages:
 }
 ```
 
-- [ ] **Step 3: Install and verify workspace resolves**
+- [x] **Step 3: Install and verify workspace resolves**
 
 Run: `corepack enable && pnpm install`
 Expected: lockfile created (`pnpm-lock.yaml`), no errors.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add pnpm-workspace.yaml package.json pnpm-lock.yaml
@@ -67,7 +67,7 @@ git commit -m "chore: pnpm workspace bootstrap"
 **Files:**
 - Create: `tsconfig.base.json`
 
-- [ ] **Step 1: Create `tsconfig.base.json`**
+- [x] **Step 1: Create `tsconfig.base.json`**
 
 ```json
 {
@@ -90,7 +90,7 @@ git commit -m "chore: pnpm workspace bootstrap"
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add tsconfig.base.json
@@ -108,7 +108,7 @@ git commit -m "chore: strict TypeScript base config"
 - Create: `packages/shared/src/index.ts`
 - Test: `packages/shared/src/scaffold.test.ts`
 
-- [ ] **Step 1: Write the failing sanity test** — `packages/shared/src/scaffold.test.ts`
+- [x] **Step 1: Write the failing sanity test** — `packages/shared/src/scaffold.test.ts`
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -121,12 +121,12 @@ describe("scaffold", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `pnpm --filter @aelvyril/shared test`
 Expected: FAIL — cannot resolve `./index.js` / package missing.
 
-- [ ] **Step 3: Create package files**
+- [x] **Step 3: Create package files**
 
 `packages/shared/package.json`:
 
@@ -175,12 +175,12 @@ export default defineConfig({ test: { environment: "node" } });
 export const SCHEMA_VERSION = "0.1.0";
 ```
 
-- [ ] **Step 4: Install and run test to verify it passes**
+- [x] **Step 4: Install and run test to verify it passes**
 
 Run: `pnpm install && pnpm --filter @aelvyril/shared test`
 Expected: PASS (1 test).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/shared pnpm-lock.yaml
@@ -196,7 +196,7 @@ git commit -m "feat(shared): package scaffold with vitest"
 - Test: `packages/shared/src/envelope.test.ts`
 - Modify: `packages/shared/src/index.ts`
 
-- [ ] **Step 1: Write the failing tests** — `packages/shared/src/envelope.test.ts`
+- [x] **Step 1: Write the failing tests** — `packages/shared/src/envelope.test.ts`
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -261,12 +261,12 @@ describe("EventEnvelope", () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `pnpm --filter @aelvyril/shared test`
 Expected: FAIL — `./envelope.js` not found.
 
-- [ ] **Step 3: Implement** — `packages/shared/src/envelope.ts`
+- [x] **Step 3: Implement** — `packages/shared/src/envelope.ts`
 
 ```ts
 import { z } from "zod";
@@ -335,18 +335,18 @@ export const EventEnvelope = z.union(
 export type EventEnvelope = z.infer<typeof EventEnvelope>;
 ```
 
-- [ ] **Step 4: Re-export** — append to `packages/shared/src/index.ts`
+- [x] **Step 4: Re-export** — append to `packages/shared/src/index.ts`
 
 ```ts
 export * from "./envelope.js";
 ```
 
-- [ ] **Step 5: Run tests to verify pass**
+- [x] **Step 5: Run tests to verify pass**
 
 Run: `pnpm --filter @aelvyril/shared test`
 Expected: PASS (6 tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/shared/src
@@ -362,7 +362,7 @@ git commit -m "feat(shared): event envelope schema (spec §6)"
 - Test: `packages/shared/src/namespace.test.ts`
 - Modify: `packages/shared/src/index.ts`
 
-- [ ] **Step 1: Write the failing tests** — `packages/shared/src/namespace.test.ts`
+- [x] **Step 1: Write the failing tests** — `packages/shared/src/namespace.test.ts`
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -389,12 +389,12 @@ describe("SHARED_NAMESPACE", () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `pnpm --filter @aelvyril/shared test`
 Expected: FAIL — `./namespace.js` not found.
 
-- [ ] **Step 3: Implement** — `packages/shared/src/namespace.ts`
+- [x] **Step 3: Implement** — `packages/shared/src/namespace.ts`
 
 ```ts
 /**
@@ -411,18 +411,18 @@ export function toUserNamespace(clerkUserId: string): string {
 }
 ```
 
-- [ ] **Step 4: Re-export** — append to `packages/shared/src/index.ts`
+- [x] **Step 4: Re-export** — append to `packages/shared/src/index.ts`
 
 ```ts
 export * from "./namespace.js";
 ```
 
-- [ ] **Step 5: Run tests to verify pass**
+- [x] **Step 5: Run tests to verify pass**
 
 Run: `pnpm --filter @aelvyril/shared test`
 Expected: PASS (10 tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/shared/src
@@ -438,7 +438,7 @@ git commit -m "feat(shared): user namespace mapping (spec §7, D7)"
 - Test: `packages/shared/src/api.test.ts`
 - Modify: `packages/shared/src/index.ts`
 
-- [ ] **Step 1: Write the failing tests** — `packages/shared/src/api.test.ts`
+- [x] **Step 1: Write the failing tests** — `packages/shared/src/api.test.ts`
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -504,12 +504,12 @@ describe("Conversation", () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `pnpm --filter @aelvyril/shared test`
 Expected: FAIL — `./api.js` not found.
 
-- [ ] **Step 3: Implement** — `packages/shared/src/api.ts`
+- [x] **Step 3: Implement** — `packages/shared/src/api.ts`
 
 ```ts
 import { z } from "zod";
@@ -554,18 +554,18 @@ export const Conversation = z.object({
 export type Conversation = z.infer<typeof Conversation>;
 ```
 
-- [ ] **Step 4: Re-export** — append to `packages/shared/src/index.ts`
+- [x] **Step 4: Re-export** — append to `packages/shared/src/index.ts`
 
 ```ts
 export * from "./api.js";
 ```
 
-- [ ] **Step 5: Run tests to verify pass**
+- [x] **Step 5: Run tests to verify pass**
 
 Run: `pnpm --filter @aelvyril/shared test`
 Expected: PASS (18 tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/shared/src
@@ -580,14 +580,14 @@ git commit -m "feat(shared): v1 API contracts (spec §6)"
 - Create: `eslint.config.js` (root)
 - Modify: `package.json` (root devDeps)
 
-- [ ] **Step 1: Add devDeps to root `package.json`**
+- [x] **Step 1: Add devDeps to root `package.json`**
 
 ```json
 "eslint": "^9.17.0",
 "typescript-eslint": "^8.18.0"
 ```
 
-- [ ] **Step 2: Create `eslint.config.js`**
+- [x] **Step 2: Create `eslint.config.js`**
 
 ```js
 import tseslint from "typescript-eslint";
@@ -607,12 +607,12 @@ export default tseslint.config(
 );
 ```
 
-- [ ] **Step 3: Install and run lint**
+- [x] **Step 3: Install and run lint**
 
 Run: `pnpm install && pnpm -r lint`
 Expected: no errors (`shared` has lint script; root package has no lint script yet — acceptable, or add `"lint": "eslint ." scripts to shared only` as defined in Task 3).
 
-- [ ] **Step 4: Fix any reported issues, then commit**
+- [x] **Step 4: Fix any reported issues, then commit**
 
 ```bash
 git add eslint.config.js package.json pnpm-lock.yaml
@@ -626,7 +626,7 @@ git commit -m "chore: eslint flat config (typescript-eslint)"
 **Files:**
 - Create: `.github/workflows/ci.yml`
 
-- [ ] **Step 1: Create `.github/workflows/ci.yml`**
+- [x] **Step 1: Create `.github/workflows/ci.yml`**
 
 ```yaml
 name: CI
@@ -654,7 +654,7 @@ jobs:
       - run: pnpm -r build
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add .github/workflows/ci.yml
@@ -665,16 +665,16 @@ git commit -m "ci: typecheck + lint + test + build on push/PR"
 
 ### Task 9: Full verification sweep
 
-- [ ] **Step 1: Run everything from repo root**
+- [x] **Step 1: Run everything from repo root**
 
 Run: `pnpm -r typecheck && pnpm -r lint && pnpm -r test && pnpm -r build`
 Expected: all green, 18 shared tests passing.
 
-- [ ] **Step 2: Push and confirm CI green**
+- [x] **Step 2: Push and confirm CI green**
 
 Run: `git push origin main`
 Expected: GitHub Actions `verify` job passes.
 
-- [ ] **Step 3: Mark Phase 0 complete**
+- [x] **Step 3: Mark Phase 0 complete**
 
 Update this plan's checkboxes; proceed to Phase 1 planning (gateway core) — which consumes the RPC protocol facts in spec §14.

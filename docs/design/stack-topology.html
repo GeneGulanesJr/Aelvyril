@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Aelvyril — Stack Topology v1</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b27; --edge:#2b3245; --txt:#e6edf3; --dim:#8b96a8;
+    --web:#4c8dff; --gw:#c678dd; --mem:#56d364; --exec:#f0883e; --ai:#e3b341; --vol:#6e7681;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);font:14px/1.5 "SF Mono",ui-monospace,Menlo,Consolas,monospace;
+       padding:36px 28px;min-height:100vh}
+  h1{font-size:16px;letter-spacing:.08em;color:var(--dim);font-weight:600;margin-bottom:4px;text-transform:uppercase}
+  .sub{color:var(--dim);font-size:12px;margin-bottom:28px}
+  .layer{display:flex;gap:24px;justify-content:center;align-items:stretch;margin:0 auto}
+  .arrow-row{display:flex;justify-content:center;gap:120px;margin:6px 0}
+  .arrow{display:flex;flex-direction:column;align-items:center;color:var(--dim);font-size:11px}
+  .arrow .line{width:2px;height:26px;background:var(--edge);position:relative}
+  .arrow .line::after{content:"";position:absolute;bottom:-1px;left:-4px;border:5px solid transparent;border-top-color:var(--edge)}
+  .arrow.dn .line::after{display:none}
+  .arrow.dn .line::before{content:"";position:absolute;top:-1px;left:-4px;border:5px solid transparent;border-bottom-color:var(--edge)}
+  .node{border:1.5px solid var(--edge);border-radius:10px;background:var(--panel);padding:14px 18px;min-width:230px}
+  .node h2{font-size:13px;font-weight:700;letter-spacing:.04em;margin-bottom:2px}
+  .node .tag{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim)}
+  .node ul{list-style:none;margin-top:8px;font-size:11.5px;color:var(--dim)}
+  .node li{padding:1px 0}
+  .node li::before{content:"· ";color:var(--dim)}
+  .web{border-color:var(--web)} .web h2{color:var(--web)}
+  .gw{border-color:var(--gw)} .gw h2{color:var(--gw)}
+  .mem{border-color:var(--mem)} .mem h2{color:var(--mem)}
+  .exec{border-color:var(--exec)} .exec h2{color:var(--exec)}
+  .ai{border-color:var(--ai)} .ai h2{color:var(--ai)}
+  .cloud{border-style:dashed;background:transparent}
+  .docker{border:1.5px dashed var(--edge);border-radius:16px;padding:22px 26px 18px;max-width:1060px;margin:0 auto}
+  .docker>.label{font-size:10px;color:var(--dim);letter-spacing:.14em;text-transform:uppercase;margin-bottom:14px;text-align:center}
+  .row3{display:flex;gap:18px;justify-content:center}
+  .row3 .node{min-width:290px;flex:1;max-width:330px}
+  .vols{margin-top:20px;border-top:1px solid var(--edge);padding-top:14px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .vol{font-size:11px;color:var(--dim);border:1px solid var(--edge);border-radius:6px;padding:4px 10px;background:#11151f}
+  .vol b{color:var(--vol);font-weight:600}
+  .legend{max-width:1060px;margin:18px auto 0;font-size:11px;color:var(--dim);display:flex;gap:22px;justify-content:center}
+  .legend span::before{content:"";display:inline-block;width:18px;height:2px;margin-right:6px;vertical-align:middle}
+  .l-int::before{background:var(--edge)}
+  .l-ext::before{background:repeating-linear-gradient(90deg,var(--edge) 0 3px,transparent 3px 6px)}
+  .note{max-width:1060px;margin:26px auto 0;font-size:11.5px;color:var(--dim);border-left:2px solid var(--ai);padding:8px 14px;background:#161b2740}
+  .note b{color:var(--ai)}
+</style>
+</head>
+<body>
+  <h1>Aelvyril — Stack Topology</h1>
+  <div class="sub">chat-first agent platform · v1 design · everything inside one Docker network</div>
+
+  <div class="layer">
+    <div class="node cloud" style="min-width:250px">
+      <h2 style="color:var(--txt)">Browser — user</h2>
+      <div class="tag">chat UI · SSE listener</div>
+    </div>
+    <div class="node cloud">
+      <h2 style="color:var(--txt)">Clerk (cloud)</h2>
+      <div class="tag">auth · JWT issuance</div>
+    </div>
+  </div>
+
+  <div class="arrow-row">
+    <div class="arrow"><div class="line"></div><span>HTTPS · Clerk JWT on every call</span></div>
+  </div>
+
+  <div class="docker">
+    <div class="label">Docker network · aelvyril-net</div>
+
+    <div class="layer">
+      <div class="node web">
+        <h2>web — Next.js + Clerk</h2>
+        <div class="tag">apps/web · the frontend</div>
+        <ul><li>chat-first UI (App Router)</li><li>ops panels = later phase</li></ul>
+      </div>
+    </div>
+
+    <div class="arrow-row">
+      <div class="arrow"><div class="line"></div><span>SSE events ↓ · POST prompts ↑ (internal)</span></div>
+    </div>
+
+    <div class="layer">
+      <div class="node gw">
+        <h2>gateway — Fastify</h2>
+        <div class="tag">apps/gateway · agent runtime host</div>
+        <ul>
+          <li>pi SDK — AgentSession per conversation</li>
+          <li>PiSubagent extension (scout/planner/reviewer/worker)</li>
+          <li>LaPis extension + LayaMCP wired as MCP tools</li>
+          <li>session registry · event bus · Clerk JWT verify</li>
+          <li>SQLite index (Drizzle) — conversations/users/events</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="arrow-row">
+      <div class="arrow dn"><div class="line"></div><span>bearer HTTP</span></div>
+      <div class="arrow dn"><div class="line"></div><span>bearer + /dev/kvm passthrough</span></div>
+      <div class="arrow dn"><div class="line"></div><span>MCP over HTTP (11 tools)</span></div>
+    </div>
+
+    <div class="row3">
+      <div class="node mem">
+        <h2>lapis — shared memory</h2>
+        <div class="tag">owns memory.db · HTTP/MCP server</div>
+        <ul><li>per-user namespace = LaPis project scope</li><li>shared scope for opt-in platform facts</li><li>HTTP/MCP API over shared memory.db (WAL)</li></ul>
+      </div>
+      <div class="node exec">
+        <h2>sandd — PiSandboxed</h2>
+        <div class="tag">smolvm microVMs · libkrun</div>
+        <ul><li>profiles: untrusted / dev / build</li><li>promote-only escape hatch</li><li>needs /dev/kvm device passthrough</li></ul>
+      </div>
+      <div class="node ai">
+        <h2>layamcp — decision engine</h2>
+        <div class="tag">Laya · 11 classify tools · ~33ms</div>
+        <ul><li>guard / route / moderate / triage…</li><li>CPU inference — no GPU needed</li><li>HF checkpoints on cached volume</li></ul>
+      </div>
+    </div>
+
+    <div class="vols">
+      <span class="vol"><b>vol</b> lapis-data (SQLite)</span>
+      <span class="vol"><b>vol</b> gateway-data (index DB)</span>
+      <span class="vol"><b>vol</b> pi-sessions</span>
+      <span class="vol"><b>vol</b> sandbox-images</span>
+      <span class="vol"><b>vol</b> hf-models</span>
+      <span class="vol"><b>bind</b> workspaces/ (repos, rw)</span>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span class="l-int">internal service call</span>
+    <span class="l-ext">outside Docker</span>
+  </div>
+
+  <div class="note"><b>Design choices baked in:</b> ① memory.db lives on a shared volume in <b>WAL mode</b> — gateway children (LaPis extension) read/write it directly; the lapis container is the HTTP/MCP API surface over the same file. ② Each conversation = its own <b>pi --mode rpc child process</b> (own cwd + env, crash isolation); all agents in a conversation share one LaPis namespace via LAPIS_PROJECT_KEY. ③ workspaces/ is a host bind mount shared by gateway (rw) and sandd (per-profile mounts) — sandbox escape stays promote-only.</div>
+</body>
+</html>

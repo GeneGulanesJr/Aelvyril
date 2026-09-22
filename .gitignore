@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Builds
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Env & secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Machine-local agent/tool dirs
+.agents/
+.bench-venv/
+.claude/
+.kilo/
+.pi/
+.venv_bench/
+.worktrees/
+
+# OS / editor
+.DS_Store
+*.log
+
+# Docker dev state
+infra/.docker-state/

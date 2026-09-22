@@ -23,7 +23,7 @@
 - Test: `apps/gateway/src/app.test.ts`
 - Modify: `.gitignore` (add `data/`)
 
-- [ ] **Step 1: Write the failing health test** — `apps/gateway/src/app.test.ts`
+- [x] **Step 1: Write the failing health test** — `apps/gateway/src/app.test.ts`
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -40,12 +40,12 @@ describe("health", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `pnpm --filter @aelvyril/gateway test`
 Expected: FAIL — package does not exist.
 
-- [ ] **Step 3: Create the package files**
+- [x] **Step 3: Create the package files**
 
 `apps/gateway/package.json`:
 
@@ -138,12 +138,12 @@ Append to `.gitignore`:
 data/
 ```
 
-- [ ] **Step 4: Install and run test to verify it passes**
+- [x] **Step 4: Install and run test to verify it passes**
 
 Run: `pnpm install && pnpm --filter @aelvyril/gateway test`
 Expected: PASS (1 test).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/gateway .gitignore pnpm-lock.yaml
@@ -160,7 +160,7 @@ git commit -m "feat(gateway): package scaffold + healthz"
 - Test: `apps/gateway/src/store.test.ts`
 - Test: `apps/gateway/src/bus.test.ts`
 
-- [ ] **Step 1: Write failing store tests** — `apps/gateway/src/store.test.ts`
+- [x] **Step 1: Write failing store tests** — `apps/gateway/src/store.test.ts`
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -217,12 +217,12 @@ describe("Store", () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `pnpm --filter @aelvyril/gateway test`
 Expected: FAIL — `./store.js` not found.
 
-- [ ] **Step 3: Implement store** — `apps/gateway/src/store.ts`
+- [x] **Step 3: Implement store** — `apps/gateway/src/store.ts`
 
 ```ts
 import Database from "better-sqlite3";
@@ -381,7 +381,7 @@ export class Store {
 }
 ```
 
-- [ ] **Step 4: Write failing bus tests** — `apps/gateway/src/bus.test.ts`
+- [x] **Step 4: Write failing bus tests** — `apps/gateway/src/bus.test.ts`
 
 ```ts
 import { describe, expect, it, vi } from "vitest";
@@ -426,7 +426,7 @@ describe("EventBus", () => {
 });
 ```
 
-- [ ] **Step 5: Implement bus** — `apps/gateway/src/bus.ts`
+- [x] **Step 5: Implement bus** — `apps/gateway/src/bus.ts`
 
 ```ts
 import type { EventEnvelope } from "@aelvyril/shared";
@@ -467,12 +467,12 @@ export class EventBus {
 }
 ```
 
-- [ ] **Step 6: Run tests to verify pass**
+- [x] **Step 6: Run tests to verify pass**
 
 Run: `pnpm --filter @aelvyril/gateway test`
 Expected: PASS (9 tests total: 1 health + 5 store + 3 bus).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/gateway/src
@@ -488,7 +488,7 @@ git commit -m "feat(gateway): SQLite store + event bus (spec §6)"
 - Create: `apps/gateway/fixtures/fake-pi.mjs`
 - Test: `apps/gateway/src/rpc.test.ts`
 
-- [ ] **Step 1: Write failing framing tests** — `apps/gateway/src/rpc.test.ts`
+- [x] **Step 1: Write failing framing tests** — `apps/gateway/src/rpc.test.ts`
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -525,12 +525,12 @@ describe("JsonlDecoder", () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `pnpm --filter @aelvyril/gateway test`
 Expected: FAIL — `./rpc.js` not found.
 
-- [ ] **Step 3: Implement rpc.ts** (decoder + client; client types minimal per spec §14)
+- [x] **Step 3: Implement rpc.ts** (decoder + client; client types minimal per spec §14)
 
 ```ts
 import { EventEmitter } from "node:events";
@@ -638,12 +638,12 @@ export class RpcClient extends EventEmitter {
 }
 ```
 
-- [ ] **Step 4: Run framing tests to verify pass**
+- [x] **Step 4: Run framing tests to verify pass**
 
 Run: `pnpm --filter @aelvyril/gateway test`
 Expected: PASS (13 tests: 9 + 4 framing).
 
-- [ ] **Step 5: Create the fake child** — `apps/gateway/fixtures/fake-pi.mjs`
+- [x] **Step 5: Create the fake child** — `apps/gateway/fixtures/fake-pi.mjs`
 
 ```js
 // Scripted `pi --mode rpc` stand-in for tests/dev (Phase 1). Speaks the
@@ -695,7 +695,7 @@ for await (const line of rl) {
 }
 ```
 
-- [ ] **Step 6: Client ↔ fake child integration test** — append to `apps/gateway/src/rpc.test.ts`
+- [x] **Step 6: Client ↔ fake child integration test** — append to `apps/gateway/src/rpc.test.ts`
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -724,12 +724,12 @@ describe("RpcClient over fake child", () => {
 
 (Note: add `import { vi } from "vitest"` to the existing vitest import at the top of the file.)
 
-- [ ] **Step 7: Run all gateway tests**
+- [x] **Step 7: Run all gateway tests**
 
 Run: `pnpm --filter @aelvyril/gateway test`
 Expected: PASS (14 tests).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add apps/gateway
@@ -744,7 +744,7 @@ git commit -m "feat(gateway): strict JSONL RPC client + scripted fake pi child"
 - Create: `apps/gateway/src/supervisor.ts`
 - Test: `apps/gateway/src/supervisor.test.ts`
 
-- [ ] **Step 1: Write failing tests** — `apps/gateway/src/supervisor.test.ts`
+- [x] **Step 1: Write failing tests** — `apps/gateway/src/supervisor.test.ts`
 
 ```ts
 import { afterEach, describe, expect, it } from "vitest";
@@ -826,12 +826,12 @@ describe("Supervisor", () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `pnpm --filter @aelvyril/gateway test`
 Expected: FAIL — `./supervisor.js` not found.
 
-- [ ] **Step 3: Implement supervisor** — `apps/gateway/src/supervisor.ts`
+- [x] **Step 3: Implement supervisor** — `apps/gateway/src/supervisor.ts`
 
 ```ts
 import { spawn, type ChildProcess } from "node:child_process";
@@ -992,12 +992,12 @@ export class Supervisor {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify pass**
+- [x] **Step 4: Run tests to verify pass**
 
 Run: `pnpm --filter @aelvyril/gateway test`
 Expected: PASS (17 tests: 14 + 3 supervisor).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/gateway/src
@@ -1013,7 +1013,7 @@ git commit -m "feat(gateway): session supervisor with envelope mapping (spec D6,
 - Test: `apps/gateway/src/routes.test.ts`
 - Test: `apps/gateway/src/sse.test.ts`
 
-- [ ] **Step 1: Write failing route tests** — `apps/gateway/src/routes.test.ts`
+- [x] **Step 1: Write failing route tests** — `apps/gateway/src/routes.test.ts`
 
 ```ts
 import { afterEach, describe, expect, it } from "vitest";
@@ -1105,12 +1105,12 @@ describe("v1 routes", () => {
 
 (Note: add `vi` to the vitest import.)
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `pnpm --filter @aelvyril/gateway test`
 Expected: FAIL — routes not implemented (404s).
 
-- [ ] **Step 3: Compose the full app** — replace `apps/gateway/src/app.ts`
+- [x] **Step 3: Compose the full app** — replace `apps/gateway/src/app.ts`
 
 ```ts
 import Fastify, { type FastifyInstance } from "fastify";
@@ -1216,12 +1216,12 @@ export function buildApp(opts: AppOptions): App {
 }
 ```
 
-- [ ] **Step 4: Run route tests to verify pass**
+- [x] **Step 4: Run route tests to verify pass**
 
 Run: `pnpm --filter @aelvyril/gateway test`
 Expected: PASS (21 tests: 17 + 4 route).
 
-- [ ] **Step 5: Write the SSE integration test** — `apps/gateway/src/sse.test.ts`
+- [x] **Step 5: Write the SSE integration test** — `apps/gateway/src/sse.test.ts`
 
 ```ts
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -1334,12 +1334,12 @@ describe("SSE end-to-end", () => {
 });
 ```
 
-- [ ] **Step 6: Run the full gateway suite**
+- [x] **Step 6: Run the full gateway suite**
 
 Run: `pnpm --filter @aelvyril/gateway test`
 Expected: PASS (23 tests: 21 + 2 SSE).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/gateway/src
@@ -1354,7 +1354,7 @@ git commit -m "feat(gateway): v1 routes + SSE with Last-Event-ID replay (spec §
 - Modify: `apps/gateway/src/index.ts` (graceful shutdown, fake-child dev switch)
 - Create: `apps/gateway/README.md`
 
-- [ ] **Step 1: Final `apps/gateway/src/index.ts`**
+- [x] **Step 1: Final `apps/gateway/src/index.ts`**
 
 ```ts
 import { fileURLToPath } from "node:url";
@@ -1381,7 +1381,7 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
 }
 ```
 
-- [ ] **Step 2: Create `apps/gateway/README.md`**
+- [x] **Step 2: Create `apps/gateway/README.md`**
 
 ```md
 # @aelvyril/gateway
@@ -1410,12 +1410,12 @@ Owns: conversation records, per-conversation RPC session hosts, the event log
 | `GATEWAY_IDLE_MS` | `300000` | idle session reap timeout |
 ```
 
-- [ ] **Step 3: Full verification from repo root**
+- [x] **Step 3: Full verification from repo root**
 
 Run: `pnpm -r typecheck && pnpm -r lint && pnpm -r test`
 Expected: all green — 17 shared tests + 23 gateway tests = 40 total.
 
-- [ ] **Step 4: Smoke the real server end-to-end (fake child)**
+- [x] **Step 4: Smoke the real server end-to-end (fake child)**
 
 ```bash
 GATEWAY_PORT=8791 PI_FAKE=1 GATEWAY_DB=$(mktemp -d)/gw.db pnpm --filter @aelvyril/gateway start &
@@ -1426,7 +1426,7 @@ kill %1
 ```
 Expected: `{"ok":true}` and a conversation JSON.
 
-- [ ] **Step 5: Commit + push**
+- [x] **Step 5: Commit + push**
 
 ```bash
 git add apps/gateway

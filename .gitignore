@@ -29,3 +29,6 @@ out/
 
 # Docker dev state
 infra/.docker-state/
+
+# Gateway dev database
+data/

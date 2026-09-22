@@ -65,7 +65,7 @@ Expected: FAIL — package does not exist.
   },
   "dependencies": {
     "@aelvyril/shared": "workspace:*",
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "^13.0.3",
     "fastify": "^5.2.0"
   },
   "devDependencies": {

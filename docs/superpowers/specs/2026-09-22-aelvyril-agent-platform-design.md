@@ -97,7 +97,7 @@ kinds: text_delta · tool_call · tool_result · subagent_spawn
 
 - Appended to gateway SQLite event log **before** SSE push; reconnect replays from `Last-Event-ID`.
 - Subagent activity appears as `subagent_spawn`/`tool_call` in v1; deep subagent-internal streams are a later extension of the same envelope, not a protocol change.
-- Sandbox flow: tool call → gateway → `sandd` bearer HTTP → microVM → promote-only results back as `tool_result` + `sandbox_exec`. Laya verdicts surface as `laya_verdict` events.
+- Sandbox flow: tool call → gateway → `sandd` bearer HTTP → microVM → promote-only results back as `tool_result` + `sandbox_exec`. Laya verdicts surface as `laya_verdict` events. CPU inference latency: budget 200–500ms per call (the ~33ms in LayaMCP docs is a GPU figure).
 
 ## 7. LaPis Integration & Namespaces
 
@@ -106,7 +106,7 @@ kinds: text_delta · tool_call · tool_result · subagent_spawn
 Consequences (why D6/D7 exist):
 - In-process multi-session in the gateway would share/trample `process.cwd()` → rejected.
 - Multi-user on the same repo would collide on `basename(cwd)` → namespace must be injectable.
-- **Upstream LaPis change (D7):** `projectFromCwd()` returns `process.env.LAPIS_PROJECT_KEY || basename(cwd)`. ~3 lines, backward compatible (host CLI unaffected). Gateway injects per child.
+- **Upstream LaPis change (D7):** `LAPIS_PROJECT_KEY` env override checked at the top of **two** functions: `resolveProjectKey()` (`src/hooks-engine/project.js:135` — must preempt repo-name matching, which returns `repo.name` first) and `detectProject()` (`extensions/memory-layer/host/project-detector.ts:95` — the Pi extension never calls `projectFromCwd`). ~6 lines across 2 files, no schema impact, backward compatible (host CLI unaffected). Gateway injects per child.
 - `lapis` container runs the HTTP/MCP server over the same `memory.db` volume (WAL). It is the API for a future memory-browser panel and external MCP clients — not a required dependency of the chat path.
 
 ## 8. Auth & Secrets
@@ -123,8 +123,8 @@ Consequences (why D6/D7 exist):
 | `web` | Next.js standalone, Node 22 slim, non-root | only published port |
 | `gateway` | Node 22 + pi CLI + baked `~/.pi/agent` | workspaces bind mount, sessions volume, supervisor |
 | `lapis` | built from `../LaPis` | mounts lapis-data volume (same volume gateway mounts) |
-| `sandd` | built from `../PiSandboxed` | `/dev/kvm` device, sandbox-images volume, port 7391 internal |
-| `layamcp` | Python slim + `pip install ../LayaMCP` | hf-models cache volume, ~2GB RAM limit, CPU |
+| `sandd` | built from `../PiSandboxed` | `/dev/kvm` device, sandbox-images volume, port 7391; auth = pre-seeded token **file** (no env var) shared ro into gateway; bind host hardcoded loopback — compose uses `network_mode: host`, or upstream adds `SANDD_HOST` (Phase 4 decision) |
+| `layamcp` | Python slim + `pip install ../LayaMCP` | ⚠️ requires upstream patch: current `mcp.server.fastapi` import crashes on any released `mcp` SDK — mount MCP transport on plain FastAPI, pin `mcp<2`, add `/health`; CPU-only torch index; HF-models cache volume; 4GB+ RAM; TCP healthcheck (port-open ≈ models-resident) |
 
 Healthchecks + `depends_on: service_healthy` everywhere; `restart: unless-stopped`; dev profile bind-mounts `apps/*` for hot reload.
 
@@ -154,6 +154,8 @@ Each phase = one implementation plan cycle.
 4. **The stack** — compose for lapis/layamcp/sandd, `LAPIS_PROJECT_KEY` upstream change, namespace wiring, sandbox flow
 5. **Hardening** — rate limits, caps, banners, smoke script, ops docs
 
+Pipeline note: Phase N+1 is planned while Phase N executes (subagent-driven); each plan incorporates findings from the phase before it.
+
 ## 13. Glossary
 
 | Term | Meaning |
@@ -166,13 +168,17 @@ Each phase = one implementation plan cycle.
 | **Envelope** | Normalized event `{seq, conversationId, ts, kind, payload}` — the only browser-facing shape |
 | **Shared scope** | Opt-in cross-user platform facts in LaPis |
 
-## 14. Open Items (verify during implementation)
+## 14. Research Findings (resolved 2026-09-22 — replaces open items)
 
-1. sandd: does it accept a static token via env, or only the bootstrap file? (affects secret wiring)
-2. LaPis extension: confirm no other process-global state breaks under child-process model (expected fine — that's why children were chosen)
-3. Pi RPC client details: exact event types for images/steer/followUp — follow `docs/rpc.md` and reference `rpc-client.ts`
-4. layamcp: confirm auth posture (token support) or rely on network isolation
-5. PiSubagent: confirm `subagent` events are visible over RPC as tool events (v1 assumption)
+All five open items were verified against source by parallel scouts:
+
+1. **sandd auth:** file token ONLY (`~/.pisandboxed/token`, `0600`, existing file wins → pre-seedable); no env var. Bind host hardcoded `127.0.0.1` (`src/server/main.ts:59`), no `SANDD_HOST`. `/healthz` auth-exempt. `POST /sandboxes` `project` paths are host-resolved verbatim → mounts must be valid inside sandd's own mount namespace.
+2. **LaPis namespace patch (2 sites):** repo-name matching preempts `projectFromCwd()`; the Pi extension uses `detectProject()` instead. Patch = `LAPIS_PROJECT_KEY` (lowercased) at top of both functions. No schema impact; `LAPIS_HOME` read at module load (safe per child); zero `process.chdir` in the codebase.
+3. **pi RPC:** 21 event types / 33 commands; strict JSONL, LF-only framing — **do not use Node `readline`** (splits U+2028/U+2029); no ready handshake; `prompt` while streaming requires `streamingBehavior`; **default provider is google — always pass `--provider`/`--model`**; `extension_ui_request` dialogs block until answered (headless must avoid PiSubagent's project-agents confirmation). Reference: `dist/modes/rpc/rpc-types.d.ts` (no `rpc-client.ts` shipped).
+4. **layamcp:** NO auth (rely on network isolation); env = `LAYAMCP_HOST/PORT/PRELOAD_MODELS/LOG_LEVEL` only; models load at module import (port-open ≈ ready → TCP probe); ⚠️ **server crashes at import today** (`mcp.server.fastapi` absent from released SDKs) — Phase 4 owns the upstream fix + `/health`; CPU latency 193–464ms.
+5. **PiSubagent:** spawns child `pi --mode json -p --no-session` processes (pi must be on PATH in the gateway image); no custom events — gateway sees subagent activity as ordinary `tool_execution_*` events with 250ms-throttled progress partials → mapped to `subagent_spawn`; keep `src/` ↔ `agents/` adjacency when baking.
+
+Remaining unknowns: none blocking Phases 0–2. Phase 4 owns the two upstream patches (LayaMCP server fix; optional `SANDD_HOST`).
 
 ## 15. Prior Art
 

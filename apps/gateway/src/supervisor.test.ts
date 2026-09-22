@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { EventBus } from "./bus.js";
@@ -62,13 +62,19 @@ describe("Supervisor", () => {
     const { store, supervisor } = makeSupervisor();
     s = supervisor;
     const conv = store.createConversation({});
-    await supervisor.prompt(conv.id, "hi"); // session up, settled, idle
+    await supervisor.prompt(conv.id, "hi"); // accepted; turn settles async
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id)?.state).toBe("idle");
+    });
     supervisor.killChild(conv.id); // simulate crash
-    await new Promise((r) => setTimeout(r, 50));
-    expect(store.getConversation(conv.id)?.state).toBe("degraded");
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id)?.state).toBe("degraded");
+    });
     const ok = await supervisor.prompt(conv.id, "again"); // respawn
     expect(ok).toBe(true);
-    expect(store.getConversation(conv.id)?.state).toBe("idle");
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id)?.state).toBe("idle");
+    });
   });
 
   it("replays nothing for a fresh conversation", () => {

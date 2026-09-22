@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import type { EventEnvelope } from "@aelvyril/shared";
 import { RpcClient, type RpcEvent } from "./rpc.js";
 import type { EventBus } from "./bus.js";
@@ -55,10 +55,9 @@ export class Supervisor {
   }
 
   /**
-   * Resolves once the child acknowledges the command AND the turn settles
-   * (agent_settled) or the child exits — so callers observe a settled state
-   * on return (crash mid-turn resolves via exit, never hangs). Envelopes are
-   * published live during the turn regardless.
+   * Resolves as soon as the child ACCEPTS the prompt — 202 semantics per
+   * spec §6 (clients stream the turn via SSE; a real pi turn can run for
+   * minutes and must never block the HTTP call).
    */
   async prompt(
     conversationId: string,
@@ -69,26 +68,9 @@ export class Supervisor {
     this.opts.store.setConversationState(conversationId, "streaming");
     this.publish(conversationId, { kind: "session_state", payload: { state: "streaming" } });
     handle.lastActivity = Date.now();
-    // Attach the settle listener BEFORE sending so a fast turn can't slip by.
-    const settled = new Promise<void>((resolve) => {
-      const onEvent = (ev: RpcEvent): void => {
-        if (ev.type === "agent_settled") {
-          handle.rpc.off("event", onEvent);
-          handle.rpc.off("exit", onExit);
-          resolve();
-        }
-      };
-      const onExit = (): void => {
-        handle.rpc.off("event", onEvent);
-        resolve();
-      };
-      handle.rpc.on("event", onEvent);
-      handle.rpc.on("exit", onExit);
-    });
     const command: Record<string, unknown> = { type: "prompt", message };
     if (streamingBehavior) command.streamingBehavior = streamingBehavior;
     const res = await handle.rpc.send(command);
-    await settled;
     return res.success;
   }
 

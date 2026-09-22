@@ -56,9 +56,15 @@ const envelopeShape = z.object({
   kind: EnvelopeKind,
 });
 
-export const EventEnvelope = z.union(
-  EnvelopeKind.options.map((kind) =>
-    envelopeShape.extend({ kind: z.literal(kind), payload: payloadSchemas[kind] }),
-  ),
-);
+export const EventEnvelope = z.discriminatedUnion("kind", [
+  envelopeShape.extend({ kind: z.literal("text_delta"), payload: payloadSchemas.text_delta }),
+  envelopeShape.extend({ kind: z.literal("tool_call"), payload: payloadSchemas.tool_call }),
+  envelopeShape.extend({ kind: z.literal("tool_result"), payload: payloadSchemas.tool_result }),
+  envelopeShape.extend({ kind: z.literal("subagent_spawn"), payload: payloadSchemas.subagent_spawn }),
+  envelopeShape.extend({ kind: z.literal("sandbox_exec"), payload: payloadSchemas.sandbox_exec }),
+  envelopeShape.extend({ kind: z.literal("sandbox_promote"), payload: payloadSchemas.sandbox_promote }),
+  envelopeShape.extend({ kind: z.literal("laya_verdict"), payload: payloadSchemas.laya_verdict }),
+  envelopeShape.extend({ kind: z.literal("session_state"), payload: payloadSchemas.session_state }),
+  envelopeShape.extend({ kind: z.literal("error"), payload: payloadSchemas.error }),
+]);
 export type EventEnvelope = z.infer<typeof EventEnvelope>;

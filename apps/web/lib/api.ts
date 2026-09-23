@@ -1,4 +1,10 @@
-import type { Conversation, CreateConversationBody, PromptBody, EventEnvelope } from "@aelvyril/shared";
+import type {
+  Conversation,
+  CreateConversationBody,
+  PromptBody,
+  RenameConversationBody,
+  EventEnvelope,
+} from "@aelvyril/shared";
 import { ROUTES } from "@aelvyril/shared";
 import { SseParser } from "./sse.js";
 
@@ -52,6 +58,23 @@ export class GatewayClient {
       await this.authed({ method: "POST" }),
     );
     if (!res.ok) throw new Error(`abort failed: ${res.status}`);
+  }
+
+  async renameConversation(id: string, body: RenameConversationBody): Promise<Conversation> {
+    const res = await fetch(
+      `${this.baseUrl}${ROUTES.conversationRename(id)}`,
+      await this.authed({ method: "PATCH", body: JSON.stringify(body) }),
+    );
+    if (!res.ok) throw new Error(`rename failed: ${res.status}`);
+    return (await res.json()) as Conversation;
+  }
+
+  async deleteConversation(id: string): Promise<void> {
+    const res = await fetch(
+      `${this.baseUrl}${ROUTES.conversationRename(id)}`,
+      await this.authed({ method: "DELETE" }),
+    );
+    if (!res.ok) throw new Error(`delete failed: ${res.status}`);
   }
 
   /**

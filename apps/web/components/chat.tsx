@@ -4,6 +4,7 @@ import { UserButton, useAuth, useUser } from "@clerk/nextjs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Conversation, EventEnvelope } from "@aelvyril/shared";
 import { GatewayClient } from "../lib/api";
+import { filterConversations } from "../lib/filter-conversations";
 
 interface UiMessage {
   role: "user" | "assistant" | "tool" | "system";
@@ -22,6 +23,10 @@ export function Chat() {
   const [error, setError] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [query, setQuery] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const closeStream = useRef<(() => void) | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -130,6 +135,66 @@ export function Chat() {
     }
   }, [client, activeId]);
 
+  const filteredConversations = useMemo(
+    () => filterConversations(conversations, query),
+    [conversations, query],
+  );
+
+  const startRename = useCallback((c: Conversation) => {
+    setEditingId(c.id);
+    setEditingTitle(c.title ?? "");
+  }, []);
+
+  const cancelRename = useCallback(() => {
+    setEditingId(null);
+    setEditingTitle("");
+  }, []);
+
+  const commitRename = useCallback(async (id: string) => {
+    if (!client) return;
+    const next = editingTitle.trim();
+    if (!next) {
+      cancelRename();
+      return;
+    }
+    try {
+      const updated = await client.renameConversation(id, { title: next });
+      setConversations((prev) => prev.map((c) => (c.id === id ? updated : c)));
+      cancelRename();
+    } catch (err) {
+      setError(String(err));
+      cancelRename();
+    }
+  }, [client, editingTitle, cancelRename]);
+
+  const askDelete = useCallback((id: string) => setPendingDeleteId(id), []);
+  const cancelDelete = useCallback(() => setPendingDeleteId(null), []);
+
+  const executeDelete = useCallback(async (id: string) => {
+    if (!client) return;
+    try {
+      await client.deleteConversation(id);
+      setConversations((prev) => prev.filter((c) => c.id !== id));
+      if (activeId === id) {
+        closeStream.current?.();
+        setActiveId(null);
+        setMessages([]);
+      }
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setPendingDeleteId(null);
+    }
+  }, [client, activeId]);
+
+  const createNewConversation = useCallback(() => {
+    closeStream.current?.();
+    setActiveId(null);
+    setMessages([]);
+    setError(null);
+    setWaiting(false);
+  }, []);
+
   const statusLabel = useMemo(
     () => ({ idle: "idle", streaming: "working…", degraded: "degraded — will recover on next message" })[status],
     [status],
@@ -140,18 +205,118 @@ export function Chat() {
       <header className="flex items-center justify-between pb-3">
         <h1 className="text-sm tracking-widest text-[#8b96a8]">AELVYRIL</h1>
         <div className="flex items-center gap-3 text-xs text-[#8b96a8]">
-          <select
-            className="rounded border border-[#2b3245] bg-[#161b27] px-2 py-1"
-            value={activeId ?? ""}
-            onChange={(e) => e.target.value && openConversation(e.target.value)}
-          >
-            <option value="">new conversation</option>
-            {conversations.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.title ?? c.id.slice(0, 12)}
-              </option>
-            ))}
-          </select>
+          <details className="relative">
+            <summary className="cursor-pointer list-none rounded border border-[#2b3245] bg-[#161b27] px-2 py-1">
+              {conversations.find((c) => c.id === activeId)?.title ?? "new conversation"}
+            </summary>
+            <div className="absolute right-0 top-full z-10 mt-1 w-80 rounded border border-[#2b3245] bg-[#0d1117] p-2 shadow-lg">
+              <button
+                className="mb-2 w-full rounded bg-[#1f6feb] px-2 py-1 text-left text-sm"
+                onClick={(e) => {
+                  e.preventDefault();
+                  createNewConversation();
+                  (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute("open");
+                }}
+                type="button"
+              >
+                + new conversation
+              </button>
+              <input
+                aria-label="search conversations"
+                className="mb-2 w-full rounded border border-[#2b3245] bg-[#161b27] px-2 py-1 text-sm outline-none focus:border-[#1f6feb]"
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="search…"
+                type="text"
+                value={query}
+              />
+              <ul className="max-h-60 overflow-y-auto">
+                {filteredConversations.length === 0 && (
+                  <li className="px-2 py-1 text-center text-[#8b96a8]">no matches</li>
+                )}
+                {filteredConversations.map((c) => (
+                  <li
+                    className="flex items-center justify-between rounded px-1 py-1 hover:bg-[#21262d]"
+                    key={c.id}
+                  >
+                    {editingId === c.id ? (
+                      <input
+                        autoFocus
+                        className="flex-1 rounded border border-[#2b3245] bg-[#161b27] px-1 py-0.5 text-sm outline-none focus:border-[#1f6feb]"
+                        onBlur={() => void commitRename(c.id)}
+                        onChange={(e) => setEditingTitle(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void commitRename(c.id);
+                          if (e.key === "Escape") cancelRename();
+                        }}
+                        type="text"
+                        value={editingTitle}
+                      />
+                    ) : pendingDeleteId === c.id ? (
+                      <>
+                        <span className="flex-1 text-[#f85149]">delete this conversation?</span>
+                        <button
+                          className="ml-1 rounded border border-[#f85149]/40 bg-[#f85149]/10 px-1 text-xs text-[#f85149]"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            void executeDelete(c.id);
+                          }}
+                          type="button"
+                        >
+                          yes
+                        </button>
+                        <button
+                          className="ml-1 rounded border border-[#2b3245] px-1 text-xs"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            cancelDelete();
+                          }}
+                          type="button"
+                        >
+                          no
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          className={`flex-1 truncate text-left ${c.id === activeId ? "text-[#1f6feb]" : ""}`}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            openConversation(c.id);
+                            (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute("open");
+                          }}
+                          type="button"
+                        >
+                          {c.title ?? c.id.slice(0, 12)}
+                        </button>
+                        <button
+                          aria-label={`rename ${c.title ?? c.id}`}
+                          className="ml-1 px-1 text-[#8b96a8] hover:text-[#e6edf3]"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            startRename(c);
+                          }}
+                          type="button"
+                        >
+                          ✎
+                        </button>
+                        <button
+                          aria-label={`delete ${c.title ?? c.id}`}
+                          className="ml-1 px-1 text-[#8b96a8] hover:text-[#f85149]"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            askDelete(c.id);
+                          }}
+                          type="button"
+                        >
+                          ×
+                        </button>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </details>
           <span data-testid="status">{statusLabel}</span>
           <span>hi, {user?.firstName ?? userId}</span>
           <UserButton />

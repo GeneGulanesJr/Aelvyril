@@ -7,6 +7,7 @@ export const ROUTES = {
   conversationEvents: (id: string) => `/v1/conversations/${id}/events`,
   conversationPrompt: (id: string) => `/v1/conversations/${id}/prompt`,
   conversationAbort: (id: string) => `/v1/conversations/${id}/abort`,
+  conversationRename: (id: string) => `/v1/conversations/${id}`,
 } as const;
 
 export const CreateConversationBody = z.object({
@@ -15,6 +16,11 @@ export const CreateConversationBody = z.object({
   workspace: z.string().min(1).optional(),
 });
 export type CreateConversationBody = z.infer<typeof CreateConversationBody>;
+
+export const RenameConversationBody = z.object({
+  title: z.string().min(1).max(200),
+});
+export type RenameConversationBody = z.infer<typeof RenameConversationBody>;
 
 export const PromptBody = z.object({
   message: z.string().min(1).max(1_000_000),

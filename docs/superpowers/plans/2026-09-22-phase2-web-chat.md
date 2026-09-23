@@ -20,8 +20,23 @@
 > - Port 3000 collision on dev host: web binds to 3001 (`next dev -p 3001`); `GATEWAY_ALLOWED_ORIGIN` mirrors. Production containers are unaffected.
 > - Two-process smoke verified end-to-end: gateway `/healthz` 200, web `/` 200, web `/sign-in` 200, CORS preflight from 3001 returns 204 with correct ACAO.
 >
-> **Open (Phase 3 territory):**
-> - Workspace allowlist — spec §10 says only curated repos mountable; gateway currently accepts any `workspace` string.
+> **All subsequent phases closed (2026-09-23 → 2026-09-24):**
+>
+> Phase 3 (`7c4fd5a`, `acba7df`, `452add1`, `a576d73`) — real pi + workspace allowlist + session resume + conversation list UX + PATCH/DELETE routes + React component tests. ADR 0002 commits the LAPIS_PROJECT_KEY contract.
+>
+> Phase 4 (`d80b3f2` + sibling commits) — full Docker stack: `infra/compose.yaml` + 5 Dockerfiles + `infra/smoke.sh`. Two upstream patches: LaPis @ `c49aeb3` (LAPIS_PROJECT_KEY) + LayaMCP @ `e08ced4` (FastAPI/SSE). ADRs 0003, 0004 commit the web/gateway split + shared-SQLite-WAL topology.
+>
+> Phase 5 hardening (`b52be1e`, `c7c5783`, `ce4ece2`) — rate limit (token bucket 20/min/user) + concurrent-conversation cap (3/user) + degraded banner UI + workspace allowlist (`GATEWAY_WORKSPACE_ALLOWLIST`, default-deny) + ops runbooks (`docs/ops/{gateway,lapis,sandd,layamcp}.md`, `secrets.md`) + Supervisor teardown fail-soft fix + Playwright E2E scaffold + Prometheus `/metrics` + Caddy TLS termination + secret rotation cadence.
+>
+> Polish (`021fdd5`, `79245b6`, `ec1d59a`, `82485d7`, `87e3316`, `0a6c9e9`, `ba66ae7`) — Fastify pino structured JSON logs + async graceful shutdown (5s child-exit timeout) + request IDs (`X-Request-Id` echo) + enhanced `/healthz` with backing-service TCP probes + response compression (gzip + deflate, SSE excluded) + configurable SSE heartbeat (`SSE_HEARTBEAT_MS`) + 3 ADRs for load-bearing decisions.
+>
+> **Test totals at close:** 68 gateway + 18 web + 18 shared + 1 Playwright = 105 green. Typecheck clean.
+>
+> **Optional polish (not blocking v1):**
+> - Clerk Test Helper magic-link setup for full sign-in E2E — requires Clerk dashboard test mode (out of repo scope).
+> - OpenTelemetry tracing across web + gateway + pi child (correlate traces through the SSE stream).
+>
+> See root README.md for the current full feature inventory + ops runbooks.
 > - Session resume from the pi session file (spec §6) — child crash today only marks `degraded`, no respawn from history.
 > - Conversation list UX (rename, delete, search) — currently a `<select>` dropdown.
 > - Playwright E2E (spec §11) — only SSE parser has web tests today.

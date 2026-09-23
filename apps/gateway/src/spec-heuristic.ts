@@ -1,4 +1,4 @@
-type SpecMode = "auto" | "force" | "off";
+export type SpecMode = "auto" | "force" | "off";
 
 // FEATURE_WORDS diverges from plan literal list — extended with UI/auth/multi-tenant
 // domain nouns (`dashboard`, `access`, `login`, `logout`, `email`, `verification`,

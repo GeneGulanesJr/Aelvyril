@@ -11,6 +11,27 @@
 name: aelvyril
 
 services:
+  caddy:
+    # Spec §11: TLS termination. Auto-provisions Let's Encrypt certs.
+    # Only the caddy service publishes public ports (80/443); web stays
+    # internal so browsers can only reach it via TLS through this proxy.
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    environment:
+      AELVYRIL_DOMAIN: ${AELVYRIL_DOMAIN:-localhost}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    profiles: [prod]
+
   web:
     build:
       context: ..
@@ -158,3 +179,5 @@ volumes:
     # Pre-seeded by operator: `docker run --rm -v sandd-token:/out alpine \
     #   sh -c "echo TOKEN > /out/token && chmod 0600 /out/token"`
     external: false
+  caddy-data:
+  caddy-config:

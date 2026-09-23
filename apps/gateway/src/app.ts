@@ -17,6 +17,7 @@ import { Supervisor } from "./supervisor.js";
 import type { TokenVerifier } from "./auth.js";
 import { createWorkspaceAllowlist, type WorkspaceAllowlist } from "./workspace-allowlist.js";
 import { createRateLimiter, type RateLimiter } from "./rate-limit.js";
+import { createMetrics, type Metrics } from "./metrics.js";
 
 export interface AppOptions {
   dbPath: string;
@@ -31,6 +32,8 @@ export interface AppOptions {
   rateLimiter?: RateLimiter;
   /** Max total conversations per user (spec §10). Default 3. */
   maxConversationsPerUser?: number;
+  /** Optional metrics override for tests. Defaults to a fresh in-memory registry. */
+  metrics?: Metrics;
 }
 
 export type App = FastifyInstance;
@@ -51,6 +54,7 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     refillPerSecond: 20 / 60,
   });
   const maxConversationsPerUser = opts.maxConversationsPerUser ?? 3;
+  const metrics = opts.metrics ?? createMetrics();
   const supervisor = new Supervisor({
     bus,
     store,
@@ -60,6 +64,8 @@ export async function buildApp(opts: AppOptions): Promise<App> {
         cwd,
       }),
     idleMs: opts.idleMs ?? 300_000,
+    onSessionHostSpawn: () => metrics.activeSessionHosts.inc(),
+    onSessionHostExit: () => metrics.activeSessionHosts.dec(),
   });
 
   const unauthorized = (reply: FastifyReply) => reply.code(401).send({ error: "unauthorized" });
@@ -77,6 +83,18 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     credentials: true,
   });
 
+  // Spec §11: request-level metrics. onResponse fires after the route
+  // handler has set reply.statusCode, so we capture the final response code.
+  app.addHook("onResponse", async (req, reply) => {
+    const route = req.routeOptions?.url ?? req.url;
+    const labels = { method: req.method, route, status: String(reply.statusCode) };
+    metrics.httpRequestsTotal.inc(labels);
+    metrics.httpRequestDurationMs.observe(
+      reply.elapsedTime ?? Date.now() - (req as { startTime?: number }).startTime!,
+      labels,
+    );
+  });
+
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof Error && err.name === "ZodError") {
       return reply.code(400).send({ error: "bad_request" });
@@ -86,17 +104,28 @@ export async function buildApp(opts: AppOptions): Promise<App> {
 
   app.get("/healthz", async () => ({ ok: true }));
 
+  // Prometheus text format. Unauthenticated by design (Prometheus scrapes
+  // internally; an external scraper should go through the reverse proxy
+  // which gates /metrics on its own network policy).
+  app.get("/metrics", async (_req, reply) => {
+    reply.header("content-type", "text/plain; version=0.0.4");
+    return metrics.render();
+  });
+
   app.post("/v1/conversations", async (req, reply) => {
     const userId = await user(req, reply);
     if (!userId) return;
     const namespace = toUserNamespace(userId);
+    metrics.conversationCreationsTotal.inc();
     // Spec §10: per-user concurrent-conversation cap. Delete old ones to free space.
     if (store.countConversations(namespace) >= maxConversationsPerUser) {
+      metrics.conversationLimitReachedTotal.inc();
       return reply.code(503).send({ error: "conversation_limit_reached", limit: maxConversationsPerUser });
     }
     const body = CreateConversationBody.parse(req.body ?? {});
     // Spec §10: reject workspaces not on the allowlist (default-deny).
     if (body.workspace !== undefined && !workspaceAllowlist.isAllowed(body.workspace)) {
+      metrics.workspaceRejectionsTotal.inc();
       return reply.code(400).send({ error: "workspace_not_allowed" });
     }
     const conv = store.createConversation({ ...body, namespace });
@@ -148,6 +177,7 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     // Spec §10: per-user rate limit. 429 with a Retry-After header.
     const remaining = rateLimiter.consume(userId);
     if (remaining < 0) {
+      metrics.rateLimitedTotal.inc();
       return reply
         .code(429)
         .header("retry-after", "60")
@@ -166,7 +196,11 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       { LAPIS_PROJECT_KEY: namespace },
       conv.workspace ?? undefined,
     );
-    if (!ok) return reply.code(502).send({ error: "agent_rejected" });
+    if (!ok) {
+      metrics.promptRejections.inc();
+      return reply.code(502).send({ error: "agent_rejected" });
+    }
+    metrics.promptRequestsTotal.inc();
     // Auto-title from the first prompt — the picker shows words, not uuids.
     if (conv.title === null) store.renameConversation(id, namespace, body.message.slice(0, 80));
     // Persist the user's prompt as an envelope so SSE replay reconstructs the

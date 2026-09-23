@@ -14,6 +14,9 @@ export interface SupervisorOptions {
     cwd?: string,
   ) => ChildProcess;
   idleMs: number;
+  /** Metrics hooks (spec §11 observability). Both optional. */
+  onSessionHostSpawn?: () => void;
+  onSessionHostExit?: () => void;
 }
 
 interface Handle {
@@ -57,6 +60,7 @@ export class Supervisor {
     rpc.on("exit", () => {
       if (handle.exiting) return;
       this.handles.delete(conversationId);
+      this.opts.onSessionHostExit?.();
       // Best-effort: child may emit exit AFTER disposeAll closes the store
       // (test teardown race, or a real SIGTERM during shutdown). Silently
       // drop the event rather than crash the gateway — spec §10
@@ -69,6 +73,7 @@ export class Supervisor {
       }
     });
     this.handles.set(conversationId, handle);
+    this.opts.onSessionHostSpawn?.();
     return handle;
   }
 

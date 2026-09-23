@@ -111,3 +111,56 @@ Single-process only. To scale horizontally:
 3. `Supervisor` already supports multiple processes (child spawn is
    independent), but session-host cwd state needs to be persisted in
    `Store` (Phase 3 already does this — `getConversationById(id).workspace`).
+
+## Observability
+
+### `/metrics` (Prometheus text format)
+
+Unauthenticated. Returns counters + a histogram. Scrape from your
+Prometheus or OTel collector.
+
+```sh
+curl -s http://127.0.0.1:8787/metrics
+```
+
+Metrics exposed (spec §11):
+
+| Metric | Type | Labels |
+|---|---|---|
+| `aelvyril_http_requests_total` | counter | method, route, status |
+| `aelvyril_http_request_duration_ms` | histogram | method, route, status |
+| `aelvyril_conversation_creations_total` | counter | — |
+| `aelvyril_prompt_requests_total` | counter | — |
+| `aelvyril_prompt_rejections_total` | counter | — |
+| `aelvyril_rate_limited_total` | counter | — |
+| `aelvyril_conversation_limit_reached_total` | counter | — |
+| `aelvyril_workspace_rejections_total` | counter | — |
+| `aelvyril_active_session_hosts` | gauge | — |
+
+For TLS-protected scraping, put a `reverse_proxy gateway:8787` block in
+`infra/docker/Caddyfile` (the example has a commented template).
+
+### TLS termination
+
+Production deploys route through the Caddy service in `infra/compose.yaml`:
+
+- Caddy listens on 80/443 (only public ports).
+- Auto-provisions Let's Encrypt certs via ACME for `AELVYRIL_DOMAIN`.
+- Certs + account keys persist in `caddy-data` + `caddy-config` volumes.
+- All other services stay internal on the `aelvyril-net` bridge.
+
+For local dev without a public domain, Caddy falls back to its internal
+CA — browsers will show a cert warning. Override `AELVYRIL_DOMAIN=localhost`
+to use this.
+
+To rotate certs (e.g., post-key-compromise):
+
+```sh
+docker compose -f infra/compose.yaml exec caddy caddy untrust
+docker compose -f infra/compose.yaml restart caddy
+```
+
+## Secret rotation
+
+See `docs/ops/secrets.md` for the full cadence (Clerk keys, provider
+keys, gateway env).

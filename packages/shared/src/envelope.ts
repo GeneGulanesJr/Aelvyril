@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SpecDraft, SpecQuestion, ThreadStatus } from "./api.js";
 
 export const EnvelopeKind = z.enum([
   "text_delta",
@@ -11,6 +12,10 @@ export const EnvelopeKind = z.enum([
   "user_message",
   "session_state",
   "error",
+  "spec_question",
+  "spec_draft",
+  "spec_status",
+  "diff",
 ]);
 export type EnvelopeKind = z.infer<typeof EnvelopeKind>;
 
@@ -49,6 +54,14 @@ const payloadSchemas = {
     message: z.string(),
     code: z.string().optional(),
   }),
+  // Agent spec-centric UI (Slices 1-4): interview questions, the draft
+  // under negotiation, lifecycle transitions, and the produced diff.
+  spec_question: z.object({ questions: z.array(SpecQuestion).min(1) }),
+  spec_draft: z.object({ draft: SpecDraft }),
+  spec_status: z.object({ status: ThreadStatus }),
+  diff: z.object({
+    files: z.array(z.object({ path: z.string().min(1), patch: z.string() })).min(1),
+  }),
 } as const;
 
 const envelopeShape = z.object({
@@ -69,5 +82,9 @@ export const EventEnvelope = z.discriminatedUnion("kind", [
   envelopeShape.extend({ kind: z.literal("user_message"), payload: payloadSchemas.user_message }),
   envelopeShape.extend({ kind: z.literal("session_state"), payload: payloadSchemas.session_state }),
   envelopeShape.extend({ kind: z.literal("error"), payload: payloadSchemas.error }),
+  envelopeShape.extend({ kind: z.literal("spec_question"), payload: payloadSchemas.spec_question }),
+  envelopeShape.extend({ kind: z.literal("spec_draft"), payload: payloadSchemas.spec_draft }),
+  envelopeShape.extend({ kind: z.literal("spec_status"), payload: payloadSchemas.spec_status }),
+  envelopeShape.extend({ kind: z.literal("diff"), payload: payloadSchemas.diff }),
 ]);
 export type EventEnvelope = z.infer<typeof EventEnvelope>;

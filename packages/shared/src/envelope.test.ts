@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EventEnvelope, EnvelopeKind } from "./envelope.js";
+import { EnvelopeKind, EventEnvelope } from "./envelope.js";
 
 const base = {
   seq: 1,
@@ -69,6 +69,68 @@ describe("EventEnvelope", () => {
       "user_message",
       "session_state",
       "error",
+      "spec_question",
+      "spec_draft",
+      "spec_status",
+      "diff",
     ]);
+  });
+});
+
+describe("spec envelopes", () => {
+  it("accepts a spec_question envelope", () => {
+    const parsed = EventEnvelope.parse({
+      ...base,
+      kind: "spec_question",
+      payload: { questions: [{ id: "q1", prompt: "Roles?", kind: "text" }] },
+    });
+    expect(parsed.payload).toEqual({
+      questions: [{ id: "q1", prompt: "Roles?", kind: "text" }],
+    });
+  });
+
+  it("accepts a spec_draft envelope", () => {
+    const draft = {
+      goal: "x",
+      filesAffected: [],
+      plan: [],
+      risks: [],
+      questions: [],
+      answers: {},
+    };
+    const parsed = EventEnvelope.parse({
+      ...base,
+      kind: "spec_draft",
+      payload: { draft },
+    });
+    expect(parsed.payload).toEqual({ draft });
+  });
+
+  it("accepts a spec_status envelope", () => {
+    const parsed = EventEnvelope.parse({
+      ...base,
+      kind: "spec_status",
+      payload: { status: "running" },
+    });
+    expect(parsed.payload).toEqual({ status: "running" });
+  });
+
+  it("rejects a spec_status envelope with unknown status", () => {
+    expect(
+      EventEnvelope.safeParse({
+        ...base,
+        kind: "spec_status",
+        payload: { status: "bogus" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts a diff envelope", () => {
+    const parsed = EventEnvelope.parse({
+      ...base,
+      kind: "diff",
+      payload: { files: [{ path: "a.ts", patch: "@@ ..." }] },
+    });
+    expect(parsed.payload).toEqual({ files: [{ path: "a.ts", patch: "@@ ..." }] });
   });
 });

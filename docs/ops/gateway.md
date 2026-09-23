@@ -122,6 +122,16 @@ pnpm --filter @aelvyril/gateway start
 `store.test.ts` covers the migration path for pre-namespace DBs (legacy
 `platform` namespace backfill).
 
+### SSE keepalive
+
+SSE streams emit a `: ping\n\n` keepalive every **15 seconds** (spec §6).
+The heartbeat is a no-op for SSE-aware consumers but defeats idle
+connection reapers in reverse proxies (Caddy, nginx) and load balancers.
+
+If your proxy / LB has a shorter idle timeout than 15s, lower the
+heartbeat via `SSE_HEARTBEAT_MS=5000` in `apps/gateway/.env`. The change
+applies on next stream open (in-flight streams keep their interval).
+
 ## Compression
 
 `@fastify/compress` is wired into the gateway with gzip + deflate

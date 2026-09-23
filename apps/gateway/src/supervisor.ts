@@ -57,8 +57,16 @@ export class Supervisor {
     rpc.on("exit", () => {
       if (handle.exiting) return;
       this.handles.delete(conversationId);
-      this.opts.store.setConversationState(conversationId, "degraded");
-      this.publish(conversationId, { kind: "session_state", payload: { state: "degraded" } });
+      // Best-effort: child may emit exit AFTER disposeAll closes the store
+      // (test teardown race, or a real SIGTERM during shutdown). Silently
+      // drop the event rather than crash the gateway — spec §10
+      // ("backing service failures fail soft") covers this.
+      try {
+        this.opts.store.setConversationState(conversationId, "degraded");
+        this.publish(conversationId, { kind: "session_state", payload: { state: "degraded" } });
+      } catch {
+        // store closed; ignore
+      }
     });
     this.handles.set(conversationId, handle);
     return handle;
@@ -102,6 +110,16 @@ export class Supervisor {
   }
 
   private onProtocolEvent(conversationId: string, ev: RpcEvent): void {
+    try {
+      this.handleProtocolEvent(conversationId, ev);
+    } catch {
+      // Store / bus may be closed during disposeAll (test teardown race) or
+      // a real SIGTERM during shutdown. Spec §10: backing service failures
+      // fail soft — drop the event rather than crash the gateway.
+    }
+  }
+
+  private handleProtocolEvent(conversationId: string, ev: RpcEvent): void {
     const handle = this.handles.get(conversationId);
     if (handle) handle.lastActivity = Date.now();
 

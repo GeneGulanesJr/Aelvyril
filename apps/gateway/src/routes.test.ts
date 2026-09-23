@@ -81,4 +81,15 @@ describe("v1 routes", () => {
     const res = await authed(app, "good").post("/v1/conversations/conv_x/abort");
     expect(res.statusCode).toBe(404);
   });
+
+  // Spec §10: 1MB max message — enforced at the transport layer so we
+  // reject before any handler runs (cheap, consistent, no per-route cap).
+  it("rejects bodies larger than the 1MB bodyLimit with 413", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    const conv = (await (await u1.post("/v1/conversations", {})).json()) as { id: string };
+    const tooBig = { message: "x".repeat(1_048_577) };
+    const res = await u1.post(`/v1/conversations/${conv.id}/prompt`, tooBig);
+    expect(res.statusCode).toBe(413);
+  });
 });

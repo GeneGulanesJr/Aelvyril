@@ -21,6 +21,7 @@ export function Chat() {
   const [status, setStatus] = useState<"idle" | "streaming" | "degraded">("idle");
   const [error, setError] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const closeStream = useRef<(() => void) | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -112,6 +113,23 @@ export function Chat() {
     }
   }, [client, input, activeId, openConversation, status]);
 
+  // Aborts the in-flight turn. The gateway returns 202 immediately; the
+  // session_state/idle envelope arrives shortly after and clears `waiting`
+  // via applyEnvelope. We also reset `waiting` here so the UI does not
+  // stall on "pi is thinking" between the click and the agent_settled event.
+  const stop = useCallback(async () => {
+    if (!client || !activeId) return;
+    setStopping(true);
+    setWaiting(false);
+    try {
+        await client.abort(activeId);
+    } catch (err) {
+        setError(String(err));
+    } finally {
+        setStopping(false);
+    }
+  }, [client, activeId]);
+
   const statusLabel = useMemo(
     () => ({ idle: "idle", streaming: "working…", degraded: "degraded — will recover on next message" })[status],
     [status],
@@ -201,6 +219,20 @@ export function Chat() {
         >
           send
         </button>
+        {(waiting || status === "streaming") && (
+          <button
+            aria-label="stop the agent"
+            className="rounded-lg border border-[#f85149]/40 bg-[#f85149]/10 px-4 py-2 text-sm text-[#f85149] disabled:opacity-40"
+            disabled={stopping}
+            onClick={(e) => {
+              e.preventDefault();
+              void stop();
+            }}
+            type="button"
+          >
+            {stopping ? "stopping…" : "stop"}
+          </button>
+        )}
       </form>
     </main>
   );

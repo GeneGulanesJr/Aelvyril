@@ -27,7 +27,10 @@ export interface AppOptions {
 export type App = FastifyInstance;
 
 export async function buildApp(opts: AppOptions): Promise<App> {
-  const app = Fastify({ logger: false });
+  // Spec §10: 1MB max message. Fastify defaults to 1MB anyway, but we set it
+  // explicitly so the value lives in the code (not in the runtime default) and
+  // so the test asserts the contract instead of an implementation accident.
+  const app = Fastify({ logger: false, bodyLimit: 1_048_576 });
   const store = new Store(opts.dbPath);
   const bus = new EventBus(store);
   const supervisor = new Supervisor({

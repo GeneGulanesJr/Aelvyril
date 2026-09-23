@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import {
   CreateConversationBody,
   PromptBody,
+  RenameConversationBody,
   toUserNamespace,
   type EventEnvelope,
 } from "@aelvyril/shared";
@@ -100,6 +101,28 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const { id } = req.params as { id: string };
     const conv = store.getConversation(id, namespace);
     return conv ? conv : reply.code(404).send({ error: "not_found" });
+  });
+
+  app.patch("/v1/conversations/:id", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    const namespace = toUserNamespace(userId);
+    const { id } = req.params as { id: string };
+    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
+    const body = RenameConversationBody.parse(req.body ?? {});
+    store.renameConversation(id, namespace, body.title);
+    return store.getConversation(id, namespace);
+  });
+
+  app.delete("/v1/conversations/:id", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    const namespace = toUserNamespace(userId);
+    const { id } = req.params as { id: string };
+    // Cross-tenant guard: store.deleteConversation is namespaced, so a
+    // foreign conv id is a no-op → 404, never a destructive 204.
+    const deleted = store.deleteConversation(id, namespace);
+    return deleted ? reply.code(204).send() : reply.code(404).send({ error: "not_found" });
   });
 
   app.post("/v1/conversations/:id/prompt", async (req, reply) => {

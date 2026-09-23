@@ -97,6 +97,20 @@ export class Store {
       .run(title, id, namespace);
   }
 
+  /** Returns true if a conversation row was actually deleted. */
+  deleteConversation(id: string, namespace: string): boolean {
+    // Cascade events so a deleted conversation leaves no orphan history. The
+    // seq counter is per-conversation so there's no global state to reset.
+    const txn = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM events WHERE conversation_id = ?").run(id);
+      const info = this.db
+        .prepare("DELETE FROM conversations WHERE id = ? AND namespace = ?")
+        .run(id, namespace);
+      return info.changes > 0;
+    });
+    return txn();
+  }
+
   getConversation(id: string, namespace: string): Conversation | null {
     const row = this.db
       .prepare("SELECT * FROM conversations WHERE id = ? AND namespace = ?")

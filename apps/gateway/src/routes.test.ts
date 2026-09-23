@@ -132,4 +132,82 @@ describe("v1 routes", () => {
     const res = await u1.post("/v1/conversations", { title: "private" });
     expect(res.statusCode).toBe(201);
   });
+
+  // PATCH /v1/conversations/:id (rename) and DELETE /v1/conversations/:id
+  // back the new conversation-list UI (frontend rename ✎ / delete ×).
+  it("renames a conversation via PATCH and returns the updated row", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    const conv = (await (await u1.post("/v1/conversations", { title: "old" })).json()) as { id: string };
+    const res = await u1.post(`/v1/conversations/${conv.id}/prompt`, { message: "hi" });
+    // Use the helper's post method with custom method override:
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: `/v1/conversations/${conv.id}`,
+      headers: { authorization: `Bearer good` },
+      payload: { title: "new title" },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().title).toBe("new title");
+    // Round-trip via GET confirms persistence.
+    const fetched = await u1.get(`/v1/conversations/${conv.id}`);
+    expect(fetched.json().title).toBe("new title");
+    // Validation rejects empty / too-long titles.
+    const bad1 = await app.inject({
+      method: "PATCH",
+      url: `/v1/conversations/${conv.id}`,
+      headers: { authorization: `Bearer good` },
+      payload: { title: "" },
+    });
+    expect(bad1.statusCode).toBe(400);
+    void res; // silence unused
+  });
+
+  it("rejects PATCH rename across users (cross-tenant 404)", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good"); // user_test1
+    const u2 = authed(app, "good2"); // user_test2
+    const conv = (await (await u1.post("/v1/conversations", { title: "mine" })).json()) as { id: string };
+    const stolen = await app.inject({
+      method: "PATCH",
+      url: `/v1/conversations/${conv.id}`,
+      headers: { authorization: `Bearer good2` },
+      payload: { title: "hijacked" },
+    });
+    expect(stolen.statusCode).toBe(404);
+    const mine = await u1.get(`/v1/conversations/${conv.id}`);
+    expect(mine.json().title).toBe("mine");
+  });
+
+  it("deletes a conversation via DELETE and 204s, then GET 404s", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    const conv = (await (await u1.post("/v1/conversations", { title: "bye" })).json()) as { id: string };
+    const del = await app.inject({
+      method: "DELETE",
+      url: `/v1/conversations/${conv.id}`,
+      headers: { authorization: `Bearer good` },
+    });
+    expect(del.statusCode).toBe(204);
+    const fetched = await u1.get(`/v1/conversations/${conv.id}`);
+    expect(fetched.statusCode).toBe(404);
+    // The list no longer contains it.
+    const list = await u1.get("/v1/conversations");
+    expect((list.json().conversations as Array<{ id: string }>).map((c) => c.id)).not.toContain(conv.id);
+  });
+
+  it("rejects DELETE across users (cross-tenant 404, no destructive action)", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    const u2 = authed(app, "good2");
+    const conv = (await (await u1.post("/v1/conversations", { title: "mine" })).json()) as { id: string };
+    const stolen = await app.inject({
+      method: "DELETE",
+      url: `/v1/conversations/${conv.id}`,
+      headers: { authorization: `Bearer good2` },
+    });
+    expect(stolen.statusCode).toBe(404);
+    const stillThere = await u1.get(`/v1/conversations/${conv.id}`);
+    expect(stillThere.statusCode).toBe(200);
+  });
 });

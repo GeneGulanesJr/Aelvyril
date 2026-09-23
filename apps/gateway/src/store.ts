@@ -20,6 +20,55 @@ export interface NewEvent {
 
 export type StoredEvent = NewEvent & { seq: number };
 
+/**
+ * Idempotent schema migrations: table creation + column backfills.
+ * Safe to run repeatedly (CREATE IF NOT EXISTS + column presence checks);
+ * also callable standalone (tests, admin tooling).
+ */
+export function runMigrations(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS conversations(
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      workspace TEXT,
+      namespace TEXT NOT NULL DEFAULT 'platform',
+      state TEXT NOT NULL DEFAULT 'idle',
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS events(
+      conversation_id TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      ts TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      PRIMARY KEY (conversation_id, seq)
+    );
+  `);
+  // Lightweight migration for pre-namespace databases (Phase 1 files):
+  // backfill every existing row into the shared platform namespace. Runs
+  // BEFORE the namespace index in the constructor, which needs the column.
+  const cols = db.prepare("PRAGMA table_info(conversations)").all() as Array<{
+    name: string;
+  }>;
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has("namespace")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN namespace TEXT NOT NULL DEFAULT 'platform'");
+  }
+  // Thread lifecycle + spec-interview blobs (agent spec-centric UI, Slice 1).
+  if (!names.has("status")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN status TEXT NOT NULL DEFAULT 'draft'");
+  }
+  if (!names.has("spec_draft")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN spec_draft TEXT");
+  }
+  if (!names.has("spec_questions")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN spec_questions TEXT");
+  }
+  if (!names.has("spec_answers")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN spec_answers TEXT");
+  }
+}
+
 export class Store {
   private db: Database.Database;
   private appendTxn: (ev: NewEvent) => StoredEvent;
@@ -27,33 +76,7 @@ export class Store {
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS conversations(
-        id TEXT PRIMARY KEY,
-        title TEXT,
-        workspace TEXT,
-        namespace TEXT NOT NULL DEFAULT 'platform',
-        state TEXT NOT NULL DEFAULT 'idle',
-        created_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS events(
-        conversation_id TEXT NOT NULL,
-        seq INTEGER NOT NULL,
-        ts TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        payload TEXT NOT NULL,
-        PRIMARY KEY (conversation_id, seq)
-      );
-    `);
-    // Lightweight migration for pre-namespace databases (Phase 1 files):
-    // backfill every existing row into the shared platform namespace. Runs
-    // BEFORE the namespace index below, which needs the column to exist.
-    const cols = this.db.prepare("PRAGMA table_info(conversations)").all() as Array<{
-      name: string;
-    }>;
-    if (!cols.some((c) => c.name === "namespace")) {
-      this.db.exec("ALTER TABLE conversations ADD COLUMN namespace TEXT NOT NULL DEFAULT 'platform'");
-    }
+    runMigrations(this.db);
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_conversations_namespace ON conversations(namespace)",
     );

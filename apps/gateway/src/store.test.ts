@@ -4,7 +4,7 @@ import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { Store } from "./store.js";
+import { runMigrations, Store } from "./store.js";
 
 const ts = "2026-09-22T12:00:00.000Z";
 const PLATFORM = "platform";
@@ -104,5 +104,30 @@ describe("Store", () => {
     const conv = store.createConversation({ namespace: PLATFORM });
     store.setConversationState(conv.id, "streaming");
     expect(store.getConversation(conv.id, PLATFORM)?.state).toBe("streaming");
+  });
+
+  it("adds thread status + spec columns idempotently", () => {
+    const dbPath = join(tmpdir(), `aelvyril-store-mig-${randomUUID()}.db`);
+    const db = new Database(dbPath);
+    try {
+      runMigrations(db);
+      // Re-running must not throw.
+      runMigrations(db);
+      const cols = db.prepare("PRAGMA table_info(conversations)").all() as Array<{
+        name: string;
+      }>;
+      const names = cols.map((c) => c.name);
+      expect(names).toContain("status");
+      expect(names).toContain("spec_draft");
+      expect(names).toContain("spec_questions");
+      expect(names).toContain("spec_answers");
+    } finally {
+      db.close();
+      try {
+        rmSync(dbPath, { force: true });
+      } catch {
+        // best-effort cleanup; Windows can briefly hold the handle after close
+      }
+    }
   });
 });

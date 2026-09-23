@@ -33,7 +33,14 @@ const app = await buildApp({
   allowedOrigins: process.env.GATEWAY_ALLOWED_ORIGIN?.split(",").map((o) => o.trim()),
 });
 
-await app.listen({ port, host: "127.0.0.1" });
+// Default to dual-stack ("::" accepts IPv4-mapped too) so `localhost` resolves
+// over either ::1 or 127.0.0.1; fall back to IPv4-only when IPv6 is unavailable.
+// GATEWAY_HOST overrides both.
+try {
+  await app.listen({ port, host: process.env.GATEWAY_HOST ?? "::" });
+} catch {
+  await app.listen({ port, host: process.env.GATEWAY_HOST ?? "127.0.0.1" });
+}
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {

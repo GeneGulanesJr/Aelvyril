@@ -166,7 +166,6 @@ describe("v1 routes", () => {
   it("rejects PATCH rename across users (cross-tenant 404)", async () => {
     app = await makeApp();
     const u1 = authed(app, "good"); // user_test1
-    const u2 = authed(app, "good2"); // user_test2
     const conv = (await (await u1.post("/v1/conversations", { title: "mine" })).json()) as { id: string };
     const stolen = await app.inject({
       method: "PATCH",
@@ -199,7 +198,6 @@ describe("v1 routes", () => {
   it("rejects DELETE across users (cross-tenant 404, no destructive action)", async () => {
     app = await makeApp();
     const u1 = authed(app, "good");
-    const u2 = authed(app, "good2");
     const conv = (await (await u1.post("/v1/conversations", { title: "mine" })).json()) as { id: string };
     const stolen = await app.inject({
       method: "DELETE",

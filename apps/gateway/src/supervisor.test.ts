@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EventBus } from "./bus.js";
 import { Store } from "./store.js";
@@ -26,7 +29,18 @@ function makeSupervisor() {
 
 describe("Supervisor", () => {
   let s: Supervisor | undefined;
-  afterEach(() => s?.disposeAll());
+  let tmpDirs: string[] = [];
+  afterEach(() => {
+    s?.disposeAll();
+    for (const d of tmpDirs) {
+      try {
+        rmSync(d, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    tmpDirs = [];
+  });
 
   it("prompt streams normalized envelopes and ends idle", async () => {
     const { store, bus, supervisor } = makeSupervisor();
@@ -85,5 +99,65 @@ describe("Supervisor", () => {
     const { bus, store } = makeSupervisor();
     const conv = store.createConversation({ namespace: "platform" });
     expect(bus.replay(conv.id, -1)).toEqual([]);
+  });
+
+  // Spec §6 + §10: workspace plumbs through to spawn cwd; respawn after a
+  // crash reuses the same cwd so pi finds its prior session file on disk.
+  it("spawns session host with conversation.workspace as cwd, and reuses it after kill", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "aelvyril-ws-"));
+    tmpDirs.push(dir);
+    const store = new Store(":memory:");
+    const conv = store.createConversation({ workspace: dir, namespace: "platform" });
+    const spawnCalls: Array<{ cwd: string | undefined; env: Record<string, string> }> = [];
+    const bus = new EventBus(store);
+    const supervisor = new Supervisor({
+      bus,
+      store,
+      spawnChild: (_cid, extraEnv, cwd) => {
+        spawnCalls.push({ cwd: cwd ?? undefined, env: { ...extraEnv } });
+        return spawn(process.execPath, [fakePi], { cwd, env: { ...process.env, ...extraEnv } });
+      },
+      idleMs: 60_000,
+    });
+    s = supervisor;
+
+    expect(await supervisor.prompt(conv.id, "hi", undefined, { LAPIS_PROJECT_KEY: "platform" })).toBe(true);
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
+    });
+    supervisor.killChild(conv.id);
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("degraded");
+    });
+    expect(await supervisor.prompt(conv.id, "again", undefined, { LAPIS_PROJECT_KEY: "platform" })).toBe(true);
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
+    });
+
+    expect(spawnCalls).toHaveLength(2);
+    expect(spawnCalls[0]!.cwd).toBe(dir);
+    expect(spawnCalls[1]!.cwd).toBe(dir); // resume: same cwd, pi reuses session file
+    // LAPIS_PROJECT_KEY plumbed through unchanged on both spawns.
+    expect(spawnCalls[0]!.env.LAPIS_PROJECT_KEY).toBe("platform");
+    expect(spawnCalls[1]!.env.LAPIS_PROJECT_KEY).toBe("platform");
+  });
+
+  it("falls back to no cwd when the conversation has no workspace", async () => {
+    const store = new Store(":memory:");
+    const conv = store.createConversation({ namespace: "platform" }); // no workspace
+    const spawnCalls: Array<{ cwd: string | undefined }> = [];
+    const supervisor = new Supervisor({
+      bus: new EventBus(store),
+      store,
+      spawnChild: (_cid, _extraEnv, cwd) => {
+        spawnCalls.push({ cwd: cwd ?? undefined });
+        return spawn(process.execPath, [fakePi]);
+      },
+      idleMs: 60_000,
+    });
+    s = supervisor;
+    await supervisor.prompt(conv.id, "hi");
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]!.cwd).toBeUndefined();
   });
 });

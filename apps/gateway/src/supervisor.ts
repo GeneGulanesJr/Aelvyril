@@ -8,7 +8,11 @@ export interface SupervisorOptions {
   bus: EventBus;
   store: Store;
   /** extraEnv is merged over process.env by the caller at spawn time. */
-  spawnChild: (conversationId: string, extraEnv: Record<string, string>) => ChildProcess;
+  spawnChild: (
+    conversationId: string,
+    extraEnv: Record<string, string>,
+    cwd?: string,
+  ) => ChildProcess;
   idleMs: number;
 }
 
@@ -38,10 +42,15 @@ export class Supervisor {
     return this.handles.has(conversationId);
   }
 
-  private ensureSession(conversationId: string, extraEnv: Record<string, string>): Handle {
+  private ensureSession(conversationId: string, extraEnv: Record<string, string>, cwd?: string): Handle {
     const existing = this.handles.get(conversationId);
     if (existing) return existing;
-    const child = this.opts.spawnChild(conversationId, extraEnv);
+    // Spec §6/§10: workspace -> spawn cwd so pi finds its prior session file
+    // on disk after a crash + re-prompt. Caller-provided cwd wins (for tests
+    // + future overrides); otherwise the supervisor reads workspace from the
+    // store itself — the route doesn't need to plumb it through.
+    const spawnCwd = cwd ?? this.opts.store.getConversationById(conversationId)?.workspace ?? undefined;
+    const child = this.opts.spawnChild(conversationId, extraEnv, spawnCwd);
     const rpc = new RpcClient(child);
     const handle: Handle = { rpc, child, lastActivity: Date.now(), exiting: false };
     rpc.on("event", (ev: RpcEvent) => this.onProtocolEvent(conversationId, ev));
@@ -65,9 +74,10 @@ export class Supervisor {
     message: string,
     streamingBehavior?: "steer" | "followUp",
     extraEnv?: Record<string, string>,
+    cwd?: string,
   ): Promise<boolean> {
-    // extraEnv only applies at spawn time; a reused session keeps its env.
-    const handle = this.ensureSession(conversationId, extraEnv ?? {});
+    // extraEnv + cwd only apply at spawn time; a reused session keeps its env.
+    const handle = this.ensureSession(conversationId, extraEnv ?? {}, cwd);
     this.opts.store.setConversationState(conversationId, "streaming");
     this.publish(conversationId, { kind: "session_state", payload: { state: "streaming" } });
     handle.lastActivity = Date.now();

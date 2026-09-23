@@ -104,6 +104,18 @@ export class Store {
     return row ? this.toConversation(row) : null;
   }
 
+  /**
+   * Internal lookup without a namespace check. Used by the supervisor to
+   * recover the workspace cwd at spawn time without re-plumbing the
+   * namespace through every layer. Never expose this on any /v1 route.
+   */
+  getConversationById(id: string): Conversation | null {
+    const row = this.db
+      .prepare("SELECT * FROM conversations WHERE id = ?")
+      .get(id) as ConvRow | undefined;
+    return row ? this.toConversation(row) : null;
+  }
+
   listConversations(namespace: string): Conversation[] {
     const rows = this.db
       .prepare("SELECT * FROM conversations WHERE namespace = ? ORDER BY created_at DESC")

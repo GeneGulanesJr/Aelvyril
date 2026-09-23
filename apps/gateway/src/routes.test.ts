@@ -19,6 +19,14 @@ function makeApp() {
     childArgs: [fakePi],
     idleMs: 60_000,
     verifyToken: testVerifier,
+    // Permit any non-relative path for the existing CRUD tests. The
+    // allowlist enforcement paths get their own tests below with the
+    // production default-deny behavior.
+    workspaceAllowlist: {
+      isAllowed: (w) => w === null || w === undefined || (w.length > 0 && w.startsWith("/")),
+      resolve: (w) => (w === null || w === undefined ? null : w),
+      size: () => Number.POSITIVE_INFINITY,
+    },
   });
 }
 
@@ -38,7 +46,7 @@ describe("v1 routes", () => {
   it("creates, lists, gets conversations", async () => {
     app = await makeApp();
     const u1 = authed(app, "good");
-    const created = await u1.post("/v1/conversations", { title: "t", workspace: "LaPis" });
+    const created = await u1.post("/v1/conversations", { title: "t", workspace: "/home/LaPis" });
     expect(created.statusCode).toBe(201);
     const conv = created.json();
     expect(conv.id).toMatch(/^conv_/);
@@ -91,5 +99,37 @@ describe("v1 routes", () => {
     const tooBig = { message: "x".repeat(1_048_577) };
     const res = await u1.post(`/v1/conversations/${conv.id}/prompt`, tooBig);
     expect(res.statusCode).toBe(413);
+  });
+
+  // Spec §10: workspace allowlist default-deny. The app built below has NO
+  // workspaceAllowlist override → it picks up createWorkspaceAllowlist(undefined)
+  // which rejects every non-null workspace.
+  it("rejects conversations with a workspace not on the allowlist", async () => {
+    app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      // no workspaceAllowlist → default-deny
+    });
+    const u1 = authed(app, "good");
+    const res = await u1.post("/v1/conversations", { title: "x", workspace: "/any/path" });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "workspace_not_allowed" });
+  });
+
+  it("accepts conversations with no workspace (platform-level chats)", async () => {
+    app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      // no workspaceAllowlist → default-deny on workspaces, but null is fine
+    });
+    const u1 = authed(app, "good");
+    const res = await u1.post("/v1/conversations", { title: "private" });
+    expect(res.statusCode).toBe(201);
   });
 });

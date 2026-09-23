@@ -14,6 +14,7 @@ import { Store } from "./store.js";
 import { EventBus } from "./bus.js";
 import { Supervisor } from "./supervisor.js";
 import type { TokenVerifier } from "./auth.js";
+import { createWorkspaceAllowlist, type WorkspaceAllowlist } from "./workspace-allowlist.js";
 
 export interface AppOptions {
   dbPath: string;
@@ -22,6 +23,8 @@ export interface AppOptions {
   idleMs?: number;
   verifyToken: TokenVerifier;
   allowedOrigins?: string[];
+  /** Optional workspace allowlist override for tests. Defaults to a default-deny list. */
+  workspaceAllowlist?: WorkspaceAllowlist;
 }
 
 export type App = FastifyInstance;
@@ -33,12 +36,15 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   const app = Fastify({ logger: false, bodyLimit: 1_048_576 });
   const store = new Store(opts.dbPath);
   const bus = new EventBus(store);
+  // Spec §10: default-deny workspace allowlist. Override via opts in tests.
+  const workspaceAllowlist = opts.workspaceAllowlist ?? createWorkspaceAllowlist(process.env.GATEWAY_WORKSPACE_ALLOWLIST);
   const supervisor = new Supervisor({
     bus,
     store,
-    spawnChild: (conversationId, extraEnv) =>
+    spawnChild: (_conversationId, extraEnv, cwd) =>
       spawn(opts.childCommand, opts.childArgs, {
         env: { ...process.env, ...extraEnv },
+        cwd,
       }),
     idleMs: opts.idleMs ?? 300_000,
   });
@@ -72,6 +78,10 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     if (!userId) return;
     const namespace = toUserNamespace(userId);
     const body = CreateConversationBody.parse(req.body ?? {});
+    // Spec §10: reject workspaces not on the allowlist (default-deny).
+    if (body.workspace !== undefined && !workspaceAllowlist.isAllowed(body.workspace)) {
+      return reply.code(400).send({ error: "workspace_not_allowed" });
+    }
     const conv = store.createConversation({ ...body, namespace });
     return reply.code(201).send(conv);
   });
@@ -97,15 +107,21 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     if (!userId) return;
     const namespace = toUserNamespace(userId);
     const { id } = req.params as { id: string };
-    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
+    const conv = store.getConversation(id, namespace);
+    if (!conv) return reply.code(404).send({ error: "not_found" });
     const body = PromptBody.parse(req.body ?? {});
-    const ok = await supervisor.prompt(id, body.message, body.streamingBehavior, {
-      LAPIS_PROJECT_KEY: namespace,
-    });
+    // Spec §6/§10: workspace -> spawn cwd so pi finds its prior session file
+    // on disk after a crash + re-prompt (session resume).
+    const ok = await supervisor.prompt(
+      id,
+      body.message,
+      body.streamingBehavior,
+      { LAPIS_PROJECT_KEY: namespace },
+      conv.workspace ?? undefined,
+    );
     if (!ok) return reply.code(502).send({ error: "agent_rejected" });
     // Auto-title from the first prompt — the picker shows words, not uuids.
-    const conv = store.getConversation(id, namespace);
-    if (conv?.title === null) store.renameConversation(id, namespace, body.message.slice(0, 80));
+    if (conv.title === null) store.renameConversation(id, namespace, body.message.slice(0, 80));
     // Persist the user's prompt as an envelope so SSE replay reconstructs the
     // full conversation (assistant-only history was the "my chats are gone" bug).
     bus.publish({

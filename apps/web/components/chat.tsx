@@ -224,6 +224,7 @@ export function Chat() {
               <input
                 aria-label="search conversations"
                 className="mb-2 w-full rounded border border-[#2b3245] bg-[#161b27] px-2 py-1 text-sm outline-none focus:border-[#1f6feb]"
+                data-testid="conv-search"
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="search…"
                 type="text"

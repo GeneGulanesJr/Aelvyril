@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { Store } from "./store.js";
+import { runMigrations, Store } from "./store.js";
 
 const ts = "2026-09-22T12:00:00.000Z";
 const PLATFORM = "platform";
@@ -104,5 +104,106 @@ describe("Store", () => {
     const conv = store.createConversation({ namespace: PLATFORM });
     store.setConversationState(conv.id, "streaming");
     expect(store.getConversation(conv.id, PLATFORM)?.state).toBe("streaming");
+  });
+});
+
+describe("thread columns migration", () => {
+  it("adds status + spec blob columns idempotently", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "store-mig-"));
+    const dbPath = join(tmp, "test.db");
+    const db = new Database(dbPath);
+    try {
+      // Fresh pre-migration schema (no status / spec_* columns). One legacy
+      // row inserted so we can verify the new NOT NULL `status` default.
+      db.exec(`
+        CREATE TABLE conversations(
+          id TEXT PRIMARY KEY,
+          title TEXT,
+          workspace TEXT,
+          namespace TEXT NOT NULL DEFAULT 'platform',
+          state TEXT NOT NULL DEFAULT 'idle',
+          created_at TEXT NOT NULL
+        );
+        INSERT INTO conversations(id, title, workspace, state, created_at)
+          VALUES('conv_legacy', 'old', NULL, 'idle', '2026-01-01T00:00:00.000Z');
+      `);
+      runMigrations(db);
+      // Re-running must not throw.
+      runMigrations(db);
+      const cols = db
+        .prepare("PRAGMA table_info(conversations)")
+        .all() as Array<{ name: string }>;
+      const names = cols.map((c) => c.name);
+      expect(names).toContain("status");
+      expect(names).toContain("spec_draft");
+      expect(names).toContain("spec_questions");
+      expect(names).toContain("spec_answers");
+      // Existing rows get the 'draft' default for the new NOT NULL column,
+      // and the spec blob columns start NULL.
+      const row = db
+        .prepare(
+          "SELECT status, spec_draft, spec_questions, spec_answers FROM conversations WHERE id = 'conv_legacy'",
+        )
+        .get() as {
+        status: string;
+        spec_draft: string | null;
+        spec_questions: string | null;
+        spec_answers: string | null;
+      };
+      expect(row.status).toBe("draft");
+      expect(row.spec_draft).toBeNull();
+      expect(row.spec_questions).toBeNull();
+      expect(row.spec_answers).toBeNull();
+    } finally {
+      db.close();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("runMigrations is a no-op on a database without the conversations table", () => {
+    // Common case: a tool opens a fresh in-memory db and calls runMigrations
+    // defensively before knowing whether the schema has been created yet.
+    const db = new Database(":memory:");
+    try {
+      expect(() => runMigrations(db)).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("Store construction runs the migration so legacy rows land with status='draft'", () => {
+    const dbPath = join(tmpdir(), `aelvyril-mig-store-${randomUUID()}.db`);
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE conversations(
+        id TEXT PRIMARY KEY,
+        title TEXT,
+        workspace TEXT,
+        state TEXT NOT NULL DEFAULT 'idle',
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO conversations(id, title, workspace, state, created_at)
+        VALUES('conv_x', 'legacy', NULL, 'idle', '2026-01-01T00:00:00.000Z');
+    `);
+    legacy.close();
+    try {
+      const store = new Store(dbPath);
+      store.close();
+      const check = new Database(dbPath, { readonly: true });
+      try {
+        const row = check
+          .prepare("SELECT status FROM conversations WHERE id = 'conv_x'")
+          .get() as { status: string };
+        expect(row.status).toBe("draft");
+      } finally {
+        check.close();
+      }
+    } finally {
+      try {
+        rmSync(dbPath, { force: true });
+      } catch {
+        // best-effort cleanup; Windows can briefly hold the handle after close
+      }
+    }
   });
 });

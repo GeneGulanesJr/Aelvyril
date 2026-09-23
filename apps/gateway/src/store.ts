@@ -2,6 +2,52 @@ import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import type { Conversation } from "@aelvyril/shared";
 
+/**
+ * Idempotent forward migration for older `conversations` schemas.
+ *
+ * Adds:
+ *   - `status`         (TEXT NOT NULL DEFAULT 'draft') — spec-centric lifecycle
+ *                       (`draft` → `spec'ing` → `running` → `reviewed`/`merged`)
+ *   - `spec_draft`     (TEXT) — JSON-encoded `SpecDraft`
+ *   - `spec_questions` (TEXT) — JSON-encoded `SpecQuestion[]`
+ *   - `spec_answers`   (TEXT) — JSON-encoded `Record<questionId, answer>`
+ *
+ * Each column is added via `ALTER TABLE ... ADD COLUMN` only if missing, so
+ * this can be called repeatedly (e.g. on every gateway startup) without
+ * raising `duplicate column name`. Pass a `better-sqlite3` `Database`
+ * directly so the same migration can run against pre-`Store` test fixtures.
+ */
+export function runMigrations(db: Database.Database): void {
+  // Skip on databases that haven't created the `conversations` table yet —
+  // a fresh schema will already include these columns in `Store`'s
+  // CREATE TABLE statement. Reading `sqlite_master` is safe whether or
+  // not the schema has been bootstrapped.
+  const exists = db
+    .prepare(
+      "SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'conversations'",
+    )
+    .get() as { x: number } | undefined;
+  if (!exists) return;
+  const cols = db
+    .prepare("PRAGMA table_info(conversations)")
+    .all() as Array<{ name: string }>;
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has("status")) {
+    db.exec(
+      "ALTER TABLE conversations ADD COLUMN status TEXT NOT NULL DEFAULT 'draft'",
+    );
+  }
+  if (!names.has("spec_draft")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN spec_draft TEXT");
+  }
+  if (!names.has("spec_questions")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN spec_questions TEXT");
+  }
+  if (!names.has("spec_answers")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN spec_answers TEXT");
+  }
+}
+
 interface ConvRow {
   id: string;
   title: string | null;
@@ -48,12 +94,18 @@ export class Store {
     // Lightweight migration for pre-namespace databases (Phase 1 files):
     // backfill every existing row into the shared platform namespace. Runs
     // BEFORE the namespace index below, which needs the column to exist.
+    // Replaced by the public `runMigrations()` helper for new columns
+    // (status / spec_* blobs); the inline check stays so legacy `Store`
+    // construction keeps working without an explicit migration call.
     const cols = this.db.prepare("PRAGMA table_info(conversations)").all() as Array<{
       name: string;
     }>;
     if (!cols.some((c) => c.name === "namespace")) {
       this.db.exec("ALTER TABLE conversations ADD COLUMN namespace TEXT NOT NULL DEFAULT 'platform'");
     }
+    // Apply the spec-centric forward migration on every Store construction.
+    // Safe to call on an already-migrated db — `runMigrations` is idempotent.
+    runMigrations(this.db);
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_conversations_namespace ON conversations(namespace)",
     );

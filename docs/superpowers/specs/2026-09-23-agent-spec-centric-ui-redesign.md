@@ -41,11 +41,11 @@ The backend is mostly unchanged: same PiAgent session hosts, same SSE event stre
 | D4 | Spec source | **Agent-drafted, user-editable** | User never writes a spec from scratch. Agent drafts from answers; user can edit any field before approving. |
 | D5 | Spec surface | **Inline accordion** below the input | When in spec mode, the input area expands to show: clarifying questions stack, draft spec, `[approve & run] / [edit] / [cancel]` buttons. |
 | D6 | Output surface | **3 tabs: Plan / Trace / Diff** | Below the input+spec area, every thread renders its result in three tabs. Consistent regardless of mode. |
-| D7 | Renaming | **`conversations` → `threads`** in API + UI | The unit is no longer a chat conversation; it's a thread (could be 1 message, could be 50 questions + spec + run). Schema unchanged on disk. |
-| D8 | Event envelopes | **Add `spec_question` + `spec_draft`** | New SSE event types in `@aelvyril/shared`. Existing `message` envelope still used for casual execution trace. |
+| D7 | Renaming | **`conversations` → `threads`** in API + UI | The unit is no longer a chat conversation; it's a thread (could be 1 message, could be 50 questions + spec + run). **Table name on disk unchanged** in v1 (SQLite migration just adds columns to the existing `conversations` table); a future release may rename the table. |
+| D8 | Event envelopes | **Add 4: `spec_question`, `spec_draft`, `spec_status`, `diff`** | New SSE event types in `@aelvyril/shared`. Existing `message` envelope still used for casual execution trace. |
 | D9 | Agent contract | **Spec interview triggers on ambiguity heuristics** | Heuristic: spec mode kicks in if (a) user forced it, OR (b) the ask mentions >1 file/system/feature, OR (c) the ask is a single sentence with multiple verbs. Tunable later. |
 | D10 | Edit-on-spec | **Allowed, idempotent** | User can edit any spec field after agent drafts; re-submitting the spec re-asks any unresolved questions. |
-| D11 | Old chat UI | **Removed, not deprecated** | `components/chat.tsx` is replaced by `components/thread.tsx`. Old `/chat` route redirects to `/thread/new`. |
+| D11 | Old chat UI | **Component removed; route 302'd** | `components/chat.tsx` is replaced by `components/thread/*`. The legacy `/chat` route serves a 302 → `/thread/new` for one release so any external links don't 404. After that release the route is deleted. |
 
 ## 4. UX Flow
 
@@ -147,9 +147,12 @@ Status pill colors:
 
 **`apps/gateway/src/app.ts`**
 - New routes:
-  - `PATCH /v1/threads/:id/spec` — submit an answer to a question, or update a spec draft field
+  - `PATCH /v1/threads/:id/spec` — discriminated by body shape:
+    - `{ kind: "answer", answers: Record<string,string> }` — submit answers to outstanding questions
+    - `{ kind: "edit", field: "goal" | "filesAffected" | "plan" | "risks", value: string | string[] }` — user edits a drafted spec field directly (does NOT re-trigger Q&A; just updates the draft)
   - `POST /v1/threads/:id/approve` — user approved the spec, transition to `running`, start the agent
-  - `POST /v1/threads/:id/abandon` — mark abandoned
+  - `POST /v1/threads/:id/abandon` — mark abandoned, kill the session if running
+  - `POST /v1/threads/:id/retry` — re-run from `reviewed` (post-failure or post-review-rejection) back to `running`
 - Existing routes kept but renamed:
   - `/v1/conversations` → `/v1/threads` (302 alias for back-compat for one release)
 - `POST /v1/prompt` reads `specMode`. If `"force"` or `"auto"`+heuristic hit, the agent session is initialized in spec-interview mode.
@@ -207,8 +210,8 @@ Status pills, diff viewer, and tab bar all use the existing dark theme tokens (`
 The agent (running inside the PiAgent session host) MUST follow this contract when in spec mode:
 
 1. **First response on spec mode entry:** emit `spec_question` with 2–5 questions covering: (a) goal clarity, (b) scope boundaries, (c) constraints. Do not emit a `spec_draft` until all questions have answers.
-2. **On answer receipt (`PATCH /v1/threads/:id/spec` with `{ answers: {...} }`):** update internal state. If all questions answered, emit `spec_draft`. If answers reveal ambiguity, emit another `spec_question` round (max 3 rounds, then escalate to user with a `spec_draft` containing the unresolved items).
-3. **On `POST /v1/threads/:id/approve`:** transition thread to `running`, begin execution. Emit `message` envelopes for the execution trace as today. Emit a single `diff` envelope on completion with all changed files.
+2. **On answer receipt (`PATCH /v1/threads/:id/spec` with `{ kind: "answer", answers: {...} }`):** update internal state. If all questions answered, emit `spec_draft`. If answers reveal ambiguity, emit another `spec_question` round (max 3 rounds, then **escalate** = emit a final `spec_draft` with the unanswered questions listed verbatim in the `risks` field, set thread status to `spec'ing` with a visible "answers needed" banner, and wait for the user to either supply answers via `PATCH ... { kind: "answer" }` OR directly edit the draft via `PATCH ... { kind: "edit" }`).
+3. **On `POST /v1/threads/:id/approve`:** transition thread to `running`, begin execution. Emit `message` envelopes for the execution trace as today. On completion emit a single `diff` envelope with all changed files (empty array if no files changed). On failure mid-execution, transition to `reviewed` with status pill red-bordered, emit a `message` envelope carrying the error, leave partial `diff` if any. User can then `retry` (→ `running`) or `abandon` (→ terminal).
 4. **On execution failure:** emit a `message` envelope with error, leave thread in `reviewed` status (not `merged`). User can retry or abandon.
 5. **Off mode (`specMode: "off"`):** skip spec interview entirely, execute immediately, emit `message` + `diff` as today.
 

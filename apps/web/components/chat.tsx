@@ -38,6 +38,8 @@ export function Chat() {
         case "tool_call":
           setWaiting(false);
           return [...prev, { role: "tool", text: `⚙ ${env.payload.toolName}` }];
+        case "user_message":
+          return [...prev, { role: "user", text: env.payload.text }];
         case "tool_result":
           return prev;
         case "session_state":
@@ -94,7 +96,8 @@ export function Chat() {
       setActiveId(id);
       openConversation(id);
     }
-    setMessages((prev) => [...prev, { role: "user", text: input }]);
+    // No local bubble: the gateway persists + echoes a user_message envelope
+    // (seq-ordered), so sends survive conversation switches and reconnects.
     setInput("");
     setWaiting(true);
     try {

@@ -30,6 +30,15 @@ describe("EventEnvelope", () => {
     });
   });
 
+  it("accepts a valid user_message envelope", () => {
+    const parsed = EventEnvelope.parse({
+      ...base,
+      kind: "user_message",
+      payload: { text: "fix the login bug" },
+    });
+    expect(parsed.payload).toEqual({ text: "fix the login bug" });
+  });
+
   it("rejects an unknown kind", () => {
     expect(
       EventEnvelope.safeParse({ ...base, kind: "nope", payload: {} }).success,
@@ -57,6 +66,7 @@ describe("EventEnvelope", () => {
       "sandbox_exec",
       "sandbox_promote",
       "laya_verdict",
+      "user_message",
       "session_state",
       "error",
     ]);

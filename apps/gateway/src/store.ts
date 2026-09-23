@@ -91,6 +91,12 @@ export class Store {
     return { id, title: input.title ?? null, workspace: input.workspace ?? null, state: "idle", createdAt };
   }
 
+  renameConversation(id: string, namespace: string, title: string): void {
+    this.db
+      .prepare("UPDATE conversations SET title = ? WHERE id = ? AND namespace = ?")
+      .run(title, id, namespace);
+  }
+
   getConversation(id: string, namespace: string): Conversation | null {
     const row = this.db
       .prepare("SELECT * FROM conversations WHERE id = ? AND namespace = ?")

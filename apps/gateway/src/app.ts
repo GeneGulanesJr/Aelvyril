@@ -100,6 +100,17 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       LAPIS_PROJECT_KEY: namespace,
     });
     if (!ok) return reply.code(502).send({ error: "agent_rejected" });
+    // Auto-title from the first prompt — the picker shows words, not uuids.
+    const conv = store.getConversation(id, namespace);
+    if (conv?.title === null) store.renameConversation(id, namespace, body.message.slice(0, 80));
+    // Persist the user's prompt as an envelope so SSE replay reconstructs the
+    // full conversation (assistant-only history was the "my chats are gone" bug).
+    bus.publish({
+      conversationId: id,
+      ts: new Date().toISOString(),
+      kind: "user_message",
+      payload: { text: body.message },
+    });
     return reply.code(202).send({ accepted: true });
   });
 

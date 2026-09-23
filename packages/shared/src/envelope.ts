@@ -8,6 +8,7 @@ export const EnvelopeKind = z.enum([
   "sandbox_exec",
   "sandbox_promote",
   "laya_verdict",
+  "user_message",
   "session_state",
   "error",
 ]);
@@ -40,6 +41,7 @@ const payloadSchemas = {
     tool: z.string().min(1),
     verdict: z.record(z.string(), z.unknown()),
   }),
+  user_message: z.object({ text: z.string().min(1).max(1_000_000) }),
   session_state: z.object({
     state: z.enum(["idle", "streaming", "degraded", "restarted"]),
   }),
@@ -64,6 +66,7 @@ export const EventEnvelope = z.discriminatedUnion("kind", [
   envelopeShape.extend({ kind: z.literal("sandbox_exec"), payload: payloadSchemas.sandbox_exec }),
   envelopeShape.extend({ kind: z.literal("sandbox_promote"), payload: payloadSchemas.sandbox_promote }),
   envelopeShape.extend({ kind: z.literal("laya_verdict"), payload: payloadSchemas.laya_verdict }),
+  envelopeShape.extend({ kind: z.literal("user_message"), payload: payloadSchemas.user_message }),
   envelopeShape.extend({ kind: z.literal("session_state"), payload: payloadSchemas.session_state }),
   envelopeShape.extend({ kind: z.literal("error"), payload: payloadSchemas.error }),
 ]);

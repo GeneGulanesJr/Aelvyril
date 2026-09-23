@@ -90,6 +90,9 @@ describe("SSE end-to-end", () => {
     expect(seen[0]!.kind).toBe("session_state");
     const seqs = seen.map((e) => e.seq);
     expect(seqs).toEqual([...new Set(seqs)].sort((a, b) => a - b));
+    // The user's prompt is part of the persisted history (replayed on switch).
+    const userMsg = seen.find((e) => e.kind === "user_message");
+    expect(userMsg?.payload).toMatchObject({ text: "hi" });
     const text = seen
       .filter((e) => e.kind === "text_delta")
       .map((e) => e.payload.delta)
@@ -131,10 +134,11 @@ describe("SSE end-to-end", () => {
       expect(((await one.json()) as { state: string }).state).toBe("idle");
     });
 
-    // The env echo shifts seqs by one: 0 streaming, 1 echo, 2-5 deltas,
-    // 6 tool_call, 7 tool_result, 8 idle. Last-Event-ID 6 skips echo+deltas.
+    // user_message (1) shifts everything: 0 streaming, 1 user_message, 2 echo,
+    // 3-6 deltas, 7 tool_call, 8 tool_result, 9 idle. Last-Event-ID 7 skips
+    // the echo and deltas.
     const replay = await fetch(`${baseUrl}/v1/conversations/${conv.id}/events`, {
-      headers: { "last-event-id": "6", ...authHeaders },
+      headers: { "last-event-id": "7", ...authHeaders },
     });
     // The stream stays open (heartbeat), so read bounded chunks until the
     // expected replayed event arrives, then cancel instead of draining.

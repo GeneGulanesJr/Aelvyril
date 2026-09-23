@@ -122,6 +122,25 @@ pnpm --filter @aelvyril/gateway start
 `store.test.ts` covers the migration path for pre-namespace DBs (legacy
 `platform` namespace backfill).
 
+## Compression
+
+`@fastify/compress` is wired into the gateway with gzip + deflate
+(threshold 1KB). JSON responses above 1KB are compressed automatically
+when the client sends `Accept-Encoding: gzip`.
+
+SSE streams (`text/event-stream`) are explicitly excluded — compressing
+them would buffer the whole stream and break `Last-Event-ID` reconnect
+semantics.
+
+To inspect the negotiated encoding:
+
+```sh
+curl -sI -H 'Accept-Encoding: gzip' http://127.0.0.1:8787/v1/conversations | grep -i encoding
+```
+
+The Caddyfile (`infra/docker/Caddyfile`) also does `encode gzip zstd` on
+the proxy side, so prod benefits from compression at both layers.
+
 ## Scaling notes
 
 In-memory rate limiter + token bucket live in the gateway process.

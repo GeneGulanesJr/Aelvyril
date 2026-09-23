@@ -46,6 +46,8 @@ const app = await buildApp({
   // Spec §11: structured JSON logs in prod (Fastify pino). Default on;
   // opt out with GATEWAY_LOG=silent for dev when stdout noise is annoying.
   logger: process.env.GATEWAY_LOG !== "silent",
+  // SSE keepalive — operators may want to tune for proxy timeouts.
+  sseHeartbeatMs: process.env.SSE_HEARTBEAT_MS ? Number(process.env.SSE_HEARTBEAT_MS) : undefined,
 });
 
 // Default to dual-stack ("::" accepts IPv4-mapped too) so `localhost` resolves

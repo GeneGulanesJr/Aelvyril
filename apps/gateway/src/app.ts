@@ -43,6 +43,8 @@ export interface AppOptions {
   startedAt?: number;
   /** Disable compression middleware (tests / explicit opt-out). */
   compress?: boolean;
+  /** SSE keepalive interval in ms (spec §6 heartbeat). Defaults to 15_000. */
+  sseHeartbeatMs?: number;
 }
 
 export type App = FastifyInstance;
@@ -323,7 +325,7 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     for (const env of bus.replay(id, lastSeq)) writeEnvelope(env);
 
     const unsubscribe = bus.subscribe(id, (env) => writeEnvelope(env));
-    const heartbeat = setInterval(() => reply.raw.write(": ping\n\n"), 15_000);
+    const heartbeat = setInterval(() => reply.raw.write(": ping\n\n"), opts.sseHeartbeatMs ?? 15_000);
 
     req.raw.on("close", () => {
       unsubscribe();

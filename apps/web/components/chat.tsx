@@ -20,7 +20,9 @@ export function Chat() {
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<"idle" | "streaming" | "degraded">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [waiting, setWaiting] = useState(false);
   const closeStream = useRef<(() => void) | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!getToken) return;
@@ -31,18 +33,22 @@ export function Chat() {
     setMessages((prev) => {
       switch (env.kind) {
         case "text_delta":
+          setWaiting(false);
           return appendAssistant(prev, env.payload.delta);
         case "tool_call":
+          setWaiting(false);
           return [...prev, { role: "tool", text: `⚙ ${env.payload.toolName}` }];
         case "tool_result":
           return prev;
         case "session_state":
           setStatus(env.payload.state === "streaming" ? "streaming" : env.payload.state === "degraded" ? "degraded" : "idle");
+          if (env.payload.state !== "streaming") setWaiting(false);
           return env.payload.state === "restarted"
             ? [...prev, { role: "system", text: "agent restarted — context restored" }]
             : prev;
         case "error":
           setError(env.payload.message);
+          setWaiting(false);
           return prev;
         default:
           return prev;
@@ -56,6 +62,7 @@ export function Chat() {
       setActiveId(id);
       setMessages([]);
       setError(null);
+      setWaiting(false);
       if (!client) return;
       closeStream.current = client.openStream(id, applyEnvelope);
     },
@@ -72,6 +79,12 @@ export function Chat() {
     return () => closeStream.current?.();
   }, [refreshList]);
 
+  // Keep the newest message (and the typing indicator) in view.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, waiting]);
+
   const send = useCallback(async () => {
     if (!client || !input.trim()) return;
     let id = activeId;
@@ -83,12 +96,18 @@ export function Chat() {
     }
     setMessages((prev) => [...prev, { role: "user", text: input }]);
     setInput("");
+    setWaiting(true);
     try {
-      await client.prompt(id, { message: input });
+      // pi rejects a plain prompt while mid-turn — queue it as a steer instead.
+      await client.prompt(id, {
+        message: input,
+        ...(status === "streaming" ? { streamingBehavior: "steer" as const } : {}),
+      });
     } catch (err) {
+      setWaiting(false);
       setError(String(err));
     }
-  }, [client, input, activeId, openConversation]);
+  }, [client, input, activeId, openConversation, status]);
 
   const statusLabel = useMemo(
     () => ({ idle: "idle", streaming: "working…", degraded: "degraded — will recover on next message" })[status],
@@ -125,7 +144,7 @@ export function Chat() {
         </div>
       )}
 
-      <div className="flex-1 space-y-2 overflow-y-auto rounded-lg border border-[#2b3245] bg-[#161b27] p-4">
+      <div ref={scrollRef} className="flex-1 space-y-2 overflow-y-auto rounded-lg border border-[#2b3245] bg-[#161b27] p-4">
         {messages.map((m, i) => (
           <div
             key={i}
@@ -142,6 +161,16 @@ export function Chat() {
             {m.text}
           </div>
         ))}
+        {(waiting || (status === "streaming" && messages[messages.length - 1]?.role !== "assistant")) && (
+          <div className="flex items-center gap-2 px-3 py-1" aria-live="polite" data-testid="typing">
+            <span className="text-xs text-[#8b96a8]">pi is thinking</span>
+            <span className="flex gap-1">
+              <i className="size-1.5 animate-bounce rounded-full bg-[#8b96a8] [animation-delay:-0.3s]" />
+              <i className="size-1.5 animate-bounce rounded-full bg-[#8b96a8] [animation-delay:-0.15s]" />
+              <i className="size-1.5 animate-bounce rounded-full bg-[#8b96a8]" />
+            </span>
+          </div>
+        )}
         {messages.length === 0 && (
           <div className="grid h-full place-items-center text-sm text-[#8b96a8]">
             say something — pi is listening
@@ -160,7 +189,7 @@ export function Chat() {
           className="flex-1 rounded-lg border border-[#2b3245] bg-[#161b27] px-3 py-2 text-sm outline-none focus:border-[#1f6feb]"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="message the agent…"
+          placeholder={waiting ? "pi is thinking…" : status === "streaming" ? "steer the agent…" : "message the agent…"}
         />
         <button
           className="rounded-lg bg-[#1f6feb] px-4 py-2 text-sm font-medium disabled:opacity-40"

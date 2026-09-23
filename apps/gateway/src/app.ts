@@ -34,6 +34,8 @@ export interface AppOptions {
   maxConversationsPerUser?: number;
   /** Optional metrics override for tests. Defaults to a fresh in-memory registry. */
   metrics?: Metrics;
+  /** Optional logger override for tests. Defaults to silent (logger: false). */
+  logger?: boolean;
 }
 
 export type App = FastifyInstance;
@@ -42,7 +44,13 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   // Spec §10: 1MB max message. Fastify defaults to 1MB anyway, but we set it
   // explicitly so the value lives in the code (not in the runtime default) and
   // so the test asserts the contract instead of an implementation accident.
-  const app = Fastify({ logger: false, bodyLimit: 1_048_576 });
+  // Pino (bundled with Fastify) emits structured JSON logs by default in
+  // production. Tests opt out via opts.logger = false.
+  const app = Fastify({
+    logger: opts.logger ?? false,
+    bodyLimit: 1_048_576,
+    disableRequestLogging: opts.logger === false,
+  });
   const store = new Store(opts.dbPath);
   const bus = new EventBus(store);
   // Spec §10: default-deny workspace allowlist. Override via opts in tests.
@@ -273,7 +281,10 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   });
 
   app.addHook("onClose", async () => {
-    supervisor.disposeAll();
+    // Graceful shutdown: wait up to 5s for in-flight pi children to exit
+    // before closing the store. Without this, a deploy during a turn kills
+    // the child mid-prompt and the user sees a partial response.
+    await supervisor.disposeAll();
     store.close();
   });
 

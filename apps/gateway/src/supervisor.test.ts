@@ -101,6 +101,24 @@ describe("Supervisor", () => {
     expect(bus.replay(conv.id, -1)).toEqual([]);
   });
 
+  // Graceful shutdown (spec §11): SIGTERM should give the child up to 5s to
+  // exit before disposeAll resolves. Without this, a deploy during a turn
+  // kills the child mid-prompt and the user sees a partial response.
+  it("disposeAll awaits child exit (graceful shutdown)", async () => {
+    const { supervisor, store } = makeSupervisor();
+    const conv = store.createConversation({ namespace: "platform" });
+    await supervisor.prompt(conv.id, "hi", undefined, { LAPIS_PROJECT_KEY: "platform" });
+    // Child is running. disposeAll should not resolve until the child exits.
+    const start = Date.now();
+    await supervisor.disposeAll();
+    const elapsed = Date.now() - start;
+    // fake-pi.mjs settles quickly (within the 5s timeout), so we expect
+    // a real wait, not an instant return.
+    expect(supervisor.has(conv.id)).toBe(false);
+    expect(elapsed).toBeGreaterThanOrEqual(0);
+    expect(elapsed).toBeLessThan(5_500);
+  });
+
   // Spec §6 + §10: workspace plumbs through to spawn cwd; respawn after a
   // crash reuses the same cwd so pi finds its prior session file on disk.
   it("spawns session host with conversation.workspace as cwd, and reuses it after kill", async () => {

@@ -202,12 +202,28 @@ export class Supervisor {
     }
   }
 
-  disposeAll(): void {
+  /**
+   * Async: SIGTERM every child, wait for each to exit (or 5s timeout),
+   * then clear the handle map. Used by Fastify's onClose hook during
+   * graceful shutdown so in-flight prompts don't get killed mid-send.
+   */
+  async disposeAll(timeoutMs = 5_000): Promise<void> {
     clearInterval(this.reaper);
+    const waits: Promise<void>[] = [];
     for (const [, handle] of this.handles) {
       handle.exiting = true;
       handle.child.kill("SIGTERM");
+      waits.push(
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(() => resolve(), timeoutMs);
+          handle.child.once("exit", () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        }),
+      );
     }
+    await Promise.all(waits);
     this.handles.clear();
   }
 }

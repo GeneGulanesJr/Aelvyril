@@ -22,19 +22,40 @@ so a process exit triggers an automatic restart.
 
 ## Log inspection
 
-The gateway doesn't ship a structured logger by default — stderr-only
-text from Fastify + child stderr. In dev, logs include envelope `seq`
-numbers, conversation IDs, and child PIDs.
+The gateway uses [pino](https://getpino.io/) (bundled with Fastify) and
+emits **structured JSON logs** to stdout in production. In dev, set
+`GATEWAY_LOG=silent` to quiet them.
 
 ```sh
-# Dev: tail the foreground process output
-pnpm --filter @aelvyril/gateway start 2>&1 | tee /tmp/gateway.log
+# Dev (logs off — keeps terminal clean):
+GATEWAY_LOG=silent pnpm --filter @aelvyril/gateway start
 
-# Prod: docker logs
-docker compose -f infra/compose.yaml logs -f gateway
+# Dev (default — JSON logs to stdout):
+pnpm --filter @aelvyril/gateway start
 
-# Filter for envelope publish errors (DB connection issues)
-grep -E 'SqliteError|not open|database is locked' /tmp/gateway.log
+# Pipe through jq for readability:
+pnpm --filter @aelvyril/gateway start 2>&1 | jq
+
+# Prod: docker logs (JSON on stdout; pipe through jq in your log
+# aggregator / Loki / Datadog pipeline)
+docker compose -f infra/compose.yaml logs -f gateway | jq
+```
+
+Each log line is one JSON object with at least: `level`, `time`, `msg`,
+plus request-scoped fields (`reqId`, `method`, `url`, `statusCode`,
+`responseTime`) for request-completion lines.
+
+Filter examples:
+
+```sh
+# Errors only
+docker logs ... 2>&1 | jq 'select(.level == "error" or .level >= 50)'
+
+# Slow requests (>1s)
+docker logs ... 2>&1 | jq 'select(.responseTime > 1000)'
+
+# DB-related errors
+docker logs ... 2>&1 | jq 'select(.msg | test("Sqlite|database|not open"))'
 ```
 
 ## Common errors

@@ -31,10 +31,21 @@ const app = await buildApp({
       // at node.exe and put the cli.js path into PI_COMMAND_ARGS (JSON array).
       process.env.PI_COMMAND_ARGS
       ? (JSON.parse(process.env.PI_COMMAND_ARGS) as string[])
-      : ["--mode", "rpc"],
+      : [
+          "--mode",
+          "rpc",
+          // Spec §14: pi's default provider is google — always pass
+          // --provider/--model explicitly so provider drift between sessions
+          // can't silently change behavior.
+          ...(process.env.PI_PROVIDER ? ["--provider", process.env.PI_PROVIDER] : []),
+          ...(process.env.PI_MODEL ? ["--model", process.env.PI_MODEL] : []),
+        ],
   idleMs: Number(process.env.GATEWAY_IDLE_MS ?? 300_000),
   verifyToken: resolveVerifier(),
   allowedOrigins: process.env.GATEWAY_ALLOWED_ORIGIN?.split(",").map((o) => o.trim()),
+  // Spec §11: structured JSON logs in prod (Fastify pino). Default on;
+  // opt out with GATEWAY_LOG=silent for dev when stdout noise is annoying.
+  logger: process.env.GATEWAY_LOG !== "silent",
 });
 
 // Default to dual-stack ("::" accepts IPv4-mapped too) so `localhost` resolves

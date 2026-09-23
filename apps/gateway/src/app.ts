@@ -41,6 +41,8 @@ export interface AppOptions {
   probes?: BackingServiceProbes;
   /** Started-at timestamp used by the /healthz uptime field. */
   startedAt?: number;
+  /** Disable compression middleware (tests / explicit opt-out). */
+  compress?: boolean;
 }
 
 export type App = FastifyInstance;
@@ -104,6 +106,18 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     origin: opts.allowedOrigins ?? false,
     credentials: true,
   });
+
+  // Spec §11: gzip + zstd compression on JSON responses. SSE streams
+  // (text/event-stream) are excluded by @fastify/compress by default —
+  // compressing them would buffer the whole stream and break Last-Event-ID
+  // reconnect semantics. Tests opt out via opts.compress.
+  if (opts.compress !== false) {
+    await app.register(import("@fastify/compress"), {
+      global: true,
+      threshold: 1_024,
+      encodings: ["gzip", "deflate", "identity"],
+    });
+  }
 
   // Echo the request id on every response so the web client + reverse
   // proxy can correlate a single user request across web + gateway +

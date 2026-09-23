@@ -1,27 +1,24 @@
 # Per-conversation LaPis namespace via `LAPIS_PROJECT_KEY` env injection
 
-We tag every conversation in its `pi --mode rpc` child process with `LAPIS_PROJECT_KEY=user:<clerkUserId>` (lowercased) so LaPis namespaces memory per Clerk user — and we do it via the small upstream knob `projectFromCwd()` already checks before `basename(cwd)` matching.
+The Aelvyril gateway spawns a `pi --mode rpc` child per conversation and passes `LAPIS_PROJECT_KEY=user:<clerkUserId>` (lowercased) so multi-user access to the same repo doesn't collide on `basename(cwd)`. We decided this because agent extensions — LaPis in particular — read `process.cwd()` directly (process-global state) and key memory namespaces from `basename(cwd)`; running multiple `AgentSession`s in one gateway process would make conversations trample each other's cwd and collide on memory namespaces. The two-site upstream patch (in `LaPis/`) makes this work without changing LaPis's public surface.
 
-**Why this mechanism (and not the alternatives):**
-- `basename(cwd)` is the upstream default — but it collides on multi-user access to the same repo (`user_a` and `user_b` both open `LaPis/`, both get namespace `lapis`).
-- Synthetic per-session directories (symlink `u<userId>--<repo>` to encode the user into `basename(cwd)`) were considered and rejected: zero upstream change, but the synthetic cwd leaks into git discovery, session naming, AGENTS.md walking, and any future tool that assumes `process.cwd()` is a real repo.
-- "Just rewrite every `process.cwd()` call in LaPis" is the right long-term answer for LaPis proper, but is out of scope for Aelvyril and would never catch a future extension that assumes cwd is real.
+**Considered options:**
+- *In-process SDK sessions + upstream LaPis refactor* — rejected: requires threading `ctx.cwd` through every `process.cwd()` call site in LaPis forever, and any future extension assuming process-global state reintroduces the bug silently.
+- *Synthetic per-session directories* (symlink dir named `u<userId>--<repo>` to encode the namespace into `basename(cwd)`) — rejected: zero upstream change but leaks synthetic cwd into git discovery, session naming, and AGENTS.md walking.
+- *Per-user LaPis instances per namespace* — rejected: each LaPis opens a separate SQLite file; we lose the cross-project lookup the future memory-browser panel wants (spec §8).
 
-**The patch (Phase 4 work, owned there):** at the top of **both** functions:
-- `src/hooks-engine/project.js:135` — `resolveProjectKey()` (must preempt repo-name matching, which returns `repo.name` first)
-- `extensions/memory-layer/host/project-detector.ts:95` — `detectProject()` (the Pi extension never calls `projectFromCwd`)
+**The patch (upstream — landed in LaPis @ `c49aeb3` on `docs/decision-engine-plan`):** the env override lives at the TOP of two functions:
 
-Read `LAPIS_PROJECT_KEY` from env, lowercase it, return it if non-empty. No schema impact. `LAPIS_HOME` is read at module load (safe per child). Zero `process.chdir` in the codebase. Backward compatible — the host CLI is unaffected.
+- `src/hooks-engine/project.js resolveProjectKey()` — the canonical resolver; repo-name matching preempts `projectFromCwd()` so the env check must come first.
+- `extensions/memory-layer/host/project-detector.ts detectProject()` — the Pi extension never calls `projectFromCwd()`, so the override MUST live here too. Without this site the chat path is uncoupled from the env override and every user's memory collapses into one namespace.
 
-**Gateway wiring (already shipped, Phase 2):**
-- `apps/gateway/src/auth.ts` → `toUserNamespace(userId)` returns `user:<userId.toLowerCase()>`.
-- `apps/gateway/src/supervisor.ts` → `prompt(..., extraEnv)` passes `{ LAPIS_PROJECT_KEY: namespace }` through to the spawned child at spawn time only (a reused session keeps its env).
-- `apps/gateway/src/app.ts` → every prompt route injects `extraEnv = { LAPIS_PROJECT_KEY: namespace }`.
-- The fake child (`fixtures/fake-pi.mjs`) echoes `process.env.LAPIS_PROJECT_KEY` back as a `custom_env_echo` protocol event; `apps/gateway/src/sse.test.ts` asserts the echo carries `user:user_test1` end-to-end — that test is the regression guard for this contract.
+Both sites: read `LAPIS_PROJECT_KEY` from env, lowercase, return it if non-empty. No schema impact. Backward compatible — unset env falls through to existing resolution. `LAPIS_HOME` is read at module load (safe per child). Zero `process.chdir` anywhere in the codebase; per-request client-side key resolution confirmed.
 
 **Consequences:**
-- Any future per-child env value (e.g. `LAPIS_HOME` overrides, per-conversation provider keys) flows through the same `extraEnv` channel.
-- If LaPis ever removes `LAPIS_PROJECT_KEY`, Aelvyril breaks server-side with no client-visible warning — we own the upstream patch as part of Phase 4.
-- "Fixing this with cwd-rewriting in LaPis" is a perpetual goal — not a substitute.
+- Never "optimize" session hosts back into the gateway process (see ADR 0001).
+- The gateway injects `LAPIS_PROJECT_KEY` per spawn via `Supervisor.prompt(..., { LAPIS_PROJECT_KEY: namespace })`. A reused session keeps its env across calls.
+- Workspace plumbing (Phase 3) preserves the cwd across kill + re-prompt so pi's session file is found on the next spawn.
+- If LaPis ever removes `LAPIS_PROJECT_KEY`, Aelvyril breaks server-side with no client-visible warning — the patch needs to stay as a load-bearing contract.
+- For PiSandboxed: same pattern would need a per-conversation env override there too. Tracked as Phase 4 deferred work.
 
-Status: accepted 2026-09-22 (spec: `docs/superpowers/specs/2026-09-22-aelvyril-agent-platform-design.md`, decision D7). Gateway wiring shipped in Phase 2; upstream patch is Phase 4.
+Status: accepted 2026-09-22 (spec: `docs/superpowers/specs/2026-09-22-aelvyril-agent-platform-design.md`, decision D6/D7).

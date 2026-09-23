@@ -10,9 +10,23 @@
 
 **Blocking prerequisite (human):** real Clerk keys (`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`) in `apps/web/.env` + `apps/gateway/.env`. Build/tests use documented placeholders (`pk_test_placeholder` / `sk_test_placeholder`) so CI stays green; the app is only fully functional with real keys.
 
-> **STATUS (2026-09-23):** Tasks 1–4 DONE and committed — `9f3b333` (gateway auth), `1b7808c` (web scaffold), `bdc33c1` (SSE parser + client), `cf02285` (chat UI). Task 5 battery green (17 shared + 30 gateway + 4 web tests; web build ✓) and root README added. Remaining: `clerk auth login` → `clerk init --app app_3JiIWEGy3UjKJJQAmVA3pTSvd3r` (writes real keys), `clerk doctor`, two-process smoke with real sign-in.
+> **STATUS (2026-09-23 → 2026-09-24):** Tasks 1–4 DONE and committed — `9f3b333` (gateway auth), `1b7808c` (web scaffold), `bdc33c1` (SSE parser + client), `cf02285` (chat UI). Task 5 battery green (17 shared + 30 gateway + 4 web tests; web build ✓) and root README added.
 >
-> Implementation deviations from this plan (all reviewed): `buildApp` is async (fastify plugin ordering); `@clerk/backend` resolved v3 → standalone `verifyToken(token, { secretKey })` export; supervisor relays `custom_*` events to the bus (needed for the D7 env-echo assertion); namespace index created after the legacy `ALTER TABLE`; `@clerk/nextjs` v6 rejects ALL placeholder publishable keys at prerender → root layout uses `dynamic = "force-dynamic"`; webpack `extensionAlias` in `next.config.ts` for `.js`→`.ts` workspace resolution; web `test` script uses `--passWithNoTests` until Task 3 landed.
+> **Close-out (post plan) — done:**
+> - `a98757c` — `start`/`dev` scripts auto-load `.env` via Node 22 `+`s `--env-file-if-exists` (was silently falling back to `PI_FAKE=1`).
+> - `bfe4f79` — migrated `app/page.tsx` from `<SignedIn>/<SignedOut>` (removed in `@clerk/nextjs` v7 / Clerk Core 3) to server-side `auth()` helper.
+> - Real Clerk keys wired: the planned `app_3JiIWEGy3UjKJJQAmVA3pTSvd3r` does NOT exist in the user's Clerk account. Linked to GulanesKorp Civic Intelligence (`app_3HuJP3CVZ84JAKqJVnHOVvVVQSI`) and pulled its dev keys. Then **switched to a fresh deciding-seal-736 instance** (keys pasted directly into `apps/web/.env.local` + `apps/gateway/.env`); that instance is not visible to `clerk apps list` from this account, so the CLI link stays on GulanesKorp. Runtime auth is independent of the CLI link — no functional impact.
+> - Gateway `start` now passes `--provider` + `--model` from env per spec §14 ("default provider is google — always pass `--provider`/`--model`"). PI_FAKE=1 removed; real `pi --mode rpc` is the default. Set PI_FAKE=1 in `.env` to fall back to the scripted fixture.
+> - Port 3000 collision on dev host: web binds to 3001 (`next dev -p 3001`); `GATEWAY_ALLOWED_ORIGIN` mirrors. Production containers are unaffected.
+> - Two-process smoke verified end-to-end: gateway `/healthz` 200, web `/` 200, web `/sign-in` 200, CORS preflight from 3001 returns 204 with correct ACAO.
+>
+> **Open (Phase 3 territory):**
+> - Workspace allowlist — spec §10 says only curated repos mountable; gateway currently accepts any `workspace` string.
+> - Session resume from the pi session file (spec §6) — child crash today only marks `degraded`, no respawn from history.
+> - Conversation list UX (rename, delete, search) — currently a `<select>` dropdown.
+> - Playwright E2E (spec §11) — only SSE parser has web tests today.
+>
+> Implementation deviations from this plan (all reviewed): `buildApp` is async (fastify plugin ordering); `@clerk/backend` resolved v3 → standalone `verifyToken(token, { secretKey })` export; supervisor relays `custom_*` events to the bus (needed for the D7 env-echo assertion); namespace index created after the legacy `ALTER TABLE`; `@clerk/nextjs` v7 (Core 3) removed `<SignedIn>/<SignedOut>` → root page uses server `auth()`; webpack `extensionAlias` in `next.config.ts` for `.js`→`.ts` workspace resolution; web `test` script uses `--passWithNoTests` until Task 3 landed.
 
 ---
 

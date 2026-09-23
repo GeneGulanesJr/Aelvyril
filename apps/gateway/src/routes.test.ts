@@ -210,4 +210,58 @@ describe("v1 routes", () => {
     const stillThere = await u1.get(`/v1/conversations/${conv.id}`);
     expect(stillThere.statusCode).toBe(200);
   });
+
+  // Spec §10: per-user rate limit on /v1/conversations/:id/prompt.
+  // Uses a deterministic 1-token-capacity limiter with no refill — the
+  // second prompt from the same user in the same test must trip it.
+  it("rate-limits the prompt route: 429 + retry-after once a user exceeds their bucket", async () => {
+    const consumed: string[] = [];
+    const rl = {
+      consume: (uid: string) => {
+        consumed.push(uid);
+        // First call OK, second call (same user within this test) throttled.
+        return consumed.filter((u) => u === uid).length === 1 ? 0 : -1;
+      },
+      reset: () => {},
+    };
+    app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      workspaceAllowlist: {
+        isAllowed: () => true,
+        resolve: () => null,
+        size: () => Number.POSITIVE_INFINITY,
+      },
+      rateLimiter: rl,
+    });
+    const u1 = authed(app, "good");
+    const conv = (await (await u1.post("/v1/conversations", {})).json()) as { id: string };
+    // First prompt: OK (consumed=1, returns 0).
+    const first = await u1.post(`/v1/conversations/${conv.id}/prompt`, { message: "hi" });
+    expect(first.statusCode).toBe(202);
+    // Second prompt from same user: bucket empty → 429 with retry-after.
+    const second = await u1.post(`/v1/conversations/${conv.id}/prompt`, { message: "again" });
+    expect(second.statusCode).toBe(429);
+    expect(second.headers["retry-after"]).toBe("60");
+    expect(second.json()).toEqual({ error: "rate_limited" });
+  });
+
+  // Spec §10: per-user concurrent-conversation cap (v1: 3/user).
+  it("caps total conversations per user at 3 (503 + limit field on the 4th)", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    await u1.post("/v1/conversations", { title: "1" });
+    await u1.post("/v1/conversations", { title: "2" });
+    await u1.post("/v1/conversations", { title: "3" });
+    const fourth = await u1.post("/v1/conversations", { title: "4" });
+    expect(fourth.statusCode).toBe(503);
+    expect(fourth.json()).toEqual({ error: "conversation_limit_reached", limit: 3 });
+    // Different user is unaffected — cap is per-namespace.
+    const u2 = authed(app, "good2");
+    const u2first = await u2.post("/v1/conversations", { title: "u2-1" });
+    expect(u2first.statusCode).toBe(201);
+  });
 });

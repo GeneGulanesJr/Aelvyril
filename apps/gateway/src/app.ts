@@ -16,6 +16,7 @@ import { EventBus } from "./bus.js";
 import { Supervisor } from "./supervisor.js";
 import type { TokenVerifier } from "./auth.js";
 import { createWorkspaceAllowlist, type WorkspaceAllowlist } from "./workspace-allowlist.js";
+import { createRateLimiter, type RateLimiter } from "./rate-limit.js";
 
 export interface AppOptions {
   dbPath: string;
@@ -26,6 +27,10 @@ export interface AppOptions {
   allowedOrigins?: string[];
   /** Optional workspace allowlist override for tests. Defaults to a default-deny list. */
   workspaceAllowlist?: WorkspaceAllowlist;
+  /** Optional rate-limiter override for tests. Defaults to 20 req/min/user. */
+  rateLimiter?: RateLimiter;
+  /** Max total conversations per user (spec §10). Default 3. */
+  maxConversationsPerUser?: number;
 }
 
 export type App = FastifyInstance;
@@ -39,6 +44,13 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   const bus = new EventBus(store);
   // Spec §10: default-deny workspace allowlist. Override via opts in tests.
   const workspaceAllowlist = opts.workspaceAllowlist ?? createWorkspaceAllowlist(process.env.GATEWAY_WORKSPACE_ALLOWLIST);
+  // Spec §10: per-user rate limit on /v1/conversations/:id/prompt.
+  // 20 requests/min = capacity 20, refill 20/60 tokens/sec.
+  const rateLimiter = opts.rateLimiter ?? createRateLimiter({
+    capacity: 20,
+    refillPerSecond: 20 / 60,
+  });
+  const maxConversationsPerUser = opts.maxConversationsPerUser ?? 3;
   const supervisor = new Supervisor({
     bus,
     store,
@@ -78,6 +90,10 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const userId = await user(req, reply);
     if (!userId) return;
     const namespace = toUserNamespace(userId);
+    // Spec §10: per-user concurrent-conversation cap. Delete old ones to free space.
+    if (store.countConversations(namespace) >= maxConversationsPerUser) {
+      return reply.code(503).send({ error: "conversation_limit_reached", limit: maxConversationsPerUser });
+    }
     const body = CreateConversationBody.parse(req.body ?? {});
     // Spec §10: reject workspaces not on the allowlist (default-deny).
     if (body.workspace !== undefined && !workspaceAllowlist.isAllowed(body.workspace)) {
@@ -129,6 +145,14 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const userId = await user(req, reply);
     if (!userId) return;
     const namespace = toUserNamespace(userId);
+    // Spec §10: per-user rate limit. 429 with a Retry-After header.
+    const remaining = rateLimiter.consume(userId);
+    if (remaining < 0) {
+      return reply
+        .code(429)
+        .header("retry-after", "60")
+        .send({ error: "rate_limited" });
+    }
     const { id } = req.params as { id: string };
     const conv = store.getConversation(id, namespace);
     if (!conv) return reply.code(404).send({ error: "not_found" });

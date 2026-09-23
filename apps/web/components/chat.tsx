@@ -331,6 +331,25 @@ export function Chat() {
         </div>
       )}
 
+      {/* Spec §10: persistent banner while a backing service is degraded.
+          Non-dismissable — the state IS the source of truth, hiding it
+          would mislead the user. Disappears automatically when the next
+          session_state envelope reports idle/streaming. */}
+      {status === "degraded" && (
+        <div
+          aria-live="polite"
+          className="mb-2 flex items-center gap-2 rounded border border-[#e3b341]/40 bg-[#e3b341]/10 px-3 py-2 text-xs text-[#e3b341]"
+          data-testid="degraded-banner"
+          role="status"
+        >
+          <span aria-hidden="true">⚠</span>
+          <span>
+            backing service degraded — chat continues. Next prompt will
+            respawn the session host automatically.
+          </span>
+        </div>
+      )}
+
       <div ref={scrollRef} className="flex-1 space-y-2 overflow-y-auto rounded-lg border border-[#2b3245] bg-[#161b27] p-4">
         {messages.map((m, i) => (
           <div

@@ -141,6 +141,22 @@ export class Store {
     this.db.prepare("UPDATE conversations SET state = ? WHERE id = ?").run(state, id);
   }
 
+  /** Spec §10: total conversations for a namespace — used for the cap check. */
+  countConversations(namespace: string): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n FROM conversations WHERE namespace = ?")
+      .get(namespace) as { n: number };
+    return row.n;
+  }
+
+  /** Spec §10: conversations currently streaming for a namespace. */
+  countStreaming(namespace: string): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n FROM conversations WHERE namespace = ? AND state = 'streaming'")
+      .get(namespace) as { n: number };
+    return row.n;
+  }
+
   appendEvent(ev: NewEvent): StoredEvent {
     return this.appendTxn(ev);
   }

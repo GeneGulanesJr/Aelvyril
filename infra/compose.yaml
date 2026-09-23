@@ -1,0 +1,160 @@
+# Spec §4/§5/§9: Aelvyril stack topology.
+#
+# Five services on one network (aelvyril-net). web is the only host-published
+# port (3000). Everything else is loopback / internal. Two profiles:
+#   dev   — bind-mounts apps/* for hot reload; uses local builds
+#   prod  — uses prebuilt images; no source mounts
+#
+# Sibling-checkout layout (per spec §5): clone Aelvyril alongside
+# ../LaPis, ../PiSandboxed, ../LayaMCP. Prebuilt images replace these later.
+
+name: aelvyril
+
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_GATEWAY_URL: http://gateway:8787
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:?required}
+      CLERK_SECRET_KEY: ${WEB_CLERK_SECRET_KEY:?required}
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      # Next.js compiles on first request; check that the port is listening
+      # rather than waiting for a non-existent ready endpoint.
+      test: ["CMD", "node", "-e", "require('net').connect(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+    profiles: [dev, prod]
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.gateway
+    restart: unless-stopped
+    expose:
+      - "8787"  # internal-only; only web needs to reach it
+    environment:
+      GATEWAY_PORT: "8787"
+      GATEWAY_HOST: "::"
+      GATEWAY_DB: /data/gateway.db
+      GATEWAY_IDLE_MS: "300000"
+      GATEWAY_ALLOWED_ORIGIN: ${GATEWAY_ALLOWED_ORIGIN:-http://localhost:3000}
+      GATEWAY_WORKSPACE_ALLOWLIST: ${GATEWAY_WORKSPACE_ALLOWLIST:-}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:?required}
+      # Spec §14: always pass --provider/--model explicitly
+      PI_PROVIDER: ${PI_PROVIDER:-google}
+      PI_MODEL: ${PI_MODEL:-gemini-2.0-flash}
+      # Real LLM provider keys flow to children at spawn time
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      LAPIS_HOME: /data/lapis
+    volumes:
+      - gateway-data:/data
+      - pi-sessions:/sessions
+      - ${WORKSPACES_HOST_PATH:-./workspaces}:/workspaces:ro
+    depends_on:
+      lapis:
+        condition: service_healthy
+      layamcp:
+        condition: service_healthy
+      sandd:
+        condition: service_started  # sandd health is TCP-only
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8787/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    profiles: [dev, prod]
+
+  lapis:
+    # Spec §5: built from sibling checkout. Prebuilt image will replace this.
+    build:
+      context: ../LaPis
+      dockerfile: infra/docker/Dockerfile.lapis
+    restart: unless-stopped
+    expose:
+      - "8788"
+    environment:
+      LAPIS_HOME: /data/lapis
+    volumes:
+      - lapis-data:/data/lapis
+    healthcheck:
+      # LaPis exposes no /health today; TCP-open only.
+      test: ["CMD", "node", "-e", "require('net').connect(8788,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+    profiles: [dev, prod]
+
+  sandd:
+    # Spec §9: /dev/kvm passthrough required; bind host hardcoded loopback
+    # until upstream adds SANDD_HOST. Token via pre-seeded file mount.
+    build:
+      context: ../PiSandboxed
+      dockerfile: infra/docker/Dockerfile.sandd
+    restart: unless-stopped
+    devices:
+      - /dev/kvm:/dev/kvm
+    cap_add:
+      - SYS_ADMIN
+    volumes:
+      - sandbox-images:/images
+      - sandd-token:/token:ro
+    environment:
+      SANDD_PORT: "7391"
+      SMOLVM_BIN: /usr/local/bin/smolvm
+      SMOLVM_IMAGES_DIR: /images
+    # Sandd binds hardcoded 127.0.0.1 per research 2026-09-22. The gateway
+    # reaches it via the host network in dev. In prod, use a SANDD_HOST
+    # upstream patch (Phase 4 deferred).
+    network_mode: host
+    profiles: [prod]
+    # dev profile uses docker-compose.override.yml to bind :7391 to host
+
+  layamcp:
+    # Spec §9: CPU-only torch, ~4GB RAM, port 8765, /health endpoint.
+    # The /health fix was upstream Phase 4 work (commit e08ced4).
+    build:
+      context: ../LayaMCP
+      dockerfile: infra/docker/Dockerfile.layamcp
+    restart: unless-stopped
+    expose:
+      - "8765"
+    volumes:
+      - hf-models:/root/.cache/huggingface
+    healthcheck:
+      # Models load at module import; if /health answered, they're resident.
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8765/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s  # model load + warmup is slow on first boot
+    profiles: [dev, prod]
+
+networks:
+  default:
+    name: aelvyril-net
+    driver: bridge
+
+volumes:
+  gateway-data:
+  lapis-data:
+  pi-sessions:
+  sandbox-images:
+  hf-models:
+  sandd-token:
+    # Pre-seeded by operator: `docker run --rm -v sandd-token:/out alpine \
+    #   sh -c "echo TOKEN > /out/token && chmod 0600 /out/token"`
+    external: false

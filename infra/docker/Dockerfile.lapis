@@ -1,0 +1,28 @@
+# Spec §9: LaPis HTTP/MCP server, Node 22 slim.
+# Build context: ../LaPis (sibling checkout).
+#
+# Phase 4 upstream patch lives in LaPis: LAPIS_PROJECT_KEY env override at
+# src/hooks-engine/project.js and extensions/memory-layer/host/project-detector.ts.
+# Without that, multi-user gateway conversations would all collide on
+# basename(cwd).
+
+FROM node:22-slim AS deps
+WORKDIR /repo
+RUN corepack enable && corepack prepare pnpm@10.15.0 --activate
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm fetch --prod=false
+COPY . .
+RUN pnpm install --frozen-lockfile --offline --prod=false
+
+FROM node:22-slim AS runtime
+ENV NODE_ENV=production \
+    LAPIS_HOME=/data/lapis
+COPY --from=deps /repo /repo
+WORKDIR /repo
+RUN groupadd --gid 1001 nodejs \
+    && useradd --uid 1001 --gid nodejs --shell /bin/bash --create-home lapis \
+    && mkdir -p /data/lapis \
+    && chown -R lapis:nodejs /data/lapis /repo
+USER lapis
+EXPOSE 8788
+CMD ["node", "--env-file-if-exists=/repo/.env", "/repo/src/mcp/server.js"]

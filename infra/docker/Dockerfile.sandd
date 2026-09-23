@@ -1,0 +1,30 @@
+# Spec §9: PiSandboxed sandbox orchestrator. Requires /dev/kvm passthrough
+# (libkrun backend) and a pre-seeded auth token file (research 2026-09-22:
+# auth is file-only, ~/.pisandboxed/token at 0600; bind host hardcoded 127.0.0.1).
+#
+# Build context: ../PiSandboxed (sibling checkout).
+
+FROM rust:1-slim-bookworm AS build
+WORKDIR /repo
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY . .
+RUN cargo build --release --bin sandd
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libkrun2 libkrunfw2-tools qemu-utils ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+ENV SANDD_PORT=7391 \
+    SMOLVM_IMAGES_DIR=/images
+COPY --from=build /repo/target/release/sandd /usr/local/bin/sandd
+RUN mkdir -p /images /token \
+    && chmod 0700 /token
+# Operator must pre-seed: docker run --rm -v sandd-token:/out alpine \
+#   sh -c "echo TOKEN > /out/token && chmod 0600 /out/token"
+VOLUME ["/images", "/token"]
+EXPOSE 7391
+# Sandd binds 127.0.0.1 hardcoded; use network_mode: host in compose so the
+# gateway (also on the host network in prod) can reach it.
+CMD ["sandd"]

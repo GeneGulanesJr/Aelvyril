@@ -1,0 +1,38 @@
+# Spec §9: LayaMCP decision engine, CPU-only torch, port 8765, /health endpoint.
+# Build context: ../LayaMCP (sibling checkout).
+#
+# Phase 4 upstream patch lives in LayaMCP: dropped mcp.server.fastapi
+# import (broken on every released mcp SDK today), mounted SSE transport on
+# plain FastAPI, pinned mcp<2, added GET /health. Without that, layamcp
+# would not start at all.
+
+FROM python:3.12-slim AS deps
+WORKDIR /repo
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc \
+    && rm -rf /var/lib/apt/lists/*
+COPY pyproject.toml .
+# CPU-only torch keeps the image under 4GB per spec §9.
+RUN pip install --no-cache-dir \
+    torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir .
+COPY laya_mcp ./laya_mcp
+
+FROM python:3.12-slim AS runtime
+ENV LAYAMCP_HOST=127.0.0.1 \
+    LAYAMCP_PORT=8765 \
+    # Pre-warm model cache so the healthcheck (models-resident) is honest.
+    LAYAMCP_PRELOAD_MODELS=auto
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=deps /usr/local/bin/layamcp /usr/local/bin/layamcp
+COPY laya_mcp /repo/laya_mcp
+WORKDIR /repo
+# HF model cache survives container restarts via the volume.
+ENV HF_HOME=/root/.cache/huggingface
+EXPOSE 8765
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD wget -q -O - http://127.0.0.1:8765/health || exit 1
+CMD ["layamcp"]

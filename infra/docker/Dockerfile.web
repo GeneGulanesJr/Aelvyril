@@ -1,0 +1,39 @@
+# Spec §9: Next.js standalone, Node 22 slim, non-root user.
+# Build context: Aelvyril repo root (so pnpm-workspace.yaml + apps/web resolve).
+#
+# Multi-stage: deps → build → runtime. Uses --webpack (Turbopack rejects the
+# .js → .ts extension aliasing the monorepo depends on; see root README).
+
+FROM node:22-slim AS deps
+WORKDIR /repo
+RUN corepack enable && corepack prepare pnpm@10.15.0 --activate
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY apps/web/package.json ./apps/web/
+COPY packages/shared/package.json ./packages/shared/
+RUN pnpm fetch --prod=false
+COPY apps/web ./apps/web
+COPY packages/shared ./packages/shared
+RUN pnpm install --frozen-lockfile --offline --prod=false
+
+FROM deps AS build
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN pnpm --filter @aelvyril/shared build || true
+RUN pnpm --filter @aelvyril/web build
+
+FROM node:22-slim AS runtime
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000
+# next-standalone copies its own .next/standalone + node_modules. The full
+# source tree isn't needed in the runtime image.
+WORKDIR /app
+RUN groupadd --gid 1001 nodejs \
+    && useradd --uid 1001 --gid nodejs --shell /bin/bash --create-home nextjs
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/.next/standalone /app
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/.next/static /app/.next/static
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/public /app/public
+USER nextjs
+EXPOSE 3000
+# proxy.ts (Next 16) ships with the standalone bundle; default Next.js server
+# reads PORT from env.
+CMD ["node", "server.js"]

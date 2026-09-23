@@ -4,6 +4,7 @@ import type {
   PromptBody,
   RenameConversationBody,
   EventEnvelope,
+  UpdateStatus,
 } from "@aelvyril/shared";
 import { ROUTES } from "@aelvyril/shared";
 import { SseParser } from "./sse.js";
@@ -75,6 +76,21 @@ export class GatewayClient {
       await this.authed({ method: "DELETE" }),
     );
     if (!res.ok) throw new Error(`delete failed: ${res.status}`);
+  }
+
+  async getUpdateStatus(): Promise<UpdateStatus> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/update/status`, await this.authed());
+    if (!res.ok) throw new Error(`update status failed: ${res.status}`);
+    return (await res.json()) as UpdateStatus;
+  }
+
+  async applyUpdate(): Promise<{ started: boolean; message: string }> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/admin/update`,
+      await this.authed({ method: "POST" }),
+    );
+    if (!res.ok) throw new Error(`update apply failed: ${res.status}`);
+    return (await res.json()) as { started: boolean; message: string };
   }
 
   /**

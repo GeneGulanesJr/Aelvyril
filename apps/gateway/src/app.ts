@@ -19,6 +19,7 @@ import { createWorkspaceAllowlist, type WorkspaceAllowlist } from "./workspace-a
 import { createRateLimiter, type RateLimiter } from "./rate-limit.js";
 import { createMetrics, type Metrics } from "./metrics.js";
 import { runHealthCheck, defaultServiceProbes, type BackingServiceProbes } from "./health.js";
+import { getUpdateStatus, applyUpdate } from "./updater.js";
 
 export interface AppOptions {
   dbPath: string;
@@ -171,6 +172,31 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   app.get("/metrics", async (_req, reply) => {
     reply.header("content-type", "text/plain; version=0.0.4");
     return metrics.render();
+  });
+
+  // Spec §11: manual update flow. Self-hosted convenience — any
+  // signed-in user can check for + apply upstream commits. For a multi-
+  // tenant SaaS, gate behind a Clerk Organizations admin role.
+  app.get("/v1/admin/update/status", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    try {
+      return await getUpdateStatus();
+    } catch (err) {
+      return reply.code(503).send({ error: "update_status_failed", message: String(err) });
+    }
+  });
+
+  app.post("/v1/admin/update", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    try {
+      const result = await applyUpdate();
+      // The applyUpdate subprocess will SIGTERM us in ~2s. Respond first.
+      return reply.code(202).send(result);
+    } catch (err) {
+      return reply.code(400).send({ error: "update_failed", message: String(err) });
+    }
   });
 
   app.post("/v1/conversations", async (req, reply) => {

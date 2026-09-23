@@ -2,7 +2,7 @@
 
 import { UserButton, useAuth, useUser } from "@clerk/nextjs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Conversation, EventEnvelope } from "@aelvyril/shared";
+import type { Conversation, EventEnvelope, UpdateStatus } from "@aelvyril/shared";
 import { GatewayClient } from "../lib/api";
 import { filterConversations } from "../lib/filter-conversations";
 
@@ -23,6 +23,9 @@ export function Chat() {
   const [error, setError] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
@@ -195,6 +198,37 @@ export function Chat() {
     setWaiting(false);
   }, []);
 
+  // Refresh the update status from the gateway. The gateway shells out to
+  // `git fetch origin` so this is network-touching — don't call on a timer.
+  const refreshUpdateStatus = useCallback(async () => {
+    if (!client) return;
+    try {
+      const status = await client.getUpdateStatus();
+      setUpdateStatus(status);
+      setUpdateError(null);
+    } catch (err) {
+      setUpdateError(String(err));
+    }
+  }, [client]);
+
+  // Apply the update. The gateway spawns a detached subprocess that does
+  // `git pull` → `pnpm install` → SIGTERM the gateway. The page will
+  // reconnect via the Next.js dev server's HMR / re-fetch on navigation.
+  const triggerUpdate = useCallback(async () => {
+    if (!client) return;
+    setUpdateBusy(true);
+    setUpdateError(null);
+    try {
+      await client.applyUpdate();
+      // Gateway will restart within ~3s. The next request will fail or
+      // reconnect; show a transient message until the user refreshes.
+      setTimeout(() => setUpdateBusy(false), 5_000);
+    } catch (err) {
+      setUpdateBusy(false);
+      setUpdateError(String(err));
+    }
+  }, [client]);
+
   const statusLabel = useMemo(
     () => ({ idle: "idle", streaming: "working…", degraded: "degraded — will recover on next message" })[status],
     [status],
@@ -320,6 +354,75 @@ export function Chat() {
           </details>
           <span data-testid="status">{statusLabel}</span>
           <span>hi, {user?.firstName ?? userId}</span>
+          {/* Manual update flow — self-hosted convenience. Click to fetch
+              upstream commit info, "Update now" to apply + restart the
+              gateway. Behind count is the trigger; refresh on demand
+              (no polling — the endpoint shells out to `git fetch`). */}
+          <details
+            className="relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <summary
+              className="cursor-pointer list-none rounded border border-[#2b3245] bg-[#161b27] px-2 py-1"
+              data-testid="update-trigger"
+            >
+              {updateBusy
+                ? "updating…"
+                : updateStatus && updateStatus.behind > 0
+                  ? `update (${updateStatus.behind} behind)`
+                  : "update"}
+            </summary>
+            <div className="absolute right-0 top-full z-10 mt-1 w-72 rounded border border-[#2b3245] bg-[#0d1117] p-3 text-xs shadow-lg">
+              <button
+                className="mb-2 w-full rounded border border-[#2b3245] px-2 py-1 hover:bg-[#21262d]"
+                disabled={updateBusy}
+                onClick={(e) => {
+                  e.preventDefault();
+                  void refreshUpdateStatus();
+                }}
+                type="button"
+              >
+                check for updates
+              </button>
+              {updateError && (
+                <div className="mb-2 rounded border border-[#f85149]/40 bg-[#f85149]/10 px-2 py-1 text-[#f85149]">
+                  {updateError}
+                </div>
+              )}
+              {updateStatus && (
+                <div className="space-y-1 text-[#8b96a8]">
+                  <div className="flex justify-between">
+                    <span>local</span>
+                    <code className="text-[#e6edf3]">{updateStatus.currentShort}</code>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>remote</span>
+                    <code className="text-[#e6edf3]">{updateStatus.remoteShort}</code>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>behind</span>
+                    <span className={updateStatus.behind > 0 ? "text-[#e3b341]" : "text-[#e6edf3]"}>
+                      {updateStatus.behind} commits
+                    </span>
+                  </div>
+                  <button
+                    className="mt-2 w-full rounded bg-[#1f6feb] px-2 py-1 text-sm font-medium disabled:opacity-40"
+                    disabled={updateBusy || updateStatus.behind === 0}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      void triggerUpdate();
+                    }}
+                    type="button"
+                  >
+                    {updateBusy ? "updating…" : "Update now"}
+                  </button>
+                  <p className="mt-2 text-[10px] text-[#8b96a8]">
+                    Gateway restarts in ~3s. The page will reconnect automatically.
+                  </p>
+                </div>
+              )}
+            </div>
+          </details>
           <UserButton />
         </div>
       </header>

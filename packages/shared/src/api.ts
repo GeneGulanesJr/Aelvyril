@@ -44,3 +44,18 @@ export const Conversation = z.object({
   createdAt: z.string().datetime({ offset: true }),
 });
 export type Conversation = z.infer<typeof Conversation>;
+
+/** Manual update flow: response from GET /v1/admin/update/status. */
+export const UpdateStatus = z.object({
+  currentSha: z.string(),
+  currentShort: z.string(),
+  remoteSha: z.string(),
+  remoteShort: z.string(),
+  /** 0 = up-to-date, >0 = N commits behind. */
+  behind: z.number().int().nonnegative(),
+  /** ISO timestamp of the last successful fetch. */
+  fetchedAt: z.string().datetime({ offset: true }),
+  /** Absolute path to the repo root the gateway was started from. */
+  repoPath: z.string(),
+});
+export type UpdateStatus = z.infer<typeof UpdateStatus>;

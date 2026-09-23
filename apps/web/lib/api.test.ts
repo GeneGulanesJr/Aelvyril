@@ -62,4 +62,46 @@ describe("GatewayClient", () => {
     mockFetchSequence([{ ok: false, status: 404, body: { error: "not_found" } }]);
     await expect(client.deleteConversation("conv_x")).rejects.toThrow(/delete failed: 404/);
   });
+
+  it("getUpdateStatus fetches + parses the update payload", async () => {
+    const { client } = makeClient();
+    mockFetchSequence([
+      {
+        ok: true,
+        body: {
+          currentSha: "8213db5c1094755be13e3a2ba9b1b870caad1182",
+          currentShort: "8213db5",
+          remoteSha: "abcdef0000000000000000000000000000000000",
+          remoteShort: "abcdef0",
+          behind: 2,
+          fetchedAt: "2026-09-24T00:00:00.000Z",
+          repoPath: "/home/me/Aelvyril",
+        },
+      },
+    ]);
+    const status = await client.getUpdateStatus();
+    expect(status.behind).toBe(2);
+    expect(status.currentShort).toBe("8213db5");
+    expect(status.remoteShort).toBe("abcdef0");
+    expect(status.repoPath).toBe("/home/me/Aelvyril");
+  });
+
+  it("applyUpdate POSTs to /v1/admin/update and returns the started shape", async () => {
+    const { client } = makeClient();
+    const { fetchMock } = mockFetchSequence([
+      { ok: true, status: 202, body: { started: true, message: "queued" } },
+    ]);
+    const result = await client.applyUpdate();
+    expect(result.started).toBe(true);
+    expect(result.message).toBe("queued");
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe("http://example.test/v1/admin/update");
+    expect((call[1] as RequestInit | undefined)?.method).toBe("POST");
+  });
+
+  it("applyUpdate throws on non-2xx with the status code", async () => {
+    const { client } = makeClient();
+    mockFetchSequence([{ ok: false, status: 400, body: { error: "update_failed" } }]);
+    await expect(client.applyUpdate()).rejects.toThrow(/update apply failed: 400/);
+  });
 });

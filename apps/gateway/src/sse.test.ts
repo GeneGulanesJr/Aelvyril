@@ -155,3 +155,46 @@ describe("SSE end-to-end", () => {
     expect(body).not.toContain("event: text_delta"); // skipped with the echo
   });
 });
+
+describe("SSE CORS on hijacked streams", () => {
+  // Regression: reply.hijack() bypasses @fastify/cors reply hooks, so the
+  // streamed 200 went out with no Access-Control-Allow-Origin and browsers
+  // dropped it despite the successful preflight.
+  it("echoes the allow-listed origin + credentials on the raw stream", async () => {
+    const app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      allowedOrigins: ["http://localhost:3000"],
+    });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    try {
+      const addr = app.server.address() as AddressInfo;
+      const base = `http://127.0.0.1:${addr.port}`;
+      const originHeaders = { ...authHeaders, origin: "http://localhost:3000" };
+      const conv = await (
+        await fetch(`${base}/v1/conversations`, {
+          method: "POST",
+          headers: originHeaders,
+        })
+      ).json();
+      const res = await fetch(`${base}/v1/conversations/${(conv as { id: string }).id}/events`, {
+        headers: originHeaders,
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("access-control-allow-origin")).toBe("http://localhost:3000");
+      expect(res.headers.get("access-control-allow-credentials")).toBe("true");
+      await res.body!.cancel(); // release the hijacked socket or close() hangs
+      // Non-allow-listed origin gets no ACAO on the stream.
+      const denied = await fetch(`${base}/v1/conversations/${(conv as { id: string }).id}/events`, {
+        headers: { ...authHeaders, origin: "http://evil.example" },
+      });
+      expect(denied.headers.get("access-control-allow-origin")).toBeNull();
+      await denied.body!.cancel();
+    } finally {
+      await app.close();
+    }
+  });
+});

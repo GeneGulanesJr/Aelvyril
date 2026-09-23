@@ -121,11 +121,21 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
 
     reply.hijack();
-    reply.raw.writeHead(200, {
+    // Hijacking the reply bypasses @fastify/cors reply hooks, so the streamed
+    // response would go out with no Access-Control-Allow-Origin and the browser
+    // would drop it (200 but unreadable). Mirror the plugin's allow-list logic.
+    const origin = req.headers.origin;
+    const headers: Record<string, string> = {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
       connection: "keep-alive",
-    });
+    };
+    if (origin && opts.allowedOrigins?.includes(origin)) {
+      headers["access-control-allow-origin"] = origin;
+      headers["access-control-allow-credentials"] = "true";
+      headers["vary"] = "Origin";
+    }
+    reply.raw.writeHead(200, headers);
     reply.raw.write("retry: 2000\n\n");
 
     const raw = req.headers["last-event-id"];

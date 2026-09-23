@@ -27,7 +27,11 @@ const app = await buildApp({
   childCommand: useFakeChild ? process.execPath : (process.env.PI_COMMAND ?? "pi"),
   childArgs: useFakeChild
     ? [fileURLToPath(new URL("../fixtures/fake-pi.mjs", import.meta.url))]
-    : ["--mode", "rpc"],
+    : // Windows: node's spawn cannot exec .cmd/.ps1 shims, so point PI_COMMAND
+      // at node.exe and put the cli.js path into PI_COMMAND_ARGS (JSON array).
+      process.env.PI_COMMAND_ARGS
+      ? (JSON.parse(process.env.PI_COMMAND_ARGS) as string[])
+      : ["--mode", "rpc"],
   idleMs: Number(process.env.GATEWAY_IDLE_MS ?? 300_000),
   verifyToken: resolveVerifier(),
   allowedOrigins: process.env.GATEWAY_ALLOWED_ORIGIN?.split(",").map((o) => o.trim()),

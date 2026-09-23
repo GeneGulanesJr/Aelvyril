@@ -10,6 +10,10 @@
 
 **Blocking prerequisite (human):** real Clerk keys (`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`) in `apps/web/.env` + `apps/gateway/.env`. Build/tests use documented placeholders (`pk_test_placeholder` / `sk_test_placeholder`) so CI stays green; the app is only fully functional with real keys.
 
+> **STATUS (2026-09-23):** Tasks 1–4 DONE and committed — `9f3b333` (gateway auth), `1b7808c` (web scaffold), `bdc33c1` (SSE parser + client), `cf02285` (chat UI). Task 5 battery green (17 shared + 30 gateway + 4 web tests; web build ✓) and root README added. Remaining: `clerk auth login` → `clerk init --app app_3JiIWEGy3UjKJJQAmVA3pTSvd3r` (writes real keys), `clerk doctor`, two-process smoke with real sign-in.
+>
+> Implementation deviations from this plan (all reviewed): `buildApp` is async (fastify plugin ordering); `@clerk/backend` resolved v3 → standalone `verifyToken(token, { secretKey })` export; supervisor relays `custom_*` events to the bus (needed for the D7 env-echo assertion); namespace index created after the legacy `ALTER TABLE`; `@clerk/nextjs` v6 rejects ALL placeholder publishable keys at prerender → root layout uses `dynamic = "force-dynamic"`; webpack `extensionAlias` in `next.config.ts` for `.js`→`.ts` workspace resolution; web `test` script uses `--passWithNoTests` until Task 3 landed.
+
 ---
 
 ### Task 1: Gateway — auth, namespace scoping, CORS

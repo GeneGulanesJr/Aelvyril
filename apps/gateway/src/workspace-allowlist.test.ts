@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolve } from "node:path";
 import { createWorkspaceAllowlist, parseAllowlist } from "./workspace-allowlist.js";
 
 describe("createWorkspaceAllowlist", () => {
@@ -33,7 +34,9 @@ describe("createWorkspaceAllowlist", () => {
 
   it("resolve returns the absolute path or null", () => {
     const wl = createWorkspaceAllowlist("/home/repo1");
-    expect(wl.resolve("/home/repo1")).toBe("/home/repo1");
+    // parseAllowlist stores resolve()'d paths — compare against resolve() so
+    // the expectation holds on POSIX and Windows alike.
+    expect(wl.resolve("/home/repo1")).toBe(resolve("/home/repo1"));
     expect(wl.resolve("/home/repo2")).toBeNull();
     expect(wl.resolve(null)).toBeNull();
   });
@@ -41,7 +44,7 @@ describe("createWorkspaceAllowlist", () => {
   it("parseAllowlist trims whitespace and ignores empties", () => {
     const set = parseAllowlist(" /a ,, /b , ");
     expect(set.size).toBe(2);
-    expect(set.has("/a")).toBe(true);
-    expect(set.has("/b")).toBe(true);
+    expect(set.has(resolve("/a"))).toBe(true);
+    expect(set.has(resolve("/b"))).toBe(true);
   });
 });

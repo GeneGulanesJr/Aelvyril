@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SpecDraft, SpecQuestion, ThreadStatus } from "./api.js";
 
 export const EnvelopeKind = z.enum([
   "text_delta",
@@ -11,6 +12,14 @@ export const EnvelopeKind = z.enum([
   "user_message",
   "session_state",
   "error",
+  // Spec-centric SSE events (Slice 1 contract). Emitted by the gateway's
+  // `agent-contract.ts` while the agent is in the spec interview / execution
+  // lifecycle. Consumers (frontend `use-thread`, live traces) branch off
+  // these kinds the same way they do for `text_delta`, etc.
+  "spec_question",
+  "spec_draft",
+  "spec_status",
+  "diff",
 ]);
 export type EnvelopeKind = z.infer<typeof EnvelopeKind>;
 
@@ -49,6 +58,18 @@ const payloadSchemas = {
     message: z.string(),
     code: z.string().optional(),
   }),
+  spec_question: z.object({
+    questions: z.array(SpecQuestion),
+  }),
+  spec_draft: z.object({
+    draft: SpecDraft,
+  }),
+  spec_status: z.object({
+    status: ThreadStatus,
+  }),
+  diff: z.object({
+    files: z.array(z.object({ path: z.string(), patch: z.string() })),
+  }),
 } as const;
 
 const envelopeShape = z.object({
@@ -69,5 +90,59 @@ export const EventEnvelope = z.discriminatedUnion("kind", [
   envelopeShape.extend({ kind: z.literal("user_message"), payload: payloadSchemas.user_message }),
   envelopeShape.extend({ kind: z.literal("session_state"), payload: payloadSchemas.session_state }),
   envelopeShape.extend({ kind: z.literal("error"), payload: payloadSchemas.error }),
+  envelopeShape.extend({ kind: z.literal("spec_question"), payload: payloadSchemas.spec_question }),
+  envelopeShape.extend({ kind: z.literal("spec_draft"), payload: payloadSchemas.spec_draft }),
+  envelopeShape.extend({ kind: z.literal("spec_status"), payload: payloadSchemas.spec_status }),
+  envelopeShape.extend({ kind: z.literal("diff"), payload: payloadSchemas.diff }),
 ]);
 export type EventEnvelope = z.infer<typeof EventEnvelope>;
+
+// Per-kind stand-alone schemas for the four spec envelopes. Mirrors the
+// `EventEnvelope` discriminated-union entries above so consumers (frontend
+// `use-thread`, ops tooling) can validate a single envelope in isolation
+// without invoking the full union.
+export const SpecQuestionEnvelope = z.object({
+  seq: z.number().int().nonnegative(),
+  conversationId: z.string().min(1),
+  ts: z.string().datetime({ offset: true }),
+  kind: z.literal("spec_question"),
+  payload: z.object({ questions: z.array(SpecQuestion) }),
+});
+export const SpecDraftEnvelope = z.object({
+  seq: z.number().int().nonnegative(),
+  conversationId: z.string().min(1),
+  ts: z.string().datetime({ offset: true }),
+  kind: z.literal("spec_draft"),
+  payload: z.object({ draft: SpecDraft }),
+});
+export const SpecStatusEnvelope = z.object({
+  seq: z.number().int().nonnegative(),
+  conversationId: z.string().min(1),
+  ts: z.string().datetime({ offset: true }),
+  kind: z.literal("spec_status"),
+  payload: z.object({ status: ThreadStatus }),
+});
+export const DiffEnvelope = z.object({
+  seq: z.number().int().nonnegative(),
+  conversationId: z.string().min(1),
+  ts: z.string().datetime({ offset: true }),
+  kind: z.literal("diff"),
+  payload: z.object({
+    files: z.array(z.object({ path: z.string(), patch: z.string() })),
+  }),
+});
+
+/**
+ * Defensive parser for a single SSE frame. Returns the parsed envelope on
+ * success or `null` if the input is malformed JSON or fails schema
+ * validation. Never throws.
+ */
+export function parseEnvelope(raw: string): EventEnvelope | null {
+  try {
+    const json: unknown = JSON.parse(raw);
+    const parsed = EventEnvelope.safeParse(json);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}

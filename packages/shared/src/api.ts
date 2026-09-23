@@ -32,8 +32,12 @@ export const PromptBody = z.object({
    *     spec interview before running.
    *   - `force`: always enter the spec interview regardless of heuristic.
    *   - `off`: skip the spec interview and stream immediately.
+   *
+   * `.optional().default("auto")` keeps the field optional in the input
+   * type (TS-wise) so existing callers like `chat.tsx` don't have to
+   * pass it explicitly; at parse time missing values default to `"auto"`.
    */
-  specMode: z.enum(["auto", "force", "off"]).default("auto"),
+  specMode: z.enum(["auto", "force", "off"]).optional().default("auto"),
 });
 export type PromptBody = z.infer<typeof PromptBody>;
 

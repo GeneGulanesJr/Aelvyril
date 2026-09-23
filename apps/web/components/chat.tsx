@@ -113,6 +113,7 @@ export function Chat() {
       // pi rejects a plain prompt while mid-turn — queue it as a steer instead.
       await client.prompt(id, {
         message: input,
+        specMode: "auto",
         ...(status === "streaming" ? { streamingBehavior: "steer" as const } : {}),
       });
     } catch (err) {

@@ -15,6 +15,9 @@ for await (const line of rl) {
   const cmd = JSON.parse(line);
   send({ id: cmd.id, type: "response", command: cmd.type, success: true });
   if (cmd.type === "prompt") {
+    // Probe: echoes the gateway-injected env back over the protocol so tests
+    // can assert the per-user namespace reached the session host (D7).
+    send({ type: "custom_env_echo", LAPIS_PROJECT_KEY: process.env.LAPIS_PROJECT_KEY ?? null });
     send({ type: "turn_start" });
     send({ type: "message_start", message: { role: "assistant" } });
     for (const delta of ["Hello", ", ", "world", "!"]) {

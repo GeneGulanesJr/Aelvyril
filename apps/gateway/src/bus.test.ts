@@ -13,7 +13,7 @@ function makeBus() {
 describe("EventBus", () => {
   it("persists then fans out with assigned seq", () => {
     const { store, bus } = makeBus();
-    const conv = store.createConversation({});
+    const conv = store.createConversation({ namespace: "platform" });
     const seen: number[] = [];
     bus.subscribe(conv.id, (e) => seen.push(e.seq));
     bus.publish({ conversationId: conv.id, ts, kind: "text_delta", payload: { delta: "x" } });
@@ -22,7 +22,7 @@ describe("EventBus", () => {
 
   it("unsubscribed listeners get nothing", () => {
     const { store, bus } = makeBus();
-    const conv = store.createConversation({});
+    const conv = store.createConversation({ namespace: "platform" });
     const fn = vi.fn();
     const off = bus.subscribe(conv.id, fn);
     off();
@@ -32,7 +32,7 @@ describe("EventBus", () => {
 
   it("replay returns persisted events after the given seq", () => {
     const { store, bus } = makeBus();
-    const conv = store.createConversation({});
+    const conv = store.createConversation({ namespace: "platform" });
     bus.publish({ conversationId: conv.id, ts, kind: "text_delta", payload: { delta: "a" } });
     bus.publish({ conversationId: conv.id, ts, kind: "text_delta", payload: { delta: "b" } });
     expect(bus.replay(conv.id, 0)).toHaveLength(1);

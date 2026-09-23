@@ -7,7 +7,8 @@ import type { Store } from "./store.js";
 export interface SupervisorOptions {
   bus: EventBus;
   store: Store;
-  spawnChild: () => ChildProcess;
+  /** extraEnv is merged over process.env by the caller at spawn time. */
+  spawnChild: (conversationId: string, extraEnv: Record<string, string>) => ChildProcess;
   idleMs: number;
 }
 
@@ -37,10 +38,10 @@ export class Supervisor {
     return this.handles.has(conversationId);
   }
 
-  private ensureSession(conversationId: string): Handle {
+  private ensureSession(conversationId: string, extraEnv: Record<string, string>): Handle {
     const existing = this.handles.get(conversationId);
     if (existing) return existing;
-    const child = this.opts.spawnChild();
+    const child = this.opts.spawnChild(conversationId, extraEnv);
     const rpc = new RpcClient(child);
     const handle: Handle = { rpc, child, lastActivity: Date.now(), exiting: false };
     rpc.on("event", (ev: RpcEvent) => this.onProtocolEvent(conversationId, ev));
@@ -63,8 +64,10 @@ export class Supervisor {
     conversationId: string,
     message: string,
     streamingBehavior?: "steer" | "followUp",
+    extraEnv?: Record<string, string>,
   ): Promise<boolean> {
-    const handle = this.ensureSession(conversationId);
+    // extraEnv only applies at spawn time; a reused session keeps its env.
+    const handle = this.ensureSession(conversationId, extraEnv ?? {});
     this.opts.store.setConversationState(conversationId, "streaming");
     this.publish(conversationId, { kind: "session_state", payload: { state: "streaming" } });
     handle.lastActivity = Date.now();
@@ -92,6 +95,17 @@ export class Supervisor {
     const handle = this.handles.get(conversationId);
     if (handle) handle.lastActivity = Date.now();
 
+    // Probe channel: custom_* protocol events are forwarded verbatim onto the
+    // bus (kind is stored as free TEXT; the SSE wire layer does not re-validate
+    // against the zod union). Used by tests to observe child-side state such
+    // as the spawn environment.
+    if (ev.type.startsWith("custom_")) {
+      this.publish(conversationId, {
+        kind: ev.type as EventEnvelope["kind"],
+        payload: ev,
+      });
+      return;
+    }
     if (ev.type === "message_update") {
       const ame = ev.assistantMessageEvent as
         | { type?: string; delta?: string }

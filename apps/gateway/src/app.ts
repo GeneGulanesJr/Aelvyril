@@ -1,28 +1,58 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, {
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+} from "fastify";
 import { spawn } from "node:child_process";
-import { CreateConversationBody, PromptBody, type EventEnvelope } from "@aelvyril/shared";
+import {
+  CreateConversationBody,
+  PromptBody,
+  toUserNamespace,
+  type EventEnvelope,
+} from "@aelvyril/shared";
 import { Store } from "./store.js";
 import { EventBus } from "./bus.js";
 import { Supervisor } from "./supervisor.js";
+import type { TokenVerifier } from "./auth.js";
 
 export interface AppOptions {
   dbPath: string;
   childCommand: string;
   childArgs: string[];
   idleMs?: number;
+  verifyToken: TokenVerifier;
+  allowedOrigins?: string[];
 }
 
 export type App = FastifyInstance;
 
-export function buildApp(opts: AppOptions): App {
+export async function buildApp(opts: AppOptions): Promise<App> {
   const app = Fastify({ logger: false });
   const store = new Store(opts.dbPath);
   const bus = new EventBus(store);
   const supervisor = new Supervisor({
     bus,
     store,
-    spawnChild: () => spawn(opts.childCommand, opts.childArgs),
+    spawnChild: (conversationId, extraEnv) =>
+      spawn(opts.childCommand, opts.childArgs, {
+        env: { ...process.env, ...extraEnv },
+      }),
     idleMs: opts.idleMs ?? 300_000,
+  });
+
+  const unauthorized = (reply: FastifyReply) => reply.code(401).send({ error: "unauthorized" });
+  async function user(req: FastifyRequest, reply: FastifyReply): Promise<string | undefined> {
+    const header = req.headers.authorization;
+    if (!header?.startsWith("Bearer ")) return void unauthorized(reply);
+    const user = await opts.verifyToken(header.slice(7));
+    if (!user) return void unauthorized(reply);
+    return user.userId;
+  }
+
+  // CORS before routes so preflight/headers apply to every /v1 handler.
+  await app.register(import("@fastify/cors"), {
+    origin: opts.allowedOrigins ?? false,
+    credentials: true,
   });
 
   app.setErrorHandler((err, _req, reply) => {
@@ -35,38 +65,60 @@ export function buildApp(opts: AppOptions): App {
   app.get("/healthz", async () => ({ ok: true }));
 
   app.post("/v1/conversations", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    const namespace = toUserNamespace(userId);
     const body = CreateConversationBody.parse(req.body ?? {});
-    const conv = store.createConversation(body);
+    const conv = store.createConversation({ ...body, namespace });
     return reply.code(201).send(conv);
   });
 
-  app.get("/v1/conversations", async () => ({ conversations: store.listConversations() }));
+  app.get("/v1/conversations", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    const namespace = toUserNamespace(userId);
+    return { conversations: store.listConversations(namespace) };
+  });
 
   app.get("/v1/conversations/:id", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    const namespace = toUserNamespace(userId);
     const { id } = req.params as { id: string };
-    const conv = store.getConversation(id);
+    const conv = store.getConversation(id, namespace);
     return conv ? conv : reply.code(404).send({ error: "not_found" });
   });
 
   app.post("/v1/conversations/:id/prompt", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    const namespace = toUserNamespace(userId);
     const { id } = req.params as { id: string };
-    if (!store.getConversation(id)) return reply.code(404).send({ error: "not_found" });
+    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
     const body = PromptBody.parse(req.body ?? {});
-    const ok = await supervisor.prompt(id, body.message, body.streamingBehavior);
+    const ok = await supervisor.prompt(id, body.message, body.streamingBehavior, {
+      LAPIS_PROJECT_KEY: namespace,
+    });
     if (!ok) return reply.code(502).send({ error: "agent_rejected" });
     return reply.code(202).send({ accepted: true });
   });
 
   app.post("/v1/conversations/:id/abort", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    const namespace = toUserNamespace(userId);
     const { id } = req.params as { id: string };
-    if (!store.getConversation(id)) return reply.code(404).send({ error: "not_found" });
+    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
     await supervisor.abort(id);
     return reply.code(202).send({ accepted: true });
   });
 
   app.get("/v1/conversations/:id/events", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    const namespace = toUserNamespace(userId);
     const { id } = req.params as { id: string };
-    if (!store.getConversation(id)) return reply.code(404).send({ error: "not_found" });
+    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
 
     reply.hijack();
     reply.raw.writeHead(200, {

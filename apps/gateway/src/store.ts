@@ -6,6 +6,7 @@ interface ConvRow {
   id: string;
   title: string | null;
   workspace: string | null;
+  namespace: string;
   state: string;
   created_at: string;
 }
@@ -31,6 +32,7 @@ export class Store {
         id TEXT PRIMARY KEY,
         title TEXT,
         workspace TEXT,
+        namespace TEXT NOT NULL DEFAULT 'platform',
         state TEXT NOT NULL DEFAULT 'idle',
         created_at TEXT NOT NULL
       );
@@ -43,6 +45,18 @@ export class Store {
         PRIMARY KEY (conversation_id, seq)
       );
     `);
+    // Lightweight migration for pre-namespace databases (Phase 1 files):
+    // backfill every existing row into the shared platform namespace. Runs
+    // BEFORE the namespace index below, which needs the column to exist.
+    const cols = this.db.prepare("PRAGMA table_info(conversations)").all() as Array<{
+      name: string;
+    }>;
+    if (!cols.some((c) => c.name === "namespace")) {
+      this.db.exec("ALTER TABLE conversations ADD COLUMN namespace TEXT NOT NULL DEFAULT 'platform'");
+    }
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_conversations_namespace ON conversations(namespace)",
+    );
     // Assigned in the constructor: field initializers run BEFORE the
     // constructor body, so this.db would be undefined in a field initializer.
     this.appendTxn = this.db.transaction((ev: NewEvent): StoredEvent => {
@@ -61,28 +75,33 @@ export class Store {
     });
   }
 
-  createConversation(input: { title?: string; workspace?: string }): Conversation {
+  createConversation(input: {
+    title?: string;
+    workspace?: string;
+    namespace: string;
+  }): Conversation {
     const id = `conv_${randomUUID()}`;
     const createdAt = new Date().toISOString();
     this.db
       .prepare(
-        "INSERT INTO conversations(id, title, workspace, state, created_at) VALUES(?, ?, ?, 'idle', ?)",
+        "INSERT INTO conversations(id, title, workspace, namespace, state, created_at) VALUES(?, ?, ?, ?, 'idle', ?)",
       )
-      .run(id, input.title ?? null, input.workspace ?? null, createdAt);
+      .run(id, input.title ?? null, input.workspace ?? null, input.namespace, createdAt);
+    // namespace is internal routing, not exposed on the public DTO.
     return { id, title: input.title ?? null, workspace: input.workspace ?? null, state: "idle", createdAt };
   }
 
-  getConversation(id: string): Conversation | null {
-    const row = this.db.prepare("SELECT * FROM conversations WHERE id = ?").get(id) as
-      | ConvRow
-      | undefined;
+  getConversation(id: string, namespace: string): Conversation | null {
+    const row = this.db
+      .prepare("SELECT * FROM conversations WHERE id = ? AND namespace = ?")
+      .get(id, namespace) as ConvRow | undefined;
     return row ? this.toConversation(row) : null;
   }
 
-  listConversations(): Conversation[] {
+  listConversations(namespace: string): Conversation[] {
     const rows = this.db
-      .prepare("SELECT * FROM conversations ORDER BY created_at DESC")
-      .all() as ConvRow[];
+      .prepare("SELECT * FROM conversations WHERE namespace = ? ORDER BY created_at DESC")
+      .all(namespace) as ConvRow[];
     return rows.map((r) => this.toConversation(r));
   }
 

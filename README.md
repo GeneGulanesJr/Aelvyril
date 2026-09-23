@@ -19,18 +19,19 @@ To fall back to the scripted fake `pi` child (no real LLM calls), set `PI_FAKE=1
 ## Checks
 
     pnpm -r typecheck && pnpm -r lint && pnpm -r test
+    pnpm test:e2e   # Playwright (requires gateway + web running locally)
 
 > Windows note: this repo is developed under PowerShell — run the check commands one at a time (or use `;`).
 
 ## Clerk setup
 
-The gateway enforces Clerk JWT bearer auth (`@clerk/backend.verifyToken`) and per-user LaPis namespaces via `LAPIS_PROJECT_KEY` (spec §2, §7). The runtime auth reads keys from the env files above and is **independent of `clerk` CLI link state** — the link is only needed for `clerk env pull`, `clerk apps`, etc.
+The gateway enforces Clerk JWT bearer auth (`@clerk/backend.verifyToken`) and per-user LaPis namespaces via `LAPIS_PROJECT_KEY` (spec §2, §7 — see ADR 0002). The runtime auth reads keys from the env files above and is **independent of `clerk` CLI link state** — the link is only needed for `clerk env pull`, `clerk apps`, etc.
 
 ## Stack
 
-Per spec §4/§5/§9, the full agent platform runs as five Docker services: `web`, `gateway`, `lapis`, `sandd`, `layamcp`. See `infra/compose.yaml`, `infra/docker/`, and `infra/smoke.sh`. Two upstream patches in sibling repos complete the picture:
+Per spec §4/§5/§9 (see ADR 0003), the full agent platform runs as five Docker services: `web`, `gateway`, `lapis`, `sandd`, `layamcp`. See `infra/compose.yaml`, `infra/docker/`, and `infra/smoke.sh`. Two upstream patches in sibling repos complete the picture:
 
-- `LaPis/` — `LAPIS_PROJECT_KEY` env override for per-conversation namespaces.
+- `LaPis/` — `LAPIS_PROJECT_KEY` env override for per-conversation namespaces (ADR 0002).
 - `LayaMCP/` — drops broken `mcp.server.fastapi`, mounts SSE on plain FastAPI, adds `/health`.
 
 The `gateway` is the only service with a published port in dev (3000) — production publishes `web:3000` and the rest stays internal.
@@ -47,12 +48,31 @@ The `gateway` is the only service with a published port in dev (3000) — produc
 - **Error banner** (orange, dismissable): per-request failures (network, 4xx/5xx).
 - **Degraded banner** (yellow, persistent): shown when the gateway's `session_state: degraded` envelope arrives. Disappears when a turn settles back to idle/streaming. Tells the user that chat continues and the next prompt will respawn the session host automatically.
 
-## What's next
+## Observability (spec §11)
 
-Phase 5 hardening (spec §10): ✅ rate limit, ✅ concurrent cap, ✅ workspace allowlist, ✅ degraded banner. Remaining:
+- **`/healthz`** — liveness + readiness. Probes backing services via `LAPIS_URL` / `SANDD_URL` / `LAYAMCP_URL` env vars. Returns 503 if any probe fails.
+- **`/metrics`** — Prometheus text format. Counters + a histogram for request rate, latency, conv-creation, prompt counts, rate-limit / cap / workspace rejections, active session hosts.
+- **Structured logs** — Fastify pino JSON to stdout. Override with `GATEWAY_LOG=silent` for dev.
+- **Request IDs** — every response carries `X-Request-Id` (8-char random base36) for log correlation.
+- **Response compression** — gzip + deflate above 1 KB. SSE streams are excluded (would break `Last-Event-ID` reconnect).
 
-- Playwright E2E (spec §11): sign-in gate, send/stream/receive, reconnect replay.
-- Ops runbooks (per-service troubleshooting for `lapis`, `sandd`, `layamcp`).
-- Production deploy hardening (TLS, secret rotation, observability).
+## Conversation features
+
+- **Search** (case-insensitive substring on title)
+- **Rename** (inline edit on Enter/blur, PATCH round-trip)
+- **Delete** (with yes/no confirmation, cascades gateway-side events)
+- **Stream reconnect** — Last-Event-ID survives drops
+- **Steer-queued sends** — `streamingBehavior: "steer"` while a turn is mid-flight
+- **Stop** — `POST /abort` cancels the current turn + resets the waiting flag immediately
+
+## Ops
+
+- **Runbooks** for every service: `docs/ops/{gateway,lapis,sandd,layamcp}.md` + `docs/ops/secrets.md`
+- **Smoke verification**: `./infra/smoke.sh` (or `./infra/smoke.sh --down` to tear down after)
+
+## Optional polish (not blocking v1)
+
+- Clerk Test Helper magic-link setup for full sign-in E2E (needs Clerk dashboard test mode — out of repo scope)
+- OpenTelemetry tracing across web + gateway + pi child (correlate traces through the SSE stream)
 
 See `docs/superpowers/specs/2026-09-22-aelvyril-agent-platform-design.md` §12 for the full phase roadmap.

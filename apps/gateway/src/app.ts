@@ -18,6 +18,7 @@ import type { TokenVerifier } from "./auth.js";
 import { createWorkspaceAllowlist, type WorkspaceAllowlist } from "./workspace-allowlist.js";
 import { createRateLimiter, type RateLimiter } from "./rate-limit.js";
 import { createMetrics, type Metrics } from "./metrics.js";
+import { runHealthCheck, defaultServiceProbes, type BackingServiceProbes } from "./health.js";
 
 export interface AppOptions {
   dbPath: string;
@@ -36,6 +37,10 @@ export interface AppOptions {
   metrics?: Metrics;
   /** Optional logger override for tests. Defaults to silent (logger: false). */
   logger?: boolean;
+  /** Optional backing-service probe override for tests. Defaults to TCP probes via env. */
+  probes?: BackingServiceProbes;
+  /** Started-at timestamp used by the /healthz uptime field. */
+  startedAt?: number;
 }
 
 export type App = FastifyInstance;
@@ -46,10 +51,19 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   // so the test asserts the contract instead of an implementation accident.
   // Pino (bundled with Fastify) emits structured JSON logs by default in
   // production. Tests opt out via opts.logger = false.
+  // requestIdHeader: every response carries X-Request-Id. The web client +
+  // reverse proxy can grep the same id across web + gateway + downstream
+  // services for log correlation.
   const app = Fastify({
     logger: opts.logger ?? false,
     bodyLimit: 1_048_576,
-    disableRequestLogging: opts.logger === false,
+    // logController (Fastify 5+) replaces disableRequestLogging. When logger
+    // is off (tests) we don't emit any per-request logs.
+    ...(opts.logger === false
+      ? { logController: { isLogDisabled: () => true, disableRequestLogging: true } as never }
+      : {}),
+    genReqId: () => Math.random().toString(36).slice(2, 10),
+    requestIdHeader: "x-request-id",
   });
   const store = new Store(opts.dbPath);
   const bus = new EventBus(store);
@@ -91,6 +105,14 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     credentials: true,
   });
 
+  // Echo the request id on every response so the web client + reverse
+  // proxy can correlate a single user request across web + gateway +
+  // downstream pi child logs. Fastify's requestIdHeader is for INCOMING
+  // requests; for the outgoing echo we need an explicit onSend hook.
+  app.addHook("onSend", async (req, reply) => {
+    if (req.id) reply.header("x-request-id", req.id);
+  });
+
   // Spec §11: request-level metrics. onResponse fires after the route
   // handler has set reply.statusCode, so we capture the final response code.
   app.addHook("onResponse", async (req, reply) => {
@@ -110,7 +132,22 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     throw err;
   });
 
-  app.get("/healthz", async () => ({ ok: true }));
+  // Spec §9 + §11: probe backing services so K8s readiness reflects real
+  // dependency state. Defaults to no probes (env opt-in); tests override
+  // via opts.probes. Returns 503 if any probe fails — readiness check fails
+  // until the dep is reachable.
+  const startedAt = opts.startedAt ?? Date.now();
+  app.get("/healthz", async (_req, reply) => {
+    const result = await runHealthCheck(
+      {
+        probes: opts.probes,
+        serviceProbes: opts.probes ? () => ({}) : defaultServiceProbes,
+      },
+      startedAt,
+    );
+    const allOk = result.gateway.ok && Object.values(result.backing).every((s) => s.ok);
+    return reply.code(allOk ? 200 : 503).send(result);
+  });
 
   // Prometheus text format. Unauthenticated by design (Prometheus scrapes
   // internally; an external scraper should go through the reverse proxy

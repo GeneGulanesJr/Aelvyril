@@ -264,4 +264,18 @@ describe("v1 routes", () => {
     const u2first = await u2.post("/v1/conversations", { title: "u2-1" });
     expect(u2first.statusCode).toBe(201);
   });
+
+  // Spec §11: every response carries X-Request-Id. The web client + reverse
+  // proxy use the same id to correlate logs across services.
+  it("includes a unique X-Request-Id on every response", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    const r1 = await u1.get("/healthz");
+    const r2 = await u1.get("/healthz");
+    expect(r1.headers["x-request-id"]).toBeTruthy();
+    expect(r2.headers["x-request-id"]).toBeTruthy();
+    expect(r1.headers["x-request-id"]).not.toEqual(r2.headers["x-request-id"]);
+    // 8-char random base36: matches the genReqId implementation.
+    expect(r1.headers["x-request-id"]).toMatch(/^[a-z0-9]{8}$/);
+  });
 });

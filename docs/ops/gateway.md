@@ -135,6 +135,55 @@ Single-process only. To scale horizontally:
 
 ## Observability
 
+### Request IDs
+
+Every response carries an `X-Request-Id` header (8-char random base36).
+The web client and reverse proxy pass it through; pino logs include
+`reqId` automatically. Use it to correlate a single user request across
+web + gateway + the spawned pi child's stderr.
+
+```sh
+curl -i http://127.0.0.1:8787/healthz | grep -i request-id
+# X-Request-Id: k3j9x1b7
+```
+
+To trace a specific request end-to-end:
+
+```sh
+docker logs ... 2>&1 | jq 'select(.reqId == "k3j9x1b7")'
+```
+
+### `/healthz` (liveness + readiness)
+
+Returns 200 when the gateway itself is healthy AND every configured
+backing service is reachable (TCP probe); returns 503 if any probe
+fails. Use this for K8s readiness checks so a deploy doesn't get
+traffic until `lapis` / `sandd` / `layamcp` are reachable.
+
+By default the probe set is empty — the endpoint just returns
+`{gateway: {ok: true, uptimeMs: N}, backing: {}}`. To probe specific
+services, set env vars:
+
+```sh
+LAPIS_URL=lapis:8788 SANDD_URL=sandd:7391 LAYAMCP_URL=layamcp:8765 \
+  pnpm --filter @aelvyril/gateway start
+```
+
+Response shape:
+
+```json
+{
+  "gateway": { "ok": true, "uptimeMs": 12345 },
+  "backing": {
+    "lapis":   { "ok": true,  "latencyMs": 2 },
+    "sandd":   { "ok": false, "latencyMs": 2001, "error": "timeout" },
+    "layamcp": { "ok": true,  "latencyMs": 1 }
+  }
+}
+```
+
+The compose.yaml wires these env vars automatically in the prod profile.
+
 ### `/metrics` (Prometheus text format)
 
 Unauthenticated. Returns counters + a histogram. Scrape from your

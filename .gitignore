@@ -32,3 +32,7 @@ infra/.docker-state/
 
 # Gateway dev database
 data/
+
+# Playwright run artifacts (HTML report + test results JSON/traces)
+playwright-report/
+test-results/

@@ -37,11 +37,6 @@
 > - OpenTelemetry tracing across web + gateway + pi child (correlate traces through the SSE stream).
 >
 > See root README.md for the current full feature inventory + ops runbooks.
-> - Session resume from the pi session file (spec §6) — child crash today only marks `degraded`, no respawn from history.
-> - Conversation list UX (rename, delete, search) — currently a `<select>` dropdown.
-> - Playwright E2E (spec §11) — only SSE parser has web tests today.
->
-> Implementation deviations from this plan (all reviewed): `buildApp` is async (fastify plugin ordering); `@clerk/backend` resolved v3 → standalone `verifyToken(token, { secretKey })` export; supervisor relays `custom_*` events to the bus (needed for the D7 env-echo assertion); namespace index created after the legacy `ALTER TABLE`; `@clerk/nextjs` v7 (Core 3) removed `<SignedIn>/<SignedOut>` → root page uses server `auth()`; webpack `extensionAlias` in `next.config.ts` for `.js`→`.ts` workspace resolution; web `test` script uses `--passWithNoTests` until Task 3 landed.
 
 ---
 

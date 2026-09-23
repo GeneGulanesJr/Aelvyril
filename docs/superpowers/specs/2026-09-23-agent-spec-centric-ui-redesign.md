@@ -169,12 +169,39 @@ Status pill colors:
 
 **SSE event envelopes added** (in `@aelvyril/shared/src/envelope.ts`):
 ```ts
-type EventEnvelope =
-  | { type: "message"; ...existing }
-  | { type: "spec_question"; threadId: string; questions: SpecQuestion[] }
-  | { type: "spec_draft";    threadId: string; draft: SpecDraft }
-  | { type: "spec_status";   threadId: string; status: ThreadStatus }
-  | { type: "diff";          threadId: string; files: { path: string; patch: string }[] }
+// Existing envelope shape: { seq, conversationId, ts, kind, payload }
+// New kinds extend EnvelopeKind union; payloads live under `payload`.
+const SpecQuestionEvent = z.object({
+  seq: z.number().int(),
+  conversationId: z.string(),
+  ts: z.string().datetime({ offset: true }),
+  kind: z.literal("spec_question"),
+  payload: z.object({ questions: z.array(SpecQuestion) }),
+});
+const SpecDraftEvent = z.object({
+  seq: z.number().int(),
+  conversationId: z.string(),
+  ts: z.string().datetime({ offset: true }),
+  kind: z.literal("spec_draft"),
+  payload: z.object({ draft: SpecDraft }),
+});
+const SpecStatusEvent = z.object({
+  seq: z.number().int(),
+  conversationId: z.string(),
+  ts: z.string().datetime({ offset: true }),
+  kind: z.literal("spec_status"),
+  payload: z.object({ status: ThreadStatus }),
+});
+const DiffEvent = z.object({
+  seq: z.number().int(),
+  conversationId: z.string(),
+  ts: z.string().datetime({ offset: true }),
+  kind: z.literal("diff"),
+  payload: z.object({ files: z.array(z.object({ path: z.string(), patch: z.string() })) }),
+});
+
+// A `parseEnvelope(raw: string): EventEnvelope | null` helper returns `null`
+// for malformed/empty/non-JSON input (never throws).
 ```
 
 ### 5.2 Frontend changes (`apps/web`)

@@ -117,6 +117,18 @@ export class GatewayClient {
     if (!res.ok) throw new Error(`retry failed: ${res.status}`);
   }
 
+  /** Cancel the in-flight turn (steer queue keeps the thread usable). */
+  async abortThread(threadId: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}${ROUTES.threadAbort(threadId)}`, await this.authed({ method: "POST" }));
+    if (!res.ok) throw new Error(`abort failed: ${res.status}`);
+  }
+
+  /** Delete the thread and its event history (cascades gateway-side). */
+  async deleteThread(threadId: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}${ROUTES.thread(threadId)}`, await this.authed({ method: "DELETE" }));
+    if (!res.ok) throw new Error(`delete failed: ${res.status}`);
+  }
+
   async getUpdateStatus(): Promise<UpdateStatus> {
     const res = await fetch(`${this.baseUrl}/v1/admin/update/status`, await this.authed());
     if (!res.ok) throw new Error(`update status failed: ${res.status}`);

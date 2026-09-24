@@ -167,4 +167,21 @@ describe("thread client methods", () => {
       client.patchSpec("t1", { kind: "answer" } as never),
     ).rejects.toThrow(/patch spec failed: 400/);
   });
+
+  it("abortThread/deleteThread hit the canonical thread routes", async () => {
+    const { client } = makeClient();
+    const { fetchMock } = mockFetchSequence([
+      { ok: true, status: 202, body: { accepted: true } },
+      { ok: true, status: 204 },
+    ]);
+    await client.abortThread("t1");
+    await client.deleteThread("t1");
+    const urls = fetchMock.mock.calls.map((c) => c[0]);
+    expect(urls).toEqual([
+      "http://example.test/v1/threads/t1/abort",
+      "http://example.test/v1/threads/t1",
+    ]);
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe("POST");
+    expect((fetchMock.mock.calls[1]![1] as RequestInit).method).toBe("DELETE");
+  });
 });

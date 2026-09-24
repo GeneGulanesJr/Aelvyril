@@ -2,8 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { AgentContract } from "./agent-contract.js";
 
-type Session = ConstructorParameters<typeof AgentContract>[0];
-
 function fakeSession() {
   const ee = new EventEmitter();
   return {

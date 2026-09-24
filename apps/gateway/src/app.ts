@@ -199,7 +199,11 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     }
   });
 
-  app.post("/v1/conversations", async (req, reply) => {
+  // --- Threads (renamed from conversations; old paths stay alive below) ---
+  // Mutating routes use named handlers registered under BOTH paths: a 302
+  // would make fetch re-issue them as GETs, dropping method + body. GET
+  // aliases are plain 302s.
+  const createThread = async (req: FastifyRequest, reply: FastifyReply) => {
     const userId = await user(req, reply);
     if (!userId) return;
     const namespace = toUserNamespace(userId);
@@ -217,16 +221,19 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     }
     const conv = store.createConversation({ ...body, namespace });
     return reply.code(201).send(conv);
-  });
+  };
+  app.post("/v1/threads", createThread);
+  app.post("/v1/conversations", createThread);
 
-  app.get("/v1/conversations", async (req, reply) => {
+  app.get("/v1/threads", async (req, reply) => {
     const userId = await user(req, reply);
     if (!userId) return;
     const namespace = toUserNamespace(userId);
     return { conversations: store.listConversations(namespace) };
   });
+  app.get("/v1/conversations", async (_req, reply) => reply.redirect("/v1/threads", 302));
 
-  app.get("/v1/conversations/:id", async (req, reply) => {
+  app.get("/v1/threads/:id", async (req, reply) => {
     const userId = await user(req, reply);
     if (!userId) return;
     const namespace = toUserNamespace(userId);
@@ -234,8 +241,12 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const conv = store.getConversation(id, namespace);
     return conv ? conv : reply.code(404).send({ error: "not_found" });
   });
+  app.get("/v1/conversations/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    return reply.redirect(`/v1/threads/${id}`, 302);
+  });
 
-  app.patch("/v1/conversations/:id", async (req, reply) => {
+  const renameThread = async (req: FastifyRequest, reply: FastifyReply) => {
     const userId = await user(req, reply);
     if (!userId) return;
     const namespace = toUserNamespace(userId);
@@ -244,9 +255,11 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const body = RenameConversationBody.parse(req.body ?? {});
     store.renameConversation(id, namespace, body.title);
     return store.getConversation(id, namespace);
-  });
+  };
+  app.patch("/v1/threads/:id", renameThread);
+  app.patch("/v1/conversations/:id", renameThread);
 
-  app.delete("/v1/conversations/:id", async (req, reply) => {
+  const deleteThread = async (req: FastifyRequest, reply: FastifyReply) => {
     const userId = await user(req, reply);
     if (!userId) return;
     const namespace = toUserNamespace(userId);
@@ -255,9 +268,11 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     // foreign conv id is a no-op → 404, never a destructive 204.
     const deleted = store.deleteConversation(id, namespace);
     return deleted ? reply.code(204).send() : reply.code(404).send({ error: "not_found" });
-  });
+  };
+  app.delete("/v1/threads/:id", deleteThread);
+  app.delete("/v1/conversations/:id", deleteThread);
 
-  app.post("/v1/conversations/:id/prompt", async (req, reply) => {
+  const promptThread = async (req: FastifyRequest, reply: FastifyReply) => {
     const userId = await user(req, reply);
     if (!userId) return;
     const namespace = toUserNamespace(userId);
@@ -299,9 +314,11 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       payload: { text: body.message },
     });
     return reply.code(202).send({ accepted: true });
-  });
+  };
+  app.post("/v1/threads/:id/prompt", promptThread);
+  app.post("/v1/conversations/:id/prompt", promptThread);
 
-  app.post("/v1/conversations/:id/abort", async (req, reply) => {
+  const abortThread = async (req: FastifyRequest, reply: FastifyReply) => {
     const userId = await user(req, reply);
     if (!userId) return;
     const namespace = toUserNamespace(userId);
@@ -309,9 +326,16 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
     await supervisor.abort(id);
     return reply.code(202).send({ accepted: true });
-  });
+  };
+  app.post("/v1/threads/:id/abort", abortThread);
+  app.post("/v1/conversations/:id/abort", abortThread);
 
   app.get("/v1/conversations/:id/events", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    return reply.redirect(`/v1/threads/${id}/events`, 302);
+  });
+
+  app.get("/v1/threads/:id/events", async (req, reply) => {
     const userId = await user(req, reply);
     if (!userId) return;
     const namespace = toUserNamespace(userId);

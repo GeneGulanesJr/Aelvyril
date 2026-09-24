@@ -22,7 +22,7 @@ describe("response compression", () => {
     for (let i = 0; i < 30; i++) {
       const r = await app.inject({
         method: "POST",
-        url: "/v1/conversations",
+        url: "/v1/threads",
         headers: { authorization: "Bearer good", "accept-encoding": "gzip" },
         payload: { title: `${big} ${i}` },
       });
@@ -31,7 +31,7 @@ describe("response compression", () => {
     // GET that returns the conversation row — which includes the long title.
     const res = await app.inject({
       method: "GET",
-      url: "/v1/conversations",
+      url: "/v1/threads",
       headers: { authorization: "Bearer good", "accept-encoding": "gzip" },
     });
     expect(res.statusCode).toBe(200);
@@ -58,7 +58,7 @@ describe("response compression", () => {
     // defaults (text/event-stream is in streamTypes) — see plugin source.
     const res = await app.inject({
       method: "GET",
-      url: "/v1/conversations/conv_x/events",
+      url: "/v1/threads/conv_x/events",
       headers: { authorization: "Bearer good", "accept-encoding": "gzip" },
     });
     expect(res.statusCode).toBe(404);

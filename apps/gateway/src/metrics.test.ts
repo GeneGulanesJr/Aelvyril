@@ -14,12 +14,12 @@ describe("createMetrics", () => {
 
   it("counts requests by method/route/status", () => {
     const m = createMetrics();
-    m.httpRequestsTotal.inc({ method: "POST", route: "/v1/conversations/:id/prompt", status: "202" });
-    m.httpRequestsTotal.inc({ method: "POST", route: "/v1/conversations/:id/prompt", status: "202" });
-    m.httpRequestsTotal.inc({ method: "POST", route: "/v1/conversations/:id/prompt", status: "429" });
+    m.httpRequestsTotal.inc({ method: "POST", route: "/v1/threads/:id/prompt", status: "202" });
+    m.httpRequestsTotal.inc({ method: "POST", route: "/v1/threads/:id/prompt", status: "202" });
+    m.httpRequestsTotal.inc({ method: "POST", route: "/v1/threads/:id/prompt", status: "429" });
     const out = m.render();
-    expect(out).toContain('aelvyril_http_requests_total{method="POST",route="/v1/conversations/:id/prompt",status="202"} 2');
-    expect(out).toContain('aelvyril_http_requests_total{method="POST",route="/v1/conversations/:id/prompt",status="429"} 1');
+    expect(out).toContain('aelvyril_http_requests_total{method="POST",route="/v1/threads/:id/prompt",status="202"} 2');
+    expect(out).toContain('aelvyril_http_requests_total{method="POST",route="/v1/threads/:id/prompt",status="429"} 1');
   });
 
   it("buckets observations into the histogram", () => {

@@ -27,7 +27,7 @@ describe("auth", () => {
       childArgs: [fakePi],
       verifyToken: okVerifier,
     });
-    const res = await app.inject({ method: "GET", url: "/v1/conversations" });
+    const res = await app.inject({ method: "GET", url: "/v1/threads" });
     expect(res.statusCode).toBe(401);
     const health = await app.inject({ method: "GET", url: "/healthz" });
     expect(health.statusCode).toBe(200);
@@ -41,7 +41,7 @@ describe("auth", () => {
       childArgs: [fakePi],
       verifyToken: okVerifier,
     });
-    const res = await authed(app, "nope").get("/v1/conversations");
+    const res = await authed(app, "nope").get("/v1/threads");
     expect(res.statusCode).toBe(401);
     await app.close();
   });
@@ -61,10 +61,10 @@ describe("auth", () => {
     });
     const u1 = authed(app, "good");
     const u2 = authed(app, "good2");
-    await u1.post("/v1/conversations", { title: "mine" });
-    const mine = await u1.get("/v1/conversations");
+    await u1.post("/v1/threads", { title: "mine" });
+    const mine = await u1.get("/v1/threads");
     expect(mine.json().conversations).toHaveLength(1);
-    const theirs = await u2.get("/v1/conversations");
+    const theirs = await u2.get("/v1/threads");
     expect(theirs.json().conversations).toHaveLength(0);
     await app.close();
   });
@@ -77,12 +77,12 @@ describe("auth", () => {
       verifyToken: async (token) =>
         token === "ta" ? { userId: "user_A" } : token === "tb" ? { userId: "user_B" } : null,
     });
-    const conv = (await (await authed(app, "ta").post("/v1/conversations", {})).json()) as {
+    const conv = (await (await authed(app, "ta").post("/v1/threads", {})).json()) as {
       id: string;
     };
-    const stolen = await authed(app, "tb").get(`/v1/conversations/${conv.id}`);
+    const stolen = await authed(app, "tb").get(`/v1/threads/${conv.id}`);
     expect(stolen.statusCode).toBe(404);
-    const mine = await authed(app, "ta").get(`/v1/conversations/${conv.id}`);
+    const mine = await authed(app, "ta").get(`/v1/threads/${conv.id}`);
     expect(mine.statusCode).toBe(200);
     await app.close();
   });

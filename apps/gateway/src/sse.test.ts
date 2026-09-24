@@ -60,20 +60,20 @@ describe("SSE end-to-end", () => {
 
   it("streams envelopes for a prompt, in order, then settles", async () => {
     const conv = (await (
-      await fetch(`${baseUrl}/v1/conversations`, {
+      await fetch(`${baseUrl}/v1/threads`, {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeaders },
         body: JSON.stringify({}),
       })
     ).json()) as { id: string };
 
-    const stream = await fetch(`${baseUrl}/v1/conversations/${conv.id}/events`, {
+    const stream = await fetch(`${baseUrl}/v1/threads/${conv.id}/events`, {
       headers: authHeaders,
     });
     expect(stream.headers.get("content-type")).toBe("text/event-stream");
     const sse = makeReader(stream);
 
-    const promptPromise = fetch(`${baseUrl}/v1/conversations/${conv.id}/prompt`, {
+    const promptPromise = fetch(`${baseUrl}/v1/threads/${conv.id}/prompt`, {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders },
       body: JSON.stringify({ message: "hi" }),
@@ -112,32 +112,32 @@ describe("SSE end-to-end", () => {
   });
 
   it("rejects unauthenticated event streams", async () => {
-    const res = await fetch(`${baseUrl}/v1/conversations`);
+    const res = await fetch(`${baseUrl}/v1/threads`);
     expect(res.status).toBe(401);
   });
 
   it("replays from Last-Event-ID on reconnect", async () => {
     const conv = (await (
-      await fetch(`${baseUrl}/v1/conversations`, {
+      await fetch(`${baseUrl}/v1/threads`, {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeaders },
         body: JSON.stringify({}),
       })
     ).json()) as { id: string };
-    await fetch(`${baseUrl}/v1/conversations/${conv.id}/prompt`, {
+    await fetch(`${baseUrl}/v1/threads/${conv.id}/prompt`, {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders },
       body: JSON.stringify({ message: "hi" }),
     });
     await vi.waitFor(async () => {
-      const one = await fetch(`${baseUrl}/v1/conversations/${conv.id}`, { headers: authHeaders });
+      const one = await fetch(`${baseUrl}/v1/threads/${conv.id}`, { headers: authHeaders });
       expect(((await one.json()) as { state: string }).state).toBe("idle");
     });
 
     // user_message (1) shifts everything: 0 streaming, 1 user_message, 2 echo,
     // 3-6 deltas, 7 tool_call, 8 tool_result, 9 idle. Last-Event-ID 7 skips
     // the echo and deltas.
-    const replay = await fetch(`${baseUrl}/v1/conversations/${conv.id}/events`, {
+    const replay = await fetch(`${baseUrl}/v1/threads/${conv.id}/events`, {
       headers: { "last-event-id": "7", ...authHeaders },
     });
     // The stream stays open (heartbeat), so read bounded chunks until the
@@ -179,12 +179,12 @@ describe("SSE CORS on hijacked streams", () => {
       const base = `http://127.0.0.1:${addr.port}`;
       const originHeaders = { ...authHeaders, origin: "http://localhost:3000" };
       const conv = await (
-        await fetch(`${base}/v1/conversations`, {
+        await fetch(`${base}/v1/threads`, {
           method: "POST",
           headers: originHeaders,
         })
       ).json();
-      const res = await fetch(`${base}/v1/conversations/${(conv as { id: string }).id}/events`, {
+      const res = await fetch(`${base}/v1/threads/${(conv as { id: string }).id}/events`, {
         headers: originHeaders,
       });
       expect(res.status).toBe(200);
@@ -192,7 +192,7 @@ describe("SSE CORS on hijacked streams", () => {
       expect(res.headers.get("access-control-allow-credentials")).toBe("true");
       await res.body!.cancel(); // release the hijacked socket or close() hangs
       // Non-allow-listed origin gets no ACAO on the stream.
-      const denied = await fetch(`${base}/v1/conversations/${(conv as { id: string }).id}/events`, {
+      const denied = await fetch(`${base}/v1/threads/${(conv as { id: string }).id}/events`, {
         headers: { ...authHeaders, origin: "http://evil.example" },
       });
       expect(denied.headers.get("access-control-allow-origin")).toBeNull();

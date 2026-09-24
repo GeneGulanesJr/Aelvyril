@@ -46,47 +46,47 @@ describe("v1 routes", () => {
   it("creates, lists, gets conversations", async () => {
     app = await makeApp();
     const u1 = authed(app, "good");
-    const created = await u1.post("/v1/conversations", { title: "t", workspace: "/home/LaPis" });
+    const created = await u1.post("/v1/threads", { title: "t", workspace: "/home/LaPis" });
     expect(created.statusCode).toBe(201);
     const conv = created.json();
     expect(conv.id).toMatch(/^conv_/);
 
-    const list = await u1.get("/v1/conversations");
+    const list = await u1.get("/v1/threads");
     expect(list.json().conversations).toHaveLength(1);
 
-    const one = await u1.get(`/v1/conversations/${conv.id}`);
+    const one = await u1.get(`/v1/threads/${conv.id}`);
     expect(one.json().title).toBe("t");
 
-    const missing = await u1.get("/v1/conversations/conv_x");
+    const missing = await u1.get("/v1/threads/conv_x");
     expect(missing.statusCode).toBe(404);
   });
 
   it("validates prompt body", async () => {
     app = await makeApp();
     const u1 = authed(app, "good");
-    const conv = (await (await u1.post("/v1/conversations", {})).json()) as { id: string };
-    const bad = await u1.post(`/v1/conversations/${conv.id}/prompt`, { message: "" });
+    const conv = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const bad = await u1.post(`/v1/threads/${conv.id}/prompt`, { message: "" });
     expect(bad.statusCode).toBe(400);
-    const missing = await u1.post("/v1/conversations/conv_x/prompt", { message: "hi" });
+    const missing = await u1.post("/v1/threads/conv_x/prompt", { message: "hi" });
     expect(missing.statusCode).toBe(404);
   });
 
   it("accepts a prompt and returns 202 immediately", async () => {
     app = await makeApp();
     const u1 = authed(app, "good");
-    const conv = (await (await u1.post("/v1/conversations", {})).json()) as { id: string };
-    const res = await u1.post(`/v1/conversations/${conv.id}/prompt`, { message: "hi" });
+    const conv = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const res = await u1.post(`/v1/threads/${conv.id}/prompt`, { message: "hi" });
     expect(res.statusCode).toBe(202);
     expect(res.json()).toEqual({ accepted: true });
     await vi.waitFor(async () => {
-      const one = await u1.get(`/v1/conversations/${conv.id}`);
+      const one = await u1.get(`/v1/threads/${conv.id}`);
       expect(one.json().state).toBe("idle");
     });
   });
 
   it("abort on unknown conversation 404s", async () => {
     app = await makeApp();
-    const res = await authed(app, "good").post("/v1/conversations/conv_x/abort");
+    const res = await authed(app, "good").post("/v1/threads/conv_x/abort");
     expect(res.statusCode).toBe(404);
   });
 
@@ -95,9 +95,9 @@ describe("v1 routes", () => {
   it("rejects bodies larger than the 1MB bodyLimit with 413", async () => {
     app = await makeApp();
     const u1 = authed(app, "good");
-    const conv = (await (await u1.post("/v1/conversations", {})).json()) as { id: string };
+    const conv = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
     const tooBig = { message: "x".repeat(1_048_577) };
-    const res = await u1.post(`/v1/conversations/${conv.id}/prompt`, tooBig);
+    const res = await u1.post(`/v1/threads/${conv.id}/prompt`, tooBig);
     expect(res.statusCode).toBe(413);
   });
 
@@ -114,7 +114,7 @@ describe("v1 routes", () => {
       // no workspaceAllowlist → default-deny
     });
     const u1 = authed(app, "good");
-    const res = await u1.post("/v1/conversations", { title: "x", workspace: "/any/path" });
+    const res = await u1.post("/v1/threads", { title: "x", workspace: "/any/path" });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ error: "workspace_not_allowed" });
   });
@@ -129,33 +129,33 @@ describe("v1 routes", () => {
       // no workspaceAllowlist → default-deny on workspaces, but null is fine
     });
     const u1 = authed(app, "good");
-    const res = await u1.post("/v1/conversations", { title: "private" });
+    const res = await u1.post("/v1/threads", { title: "private" });
     expect(res.statusCode).toBe(201);
   });
 
-  // PATCH /v1/conversations/:id (rename) and DELETE /v1/conversations/:id
+  // PATCH /v1/threads/:id (rename) and DELETE /v1/threads/:id
   // back the new conversation-list UI (frontend rename ✎ / delete ×).
   it("renames a conversation via PATCH and returns the updated row", async () => {
     app = await makeApp();
     const u1 = authed(app, "good");
-    const conv = (await (await u1.post("/v1/conversations", { title: "old" })).json()) as { id: string };
-    const res = await u1.post(`/v1/conversations/${conv.id}/prompt`, { message: "hi" });
+    const conv = (await (await u1.post("/v1/threads", { title: "old" })).json()) as { id: string };
+    const res = await u1.post(`/v1/threads/${conv.id}/prompt`, { message: "hi" });
     // Use the helper's post method with custom method override:
     const renamed = await app.inject({
       method: "PATCH",
-      url: `/v1/conversations/${conv.id}`,
+      url: `/v1/threads/${conv.id}`,
       headers: { authorization: `Bearer good` },
       payload: { title: "new title" },
     });
     expect(renamed.statusCode).toBe(200);
     expect(renamed.json().title).toBe("new title");
     // Round-trip via GET confirms persistence.
-    const fetched = await u1.get(`/v1/conversations/${conv.id}`);
+    const fetched = await u1.get(`/v1/threads/${conv.id}`);
     expect(fetched.json().title).toBe("new title");
     // Validation rejects empty / too-long titles.
     const bad1 = await app.inject({
       method: "PATCH",
-      url: `/v1/conversations/${conv.id}`,
+      url: `/v1/threads/${conv.id}`,
       headers: { authorization: `Bearer good` },
       payload: { title: "" },
     });
@@ -166,50 +166,50 @@ describe("v1 routes", () => {
   it("rejects PATCH rename across users (cross-tenant 404)", async () => {
     app = await makeApp();
     const u1 = authed(app, "good"); // user_test1
-    const conv = (await (await u1.post("/v1/conversations", { title: "mine" })).json()) as { id: string };
+    const conv = (await (await u1.post("/v1/threads", { title: "mine" })).json()) as { id: string };
     const stolen = await app.inject({
       method: "PATCH",
-      url: `/v1/conversations/${conv.id}`,
+      url: `/v1/threads/${conv.id}`,
       headers: { authorization: `Bearer good2` },
       payload: { title: "hijacked" },
     });
     expect(stolen.statusCode).toBe(404);
-    const mine = await u1.get(`/v1/conversations/${conv.id}`);
+    const mine = await u1.get(`/v1/threads/${conv.id}`);
     expect(mine.json().title).toBe("mine");
   });
 
   it("deletes a conversation via DELETE and 204s, then GET 404s", async () => {
     app = await makeApp();
     const u1 = authed(app, "good");
-    const conv = (await (await u1.post("/v1/conversations", { title: "bye" })).json()) as { id: string };
+    const conv = (await (await u1.post("/v1/threads", { title: "bye" })).json()) as { id: string };
     const del = await app.inject({
       method: "DELETE",
-      url: `/v1/conversations/${conv.id}`,
+      url: `/v1/threads/${conv.id}`,
       headers: { authorization: `Bearer good` },
     });
     expect(del.statusCode).toBe(204);
-    const fetched = await u1.get(`/v1/conversations/${conv.id}`);
+    const fetched = await u1.get(`/v1/threads/${conv.id}`);
     expect(fetched.statusCode).toBe(404);
     // The list no longer contains it.
-    const list = await u1.get("/v1/conversations");
+    const list = await u1.get("/v1/threads");
     expect((list.json().conversations as Array<{ id: string }>).map((c) => c.id)).not.toContain(conv.id);
   });
 
   it("rejects DELETE across users (cross-tenant 404, no destructive action)", async () => {
     app = await makeApp();
     const u1 = authed(app, "good");
-    const conv = (await (await u1.post("/v1/conversations", { title: "mine" })).json()) as { id: string };
+    const conv = (await (await u1.post("/v1/threads", { title: "mine" })).json()) as { id: string };
     const stolen = await app.inject({
       method: "DELETE",
-      url: `/v1/conversations/${conv.id}`,
+      url: `/v1/threads/${conv.id}`,
       headers: { authorization: `Bearer good2` },
     });
     expect(stolen.statusCode).toBe(404);
-    const stillThere = await u1.get(`/v1/conversations/${conv.id}`);
+    const stillThere = await u1.get(`/v1/threads/${conv.id}`);
     expect(stillThere.statusCode).toBe(200);
   });
 
-  // Spec §10: per-user rate limit on /v1/conversations/:id/prompt.
+  // Spec §10: per-user rate limit on /v1/threads/:id/prompt.
   // Uses a deterministic 1-token-capacity limiter with no refill — the
   // second prompt from the same user in the same test must trip it.
   it("rate-limits the prompt route: 429 + retry-after once a user exceeds their bucket", async () => {
@@ -236,12 +236,12 @@ describe("v1 routes", () => {
       rateLimiter: rl,
     });
     const u1 = authed(app, "good");
-    const conv = (await (await u1.post("/v1/conversations", {})).json()) as { id: string };
+    const conv = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
     // First prompt: OK (consumed=1, returns 0).
-    const first = await u1.post(`/v1/conversations/${conv.id}/prompt`, { message: "hi" });
+    const first = await u1.post(`/v1/threads/${conv.id}/prompt`, { message: "hi" });
     expect(first.statusCode).toBe(202);
     // Second prompt from same user: bucket empty → 429 with retry-after.
-    const second = await u1.post(`/v1/conversations/${conv.id}/prompt`, { message: "again" });
+    const second = await u1.post(`/v1/threads/${conv.id}/prompt`, { message: "again" });
     expect(second.statusCode).toBe(429);
     expect(second.headers["retry-after"]).toBe("60");
     expect(second.json()).toEqual({ error: "rate_limited" });
@@ -251,15 +251,15 @@ describe("v1 routes", () => {
   it("caps total conversations per user at 3 (503 + limit field on the 4th)", async () => {
     app = await makeApp();
     const u1 = authed(app, "good");
-    await u1.post("/v1/conversations", { title: "1" });
-    await u1.post("/v1/conversations", { title: "2" });
-    await u1.post("/v1/conversations", { title: "3" });
-    const fourth = await u1.post("/v1/conversations", { title: "4" });
+    await u1.post("/v1/threads", { title: "1" });
+    await u1.post("/v1/threads", { title: "2" });
+    await u1.post("/v1/threads", { title: "3" });
+    const fourth = await u1.post("/v1/threads", { title: "4" });
     expect(fourth.statusCode).toBe(503);
     expect(fourth.json()).toEqual({ error: "conversation_limit_reached", limit: 3 });
     // Different user is unaffected — cap is per-namespace.
     const u2 = authed(app, "good2");
-    const u2first = await u2.post("/v1/conversations", { title: "u2-1" });
+    const u2first = await u2.post("/v1/threads", { title: "u2-1" });
     expect(u2first.statusCode).toBe(201);
   });
 
@@ -275,5 +275,71 @@ describe("v1 routes", () => {
     expect(r1.headers["x-request-id"]).not.toEqual(r2.headers["x-request-id"]);
     // 8-char random base36: matches the genReqId implementation.
     expect(r1.headers["x-request-id"]).toMatch(/^[a-z0-9]{8}$/);
+  });
+});
+
+describe("thread route rename", () => {
+  let app: App | undefined;
+  afterEach(async () => app && (await app.close()));
+
+  it("302s GET /v1/conversations to /v1/threads", async () => {
+    app = await makeApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/conversations",
+      headers: { authorization: "Bearer good" },
+    });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe("/v1/threads");
+  });
+
+  it("serves GET /v1/threads", async () => {
+    app = await makeApp();
+    const res = await authed(app, "good").get("/v1/threads");
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("POST /v1/conversations alias preserves method + body (302 would drop both)", async () => {
+    app = await makeApp();
+    const res = await authed(app, "good").post("/v1/conversations", { title: "alias" });
+    expect(res.statusCode).toBe(201);
+    expect((res.json() as { title: string }).title).toBe("alias");
+  });
+
+  it("creates, lists, gets via canonical /v1/threads", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    const created = await u1.post("/v1/threads", { title: "t" });
+    expect(created.statusCode).toBe(201);
+    const id = (created.json() as { id: string }).id;
+    const list = await u1.get("/v1/threads");
+    expect((list.json() as { conversations: unknown[] }).conversations).toHaveLength(1);
+    const one = await u1.get(`/v1/threads/${id}`);
+    expect((one.json() as { title: string }).title).toBe("t");
+  });
+
+  it("302s GET /v1/conversations/:id to /v1/threads/:id", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    const conv = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const res = await app.inject({
+      method: "GET",
+      url: `/v1/conversations/${conv.id}`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe(`/v1/threads/${conv.id}`);
+  });
+
+  it("DELETE /v1/conversations/:id alias stays destructive (204)", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    const conv = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/v1/conversations/${conv.id}`,
+      headers: { authorization: `Bearer good` },
+    });
+    expect(res.statusCode).toBe(204);
   });
 });

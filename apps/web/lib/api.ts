@@ -1,10 +1,12 @@
 import type {
   Conversation,
   CreateConversationBody,
-  PromptBody,
+  PromptBodyInput,
   RenameConversationBody,
   EventEnvelope,
   UpdateStatus,
+  Thread,
+  PatchSpecBody,
 } from "@aelvyril/shared";
 import { ROUTES } from "@aelvyril/shared";
 import { SseParser } from "./sse.js";
@@ -45,7 +47,7 @@ export class GatewayClient {
     return (await res.json()) as Conversation;
   }
 
-  async prompt(id: string, body: PromptBody): Promise<void> {
+  async prompt(id: string, body: PromptBodyInput): Promise<void> {
     const res = await fetch(
       `${this.baseUrl}${ROUTES.conversationPrompt(id)}`,
       await this.authed({ method: "POST", body: JSON.stringify(body) }),
@@ -76,6 +78,43 @@ export class GatewayClient {
       await this.authed({ method: "DELETE" }),
     );
     if (!res.ok) throw new Error(`delete failed: ${res.status}`);
+  }
+
+  // --- Threads (spec-centric UI surface) ---
+
+  /** Create a thread. Server assigns id + draft status. */
+  async createThread(body: CreateConversationBody = {}): Promise<Thread> {
+    const res = await fetch(`${this.baseUrl}${ROUTES.threads}`, await this.authed({ method: "POST", body: JSON.stringify(body) }));
+    if (!res.ok) throw new Error(`create thread failed: ${res.status}`);
+    return (await res.json()) as Thread;
+  }
+
+  /** List threads. Wire key stays `conversations` (historical); items are threads. */
+  async listThreads(): Promise<Thread[]> {
+    const res = await fetch(`${this.baseUrl}${ROUTES.threads}`, await this.authed());
+    if (!res.ok) throw new Error(`list threads failed: ${res.status}`);
+    return ((await res.json()) as { conversations: Thread[] }).conversations;
+  }
+
+  /** Submit interview answers or edit a draft field. */
+  async patchSpec(threadId: string, body: PatchSpecBody): Promise<void> {
+    const res = await fetch(`${this.baseUrl}${ROUTES.threadSpec(threadId)}`, await this.authed({ method: "PATCH", body: JSON.stringify(body) }));
+    if (!res.ok) throw new Error(`patch spec failed: ${res.status}`);
+  }
+
+  async approveSpec(threadId: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}${ROUTES.threadApprove(threadId)}`, await this.authed({ method: "POST" }));
+    if (!res.ok) throw new Error(`approve failed: ${res.status}`);
+  }
+
+  async abandonThread(threadId: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}${ROUTES.threadAbandon(threadId)}`, await this.authed({ method: "POST" }));
+    if (!res.ok) throw new Error(`abandon failed: ${res.status}`);
+  }
+
+  async retryThread(threadId: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}${ROUTES.threadRetry(threadId)}`, await this.authed({ method: "POST" }));
+    if (!res.ok) throw new Error(`retry failed: ${res.status}`);
   }
 
   async getUpdateStatus(): Promise<UpdateStatus> {

@@ -8,6 +8,17 @@ export const ROUTES = {
   conversationPrompt: (id: string) => `/v1/conversations/${id}/prompt`,
   conversationAbort: (id: string) => `/v1/conversations/${id}/abort`,
   conversationRename: (id: string) => `/v1/conversations/${id}`,
+  // Canonical thread surface (gateway renamed in the spec-centric UI; the
+  // conversation paths above remain as gateway-side back-compat aliases).
+  threads: "/v1/threads",
+  thread: (id: string) => `/v1/threads/${id}`,
+  threadEvents: (id: string) => `/v1/threads/${id}/events`,
+  threadPrompt: (id: string) => `/v1/threads/${id}/prompt`,
+  threadAbort: (id: string) => `/v1/threads/${id}/abort`,
+  threadSpec: (id: string) => `/v1/threads/${id}/spec`,
+  threadApprove: (id: string) => `/v1/threads/${id}/approve`,
+  threadAbandon: (id: string) => `/v1/threads/${id}/abandon`,
+  threadRetry: (id: string) => `/v1/threads/${id}/retry`,
 } as const;
 
 export const CreateConversationBody = z.object({
@@ -30,6 +41,8 @@ export const PromptBody = z.object({
   specMode: z.enum(["auto", "force", "off"]).default("auto"),
 });
 export type PromptBody = z.infer<typeof PromptBody>;
+/** Wire (request) shape — specMode optional before the default applies. */
+export type PromptBodyInput = z.input<typeof PromptBody>;
 
 export const ConversationState = z.enum([
   "idle",

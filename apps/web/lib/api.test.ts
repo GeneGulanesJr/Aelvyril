@@ -105,3 +105,66 @@ describe("GatewayClient", () => {
     await expect(client.applyUpdate()).rejects.toThrow(/update apply failed: 400/);
   });
 });
+
+describe("thread client methods", () => {
+  it("createThread POSTs to /v1/threads", async () => {
+    const { client } = makeClient();
+    const { fetchMock } = mockFetchSequence([
+      { ok: true, body: { id: "t1", status: "draft" } },
+    ]);
+    const t = await client.createThread();
+    expect(t.id).toBe("t1");
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe("http://example.test/v1/threads");
+    expect((call[1] as RequestInit).method).toBe("POST");
+  });
+
+  it("listThreads GETs /v1/threads and maps the conversations wire key", async () => {
+    const { client } = makeClient();
+    const { fetchMock } = mockFetchSequence([
+      { ok: true, body: { conversations: [{ id: "t1" }] } },
+    ]);
+    const out = await client.listThreads();
+    expect(out).toEqual([{ id: "t1" }]);
+    expect(fetchMock.mock.calls[0]![0]).toBe("http://example.test/v1/threads");
+  });
+
+  it("patchSpec answer PATCHes with kind=answer", async () => {
+    const { client } = makeClient();
+    const { fetchMock } = mockFetchSequence([{ ok: true, body: { ok: true } }]);
+    await client.patchSpec("t1", { kind: "answer", answers: { q1: "admin" } });
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe("http://example.test/v1/threads/t1/spec");
+    expect((call[1] as RequestInit).method).toBe("PATCH");
+    expect(JSON.parse(String((call[1] as RequestInit).body))).toEqual({
+      kind: "answer",
+      answers: { q1: "admin" },
+    });
+  });
+
+  it("approveSpec/abandonThread/retryThread POST to lifecycle routes", async () => {
+    const { client } = makeClient();
+    const { fetchMock } = mockFetchSequence([
+      { ok: true, body: { ok: true } },
+      { ok: true, body: { ok: true } },
+      { ok: true, body: { ok: true } },
+    ]);
+    await client.approveSpec("t1");
+    await client.abandonThread("t1");
+    await client.retryThread("t1");
+    const urls = fetchMock.mock.calls.map((c) => c[0]);
+    expect(urls).toEqual([
+      "http://example.test/v1/threads/t1/approve",
+      "http://example.test/v1/threads/t1/abandon",
+      "http://example.test/v1/threads/t1/retry",
+    ]);
+  });
+
+  it("patchSpec throws on non-2xx with the status code", async () => {
+    const { client } = makeClient();
+    mockFetchSequence([{ ok: false, status: 400, body: { error: "invalid_body" } }]);
+    await expect(
+      client.patchSpec("t1", { kind: "answer" } as never),
+    ).rejects.toThrow(/patch spec failed: 400/);
+  });
+});

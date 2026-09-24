@@ -43,4 +43,31 @@ describe("SseParser", () => {
     expect(feed(p, mk(1))).toEqual([]); // dup
     expect(feed(p, mk(2))).toHaveLength(1);
   });
+
+  it("emits spec_question/spec_draft/spec_status/diff envelopes", () => {
+    const p = new SseParser();
+    const mk = (seq: number, kind: string, payload: unknown) =>
+      `id: ${seq}\nevent: ${kind}\ndata: ${JSON.stringify({
+        seq,
+        conversationId: "t1",
+        ts: "2026-09-23T00:00:00.000Z",
+        kind,
+        payload,
+      })}\n\n`;
+    const events = feed(
+      p,
+      mk(0, "spec_status", { status: "spec'ing" }) +
+        mk(1, "spec_question", { questions: [{ id: "q1", prompt: "?", kind: "text" }] }) +
+        mk(2, "spec_draft", {
+          draft: { goal: "", filesAffected: [], plan: [], risks: [], questions: [], answers: {} },
+        }) +
+        mk(3, "diff", { files: [{ path: "a.ts", patch: "@@" }] }),
+    );
+    expect(events.map((e) => e.kind)).toEqual([
+      "spec_status",
+      "spec_question",
+      "spec_draft",
+      "diff",
+    ]);
+  });
 });

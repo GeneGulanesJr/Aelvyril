@@ -33,6 +33,8 @@ export function useThread(
   approve: () => Promise<void>;
   abandon: () => Promise<void>;
   retry: () => Promise<void>;
+  stop: () => Promise<void>;
+  dismissError: () => void;
 } {
   const { getToken, gatewayUrl } = deps;
   const [state, setState] = useState<ThreadState>({

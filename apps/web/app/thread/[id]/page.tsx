@@ -10,6 +10,7 @@ import { ThreadInput } from "../../../components/thread/input.js";
 import { SpecSession } from "../../../components/thread/spec-session.js";
 import { OutputTabs } from "../../../components/thread/output-tabs.js";
 import { ThreadHeader } from "../../../components/thread/header.js";
+import { Banners } from "../../../components/thread/banner.js";
 
 function SignInPrompt() {
   return (
@@ -68,6 +69,7 @@ export default function ThreadPage() {
         onCreate={() => router.push("/thread/new")}
       />
       <main className="flex flex-1 flex-col overflow-hidden">
+        <Banners degraded={threadState.degraded} error={threadState.error} onDismissError={threadState.dismissError} />
         {activeThread && (
           <ThreadHeader
             thread={activeThread}
@@ -75,6 +77,13 @@ export default function ThreadPage() {
               setThreads((ts) => ts.map((t) => (t.id === activeThread.id ? { ...t, title } : t)));
             })}
             onAbandon={() => void threadState.abandon()}
+            onDelete={() =>
+              void client
+                .deleteThread(activeThread.id)
+                .then(() => setThreads((ts) => ts.filter((t) => t.id !== activeThread.id)))
+                .then(() => router.push("/thread/new"))
+                .catch((err) => console.error("delete failed", err))
+            }
           />
         )}
         {!isNew && (
@@ -89,7 +98,12 @@ export default function ThreadPage() {
               onApprove={() => void threadState.approve()}
               onCancel={() => router.push("/thread/new")}
             />
-            <ThreadInput onAsk={(prompt, mode) => void threadState.ask(prompt, mode)} disabled={false} />
+            <ThreadInput
+              onAsk={(prompt, mode) => void threadState.ask(prompt, mode)}
+              disabled={false}
+              waiting={threadState.waiting}
+              onStop={() => void threadState.stop()}
+            />
           </>
         )}
         {isNew && (

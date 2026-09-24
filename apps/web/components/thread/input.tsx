@@ -1,7 +1,13 @@
 "use client";
 import { useState } from "react";
 
-export function ThreadInput({ onAsk, disabled }: { onAsk: (prompt: string, mode: "auto" | "force" | "off") => void; disabled: boolean }) {
+export function ThreadInput({ onAsk, disabled, waiting = false, onStop }: {
+  onAsk: (prompt: string, mode: "auto" | "force" | "off") => void;
+  disabled: boolean;
+  /** A turn is in flight — shows Stop (spec §6: sends queue as steers). */
+  waiting?: boolean;
+  onStop?: () => void;
+}) {
   const [text, setText] = useState("");
   return (
     <div className="border-t border-[#2b3245] bg-[#0d1117] p-3">
@@ -27,6 +33,13 @@ export function ThreadInput({ onAsk, disabled }: { onAsk: (prompt: string, mode:
           disabled={disabled || !text.trim()}
           onClick={() => { onAsk(text, "force"); setText(""); }}
         >Ask + spec</button>
+        {waiting && onStop && (
+          <button
+            className="rounded border border-[#f85149]/50 bg-[#f85149]/10 px-3 py-1 text-sm text-[#f85149]"
+            data-testid="stop-button"
+            onClick={onStop}
+          >Stop</button>
+        )}
       </div>
     </div>
   );

@@ -27,4 +27,13 @@ describe("ThreadInput", () => {
     expect((screen.getByTestId("ask-button") as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByTestId("ask-spec-button") as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it("Stop appears only while waiting and calls onStop", () => {
+    const onStop = vi.fn();
+    const { rerender } = render(<ThreadInput onAsk={() => {}} disabled={false} />);
+    expect(screen.queryByTestId("stop-button")).toBeNull();
+    rerender(<ThreadInput onAsk={() => {}} disabled={false} waiting={true} onStop={onStop} />);
+    fireEvent.click(screen.getByTestId("stop-button"));
+    expect(onStop).toHaveBeenCalled();
+  });
 });

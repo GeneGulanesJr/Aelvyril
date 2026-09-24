@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import type { Thread, ThreadStatus } from "@aelvyril/shared";
 
 const STATUS_COLORS: Record<ThreadStatus, string> = {
@@ -14,6 +15,14 @@ export function ThreadSidebar({ threads, activeId, onSelect, onCreate }: {
   threads: Thread[]; activeId: string | null;
   onSelect: (id: string) => void; onCreate: () => void;
 }) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  // Case-insensitive substring match on title, falling back to id so
+  // untitled threads stay findable.
+  const visible = q
+    ? threads.filter((t) => (t.title ?? t.id).toLowerCase().includes(q))
+    : threads;
+
   return (
     <aside className="flex w-64 flex-col border-r border-[#2b3245] bg-[#0d1117] p-3 text-sm">
       <button
@@ -23,8 +32,15 @@ export function ThreadSidebar({ threads, activeId, onSelect, onCreate }: {
       >
         + New thread
       </button>
+      <input
+        className="mb-3 w-full rounded border border-[#2b3245] bg-[#161b27] px-2 py-1 text-xs focus:border-[#1f6feb] focus:outline-none"
+        data-testid="thread-search"
+        placeholder="Search threads…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
       <ul className="space-y-1">
-        {threads.map((t) => (
+        {visible.map((t) => (
           <li key={t.id}>
             <button
               className={`flex w-full items-center justify-between rounded px-2 py-1 text-left ${activeId === t.id ? "bg-[#21262d]" : "hover:bg-[#161b27]"}`}

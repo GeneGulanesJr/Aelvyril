@@ -1,4 +1,4 @@
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ThreadSidebar } from "./sidebar.js";
 import type { Thread } from "@aelvyril/shared";
@@ -38,5 +38,32 @@ describe("ThreadSidebar", () => {
       />,
     );
     expect(screen.getByTestId("thread-t1").textContent).toContain("t1");
+  });
+
+  it("search filters threads by case-insensitive title substring", () => {
+    render(<ThreadSidebar threads={threads} activeId="t1" onSelect={() => {}} onCreate={() => {}} />);
+    fireEvent.change(screen.getByTestId("thread-search"), { target: { value: "RBAC" } });
+    expect(screen.getByTestId("thread-t1")).toBeTruthy();
+    expect(screen.queryByTestId("thread-t2")).toBeNull();
+    fireEvent.change(screen.getByTestId("thread-search"), { target: { value: "typo" } });
+    expect(screen.queryByTestId("thread-t1")).toBeNull();
+    expect(screen.getByTestId("thread-t2")).toBeTruthy();
+    // Clearing restores the full list.
+    fireEvent.change(screen.getByTestId("thread-search"), { target: { value: "" } });
+    expect(screen.getByTestId("thread-t1")).toBeTruthy();
+    expect(screen.getByTestId("thread-t2")).toBeTruthy();
+  });
+
+  it("search matches by id too (untitled threads stay findable)", () => {
+    render(
+      <ThreadSidebar
+        threads={[{ ...threads[0]!, title: null }]}
+        activeId={null}
+        onSelect={() => {}}
+        onCreate={() => {}}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("thread-search"), { target: { value: "T1" } });
+    expect(screen.getByTestId("thread-t1")).toBeTruthy();
   });
 });

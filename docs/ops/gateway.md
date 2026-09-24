@@ -132,6 +132,23 @@ If your proxy / LB has a shorter idle timeout than 15s, lower the
 heartbeat via `SSE_HEARTBEAT_MS=5000` in `apps/gateway/.env`. The change
 applies on next stream open (in-flight streams keep their interval).
 
+## Thread routes (spec-centric UI)
+
+- `GET /v1/threads` — list threads for the authenticated user (wire key stays `conversations`; items are threads)
+- `POST /v1/threads` — create a thread
+- `GET /v1/threads/:id` — fetch one thread
+- `PATCH /v1/threads/:id` — rename
+- `DELETE /v1/threads/:id` — delete (cascades events)
+- `POST /v1/threads/:id/prompt` — send a prompt (`message`, optional `streamingBehavior`, `specMode: auto|force|off`)
+- `POST /v1/threads/:id/abort` — cancel the current turn
+- `GET /v1/threads/:id/events` — SSE stream (Last-Event-ID reconnect)
+- `PATCH /v1/threads/:id/spec` — submit interview answers (`{kind:"answer", answers}`) or edit a draft field (`{kind:"edit", field, value}`)
+- `POST /v1/threads/:id/approve` — approve the draft; status → running
+- `POST /v1/threads/:id/abandon` — terminal; kills the session host
+- `POST /v1/threads/:id/retry` — re-run; status → running
+
+Back-compat: `/v1/conversations*` still works — GETs 302-redirect to the canonical path; mutations are method-preserving aliases (a 302 would make fetch re-issue them as GETs, dropping method + body). Spec-mode columns (`status`, `spec_draft`, `spec_questions`, `spec_answers`) are added by the idempotent `runMigrations()` on every startup.
+
 ## Compression
 
 `@fastify/compress` is wired into the gateway with gzip + deflate

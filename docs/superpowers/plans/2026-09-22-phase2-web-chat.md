@@ -12,6 +12,8 @@
 
 > **STATUS (2026-09-23 → 2026-09-24):** Tasks 1–4 DONE and committed — `9f3b333` (gateway auth), `1b7808c` (web scaffold), `bdc33c1` (SSE parser + client), `cf02285` (chat UI). Task 5 battery green (17 shared + 30 gateway + 4 web tests; web build ✓) and root README added.
 >
+> **UI PIVOT (2026-09-24):** the chat-first frontend described below was superseded by the **agent spec-centric UI** — see `docs/superpowers/plans/2026-09-23-agent-spec-centric-ui.md` (implemented: Slices 1–8). Routes are now `/v1/threads*` (old `/v1/conversations*` remain as back-compat aliases); the web surface is `/thread/[id]` with Plan/Trace/Diff tabs and the spec interview.
+>
 > **Close-out (post plan) — done:**
 > - `a98757c` — `start`/`dev` scripts auto-load `.env` via Node 22 `+`s `--env-file-if-exists` (was silently falling back to `PI_FAKE=1`).
 > - `bfe4f79` — migrated `app/page.tsx` from `<SignedIn>/<SignedOut>` (removed in `@clerk/nextjs` v7 / Clerk Core 3) to server-side `auth()` helper.

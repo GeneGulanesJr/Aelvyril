@@ -1,7 +1,11 @@
 # Aelvyril
 
-Chat-first frontend for the GulanesKorp agent platform (pi + PiSubagent + LaPis + PiSandboxed + LayaMCP, all in Docker).
-Spec: `docs/superpowers/specs/2026-09-22-aelvyril-agent-platform-design.md` · ADRs: `docs/adr/`
+Spec-centric agent frontend for the GulanesKorp agent platform (pi + PiSubagent + LaPis + PiSandboxed + LayaMCP, all in Docker).
+Spec: `docs/superpowers/specs/2026-09-22-aelvyril-agent-platform-design.md` · UI redesign: `docs/superpowers/specs/2026-09-23-agent-spec-centric-ui-redesign.md` · ADRs: `docs/adr/`
+
+## Status: agent spec-centric UI (v1 surface)
+
+Every ask produces a **plan + diff**; non-trivial asks auto-trigger an **agent-driven spec interview** before execution. Threads live at `/thread/[id]` with Plan / Trace / Diff tabs; the gateway exposes `/v1/threads*` (old `/v1/conversations*` paths remain as back-compat aliases). See `docs/superpowers/plans/2026-09-23-agent-spec-centric-ui.md` and the thread-routes section of `docs/ops/gateway.md`.
 
 ## Dev
 
@@ -56,7 +60,7 @@ The `gateway` is the only service with a published port in dev (3000) — produc
 - **Request IDs** — every response carries `X-Request-Id` (8-char random base36) for log correlation.
 - **Response compression** — gzip + deflate above 1 KB. SSE streams are excluded (would break `Last-Event-ID` reconnect).
 
-## Conversation features
+## Thread primitives (search / rename / delete / stream)
 
 - **Search** (case-insensitive substring on title)
 - **Rename** (inline edit on Enter/blur, PATCH round-trip)
@@ -64,6 +68,13 @@ The `gateway` is the only service with a published port in dev (3000) — produc
 - **Stream reconnect** — Last-Event-ID survives drops
 - **Steer-queued sends** — `streamingBehavior: "steer"` while a turn is mid-flight
 - **Stop** — `POST /abort` cancels the current turn + resets the waiting flag immediately
+
+## Thread features
+
+- **Spec interview** — heuristic (`GATEWAY_SPEC_HEURISTIC=off` to disable) decides auto-trigger; force via "Ask + spec"
+- **Plan / Trace / Diff tabs** — diff lines color-coded; spec drafts editable inline (goal / files / plan / risks)
+- **Lifecycle** — draft → spec'ing → running → reviewed → merged / abandoned; approve / abandon / retry routes
+- **Threads** — create / list / rename / delete; legacy conversation aliases preserved
 
 ## Ops
 

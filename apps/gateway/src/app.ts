@@ -64,11 +64,10 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   const app = Fastify({
     logger: opts.logger ?? false,
     bodyLimit: 1_048_576,
-    // logController (Fastify 5+) replaces disableRequestLogging. When logger
-    // is off (tests) we don't emit any per-request logs.
-    ...(opts.logger === false
-      ? { logController: { isLogDisabled: () => true, disableRequestLogging: true } as never }
-      : {}),
+    // With logger: false Fastify installs a null logger — per-request logs
+    // are silent already (tests + GATEWAY_LOG=silent dev). No logController
+    // override: Fastify 5.12 validates it must be a real LogController
+    // instance and rejects plain objects at startup.
     genReqId: () => Math.random().toString(36).slice(2, 10),
     requestIdHeader: "x-request-id",
   });

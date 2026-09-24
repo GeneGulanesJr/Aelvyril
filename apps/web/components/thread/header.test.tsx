@@ -45,4 +45,23 @@ describe("ThreadHeader", () => {
     fireEvent.click(screen.getByTestId("abandon-button"));
     expect(onAbandon).toHaveBeenCalled();
   });
+
+  it("delete requires a second confirming click (no window.confirm)", () => {
+    const onDelete = vi.fn();
+    render(<ThreadHeader thread={thread} onRename={() => {}} onAbandon={() => {}} onDelete={onDelete} />);
+    fireEvent.click(screen.getByTestId("delete-button"));
+    expect(onDelete).not.toHaveBeenCalled();
+    // Still armed: a second click confirms.
+    fireEvent.click(screen.getByTestId("delete-button"));
+    expect(onDelete).toHaveBeenCalled();
+  });
+
+  it("armed delete can be cancelled", () => {
+    const onDelete = vi.fn();
+    render(<ThreadHeader thread={thread} onRename={() => {}} onAbandon={() => {}} onDelete={onDelete} />);
+    fireEvent.click(screen.getByTestId("delete-button"));
+    fireEvent.click(screen.getByTestId("delete-cancel"));
+    fireEvent.click(screen.getByTestId("delete-button"));
+    expect(onDelete).not.toHaveBeenCalled();
+  });
 });

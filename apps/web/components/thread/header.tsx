@@ -2,13 +2,15 @@
 import { useState } from "react";
 import type { Thread } from "@aelvyril/shared";
 
-export function ThreadHeader({ thread, onRename, onAbandon }: {
+export function ThreadHeader({ thread, onRename, onAbandon, onDelete }: {
   thread: Thread;
   onRename: (title: string) => void;
   onAbandon: () => void;
+  onDelete?: () => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(thread.title ?? "");
+  const [armed, setArmed] = useState(false);
 
   return (
     <header className="flex items-center justify-between border-b border-[#2b3245] bg-[#0d1117] px-4 py-2 text-sm">
@@ -43,6 +45,20 @@ export function ThreadHeader({ thread, onRename, onAbandon }: {
           >rename</button>
         )}
         <button className="text-xs text-[#f85149] hover:underline" data-testid="abandon-button" onClick={onAbandon}>abandon</button>
+        {onDelete && (
+          armed ? (
+            <>
+              <button
+                className="text-xs font-medium text-[#f85149] hover:underline"
+                data-testid="delete-button"
+                onClick={() => { setArmed(false); onDelete(); }}
+              >confirm delete?</button>
+              <button className="text-xs text-[#8b96a8]" data-testid="delete-cancel" onClick={() => setArmed(false)}>no</button>
+            </>
+          ) : (
+            <button className="text-xs text-[#f85149]/70 hover:text-[#f85149]" data-testid="delete-button" onClick={() => setArmed(true)}>delete</button>
+          )
+        )}
       </div>
     </header>
   );

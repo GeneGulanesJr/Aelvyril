@@ -22,7 +22,7 @@
 > - **Route rename: mutating aliases are method-preserving** — a 302 on POST/PATCH/DELETE would make fetch re-issue them as GETs, dropping method + body; only GETs 302. List wire key stays `conversations`.
 > - **useThread uses the fetch-based `openStream`** (not EventSource — no Authorization header support) and `useParams()` (Next 16 params-as-Promise).
 >
-> Known follow-ups: degraded/error banner UI not yet ported from the deleted chat surface (envelope contract intact); search/delete/abort/steer are gateway+client capabilities awaiting thread-UI wiring; full sign-in e2e awaits Clerk test mode.
+> Known follow-ups: full sign-in e2e awaits Clerk test mode. (Closed 2026-09-24: banner UI ported to the thread surface; search / delete / abort / steer-queued sends wired — `2b0c6b5`, `df1f794` + component commits.)
 
 ---
 

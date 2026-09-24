@@ -104,9 +104,8 @@ client (`apps/web/lib/api.ts openStream`) does this automatically.
 
 `Supervisor.onProtocolEvent` `exit` handler fires → `setConversationState(degraded)` →
 emits `session_state: degraded` envelope. Next prompt respawns the child
-(workspace cwd preserved). Note: the degraded **banner UI** shipped with the
-chat-first frontend and is not yet ported to the thread surface — the thread
-client still receives the envelope (see `apps/web/lib/use-thread.ts`).
+(workspace cwd preserved). The thread UI shows a persistent degraded banner
+(`apps/web/components/thread/banner.tsx`) while the session is degraded.
 
 ## Database
 

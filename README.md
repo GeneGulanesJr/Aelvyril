@@ -49,7 +49,7 @@ The `gateway` (8787) and `web` (3000, or 3001 if 3000 is taken on the dev host) 
 
 ## Degraded state (spec §10)
 
-When a session host dies mid-turn the gateway emits a `session_state: degraded` envelope and marks the conversation degraded; the next prompt respawns the child automatically (workspace cwd preserved). The orange error / yellow degraded **banner UI shipped with the chat-first frontend and is not yet ported to the thread surface** — the thread client receives both envelopes (`error` kind, `session_state` kind) and the hook stores `error`, but no banner renders today.
+When a session host dies mid-turn the gateway emits a `session_state: degraded` envelope and marks the conversation degraded; the next prompt respawns the child automatically (workspace cwd preserved). The thread surface shows a persistent yellow banner while degraded; the orange error banner (per-request failures / `error` envelopes) is dismissable.
 
 ## Observability (spec §11)
 
@@ -68,14 +68,11 @@ When a session host dies mid-turn the gateway emits a `session_state: degraded` 
 - **Lifecycle** — draft → spec'ing → running → reviewed → merged / abandoned; approve / abandon / retry routes
 - **Rename** (inline edit in the thread header, PATCH round-trip)
 - **Stream reconnect** — Last-Event-ID survives drops
-
-**Gateway + client capability, not yet wired in the thread UI** (carried over from the chat-first frontend):
-
-- **Search** — was client-side title filtering; needs a sidebar search box (the gateway list route returns full titles)
-- **Delete** — `DELETE /v1/threads/:id` route + client method exist; no UI affordance yet
-- **Stop/abort** — `POST /v1/threads/:id/abort` route + client method exist; the thread UI offers abandon (kills the session host) instead
-- **Steer-queued sends** — the prompt route still accepts `streamingBehavior: "steer"`; the thread UI doesn't send it
-- **Banners** — see Degraded state above
+- **Banners** — degraded (yellow, persistent: session host died; next prompt respawns it) + error (orange, dismissable)
+- **Stop** — aborts the in-flight turn (`POST /v1/threads/:id/abort`); appears while a turn is streaming
+- **Steer-queued sends** — asking while a turn is mid-flight automatically sends `streamingBehavior: "steer"`
+- **Search** — sidebar box, case-insensitive substring on title (falls back to id for untitled threads)
+- **Delete** — two-step confirm in the thread header; removes the thread + event history and returns to `/thread/new`
 
 ## Ops
 

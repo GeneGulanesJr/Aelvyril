@@ -130,4 +130,19 @@ describe("Store", () => {
       }
     }
   });
+
+  it("merges spec answers and patches draft fields (auto-init, namespaced)", () => {
+    const store = new Store(":memory:");
+    const conv = store.createConversation({ namespace: "user:a" });
+    // Foreign namespace is a no-op.
+    expect(store.mergeSpecAnswers(conv.id, "user:b", { q1: "x" })).toBe(false);
+    expect(store.mergeSpecAnswers(conv.id, "user:a", { q1: "admin" })).toBe(true);
+    expect(store.mergeSpecAnswers(conv.id, "user:a", { q2: "editor" })).toBe(true);
+    const spec = store.getThreadSpec(conv.id, "user:a");
+    expect(spec?.specAnswers).toEqual({ q1: "admin", q2: "editor" });
+    // Draft auto-inits on first field patch.
+    expect(store.patchSpecDraft(conv.id, "user:a", "goal", "add RBAC")).toBe(true);
+    expect(store.getThreadSpec(conv.id, "user:a")?.specDraft?.goal).toBe("add RBAC");
+    expect(store.getThreadSpec(conv.id, "user:b")).toBeNull();
+  });
 });

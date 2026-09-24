@@ -6,6 +6,7 @@ import Fastify, {
 import { spawn } from "node:child_process";
 import {
   CreateConversationBody,
+  PatchSpecBody,
   PromptBody,
   RenameConversationBody,
   toUserNamespace,
@@ -329,6 +330,30 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   };
   app.post("/v1/threads/:id/abort", abortThread);
   app.post("/v1/conversations/:id/abort", abortThread);
+
+  // Spec interview: user answers questions / edits draft fields (agent
+  // spec-centric UI, Slice 4). Blob accessors are namespaced — cross-tenant
+  // ids 404 like every other route.
+  app.patch<{ Params: { id: string }; Body: unknown }>(
+    "/v1/threads/:id/spec",
+    async (req, reply) => {
+      const userId = await user(req, reply);
+      if (!userId) return;
+      const namespace = toUserNamespace(userId);
+      const { id } = req.params as { id: string };
+      const parsed = PatchSpecBody.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid_body", details: parsed.error.flatten() });
+      }
+      if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
+      if (parsed.data.kind === "answer") {
+        store.mergeSpecAnswers(id, namespace, parsed.data.answers);
+      } else {
+        store.patchSpecDraft(id, namespace, parsed.data.field, parsed.data.value);
+      }
+      return { ok: true };
+    },
+  );
 
   app.get("/v1/conversations/:id/events", async (req, reply) => {
     const { id } = req.params as { id: string };

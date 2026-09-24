@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import type { Conversation } from "@aelvyril/shared";
+import type { Conversation, SpecDraft } from "@aelvyril/shared";
 
 interface ConvRow {
   id: string;
@@ -118,6 +118,63 @@ export class Store {
     this.db
       .prepare("UPDATE conversations SET title = ? WHERE id = ? AND namespace = ?")
       .run(title, id, namespace);
+  }
+
+  /** Spec-interview state for a thread, or null if the id/namespace pair has no row. */
+  getThreadSpec(id: string, namespace: string): {
+    status: string;
+    specDraft: SpecDraft | null;
+    specAnswers: Record<string, string>;
+  } | null {
+    const row = this.db
+      .prepare("SELECT status, spec_draft, spec_answers FROM conversations WHERE id = ? AND namespace = ?")
+      .get(id, namespace) as
+      | { status: string; spec_draft: string | null; spec_answers: string | null }
+      | undefined;
+    if (!row) return null;
+    return {
+      status: row.status,
+      specDraft: row.spec_draft ? (JSON.parse(row.spec_draft) as SpecDraft) : null,
+      specAnswers: row.spec_answers ? (JSON.parse(row.spec_answers) as Record<string, string>) : {},
+    };
+  }
+
+  /** Merge answers into the spec_answers blob. Returns false if the thread
+   *  doesn't exist under this namespace (cross-tenant writes are no-ops). */
+  mergeSpecAnswers(id: string, namespace: string, answers: Record<string, string>): boolean {
+    const spec = this.getThreadSpec(id, namespace);
+    if (!spec) return false;
+    const merged = { ...spec.specAnswers, ...answers };
+    this.db
+      .prepare("UPDATE conversations SET spec_answers = ? WHERE id = ? AND namespace = ?")
+      .run(JSON.stringify(merged), id, namespace);
+    return true;
+  }
+
+  /** Patch one SpecDraft field, auto-initializing an empty draft on first
+   *  edit (the UI may let the user draft before the agent emits one).
+   *  Returns false if the thread doesn't exist under this namespace. */
+  patchSpecDraft(
+    id: string,
+    namespace: string,
+    field: "goal" | "filesAffected" | "plan" | "risks",
+    value: string | string[],
+  ): boolean {
+    const spec = this.getThreadSpec(id, namespace);
+    if (!spec) return false;
+    const draft: SpecDraft = spec.specDraft ?? {
+      goal: "",
+      filesAffected: [],
+      plan: [],
+      risks: [],
+      questions: [],
+      answers: {},
+    };
+    const patched = { ...draft, [field]: value };
+    this.db
+      .prepare("UPDATE conversations SET spec_draft = ? WHERE id = ? AND namespace = ?")
+      .run(JSON.stringify(patched), id, namespace);
+    return true;
   }
 
   /** Returns true if a conversation row was actually deleted. */

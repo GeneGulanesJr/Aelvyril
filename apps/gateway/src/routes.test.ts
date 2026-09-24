@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import Database from "better-sqlite3";
 import { buildApp, type App } from "./app.js";
 import type { TokenVerifier } from "./auth.js";
 
@@ -341,5 +346,97 @@ describe("thread route rename", () => {
       headers: { authorization: `Bearer good` },
     });
     expect(res.statusCode).toBe(204);
+  });
+});
+
+describe("PATCH /v1/threads/:id/spec", () => {
+  let app: App | undefined;
+  let dbPath: string | undefined;
+  afterEach(async () => {
+    if (app) await app.close();
+    if (dbPath) {
+      try {
+        rmSync(dbPath, { force: true });
+      } catch {
+        // Windows can briefly hold the file handle after close
+      }
+    }
+  });
+
+  function makeAppWithDb() {
+    dbPath = join(tmpdir(), `aelvyril-spec-${randomUUID()}.db`);
+    return buildApp({
+      dbPath,
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+    });
+  }
+
+  function dbGetThread(id: string): { status: string; spec_draft: string | null; spec_answers: string | null } {
+    const db = new Database(dbPath!);
+    try {
+      return db
+        .prepare("SELECT status, spec_draft, spec_answers FROM conversations WHERE id = ?")
+        .get(id) as never;
+    } finally {
+      db.close();
+    }
+  }
+
+  it("applies an answer patch and persists answers", async () => {
+    app = await makeAppWithDb();
+    const u1 = authed(app, "good");
+    const t = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/v1/threads/${t.id}/spec`,
+      headers: { authorization: "Bearer good", "content-type": "application/json" },
+      payload: { kind: "answer", answers: { q1: "admin" } },
+    });
+    expect(res.statusCode).toBe(200);
+    const stored = dbGetThread(t.id);
+    expect(JSON.parse(stored.spec_answers ?? "{}")).toEqual({ q1: "admin" });
+  });
+
+  it("applies an edit patch and persists the draft field", async () => {
+    app = await makeAppWithDb();
+    const u1 = authed(app, "good");
+    const t = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/v1/threads/${t.id}/spec`,
+      headers: { authorization: "Bearer good", "content-type": "application/json" },
+      payload: { kind: "edit", field: "goal", value: "add RBAC" },
+    });
+    expect(res.statusCode).toBe(200);
+    const stored = dbGetThread(t.id);
+    expect(JSON.parse(stored.spec_draft ?? "{}").goal).toBe("add RBAC");
+  });
+
+  it("rejects malformed body with 400", async () => {
+    app = await makeAppWithDb();
+    const u1 = authed(app, "good");
+    const t = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/v1/threads/${t.id}/spec`,
+      headers: { authorization: "Bearer good", "content-type": "application/json" },
+      payload: { kind: "answer" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("404s a foreign user's thread", async () => {
+    app = await makeAppWithDb();
+    const t = (await (await authed(app, "good").post("/v1/threads", {})).json()) as { id: string };
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/v1/threads/${t.id}/spec`,
+      headers: { authorization: "Bearer good2", "content-type": "application/json" },
+      payload: { kind: "answer", answers: { q1: "x" } },
+    });
+    expect(res.statusCode).toBe(404);
   });
 });

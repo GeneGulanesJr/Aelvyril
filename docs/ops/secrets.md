@@ -75,8 +75,10 @@ docker compose -f infra/compose.yaml down -v pi-sessions
 docker compose -f infra/compose.yaml up -d gateway
 ```
 
-All existing conversations will show the degraded banner on next prompt
-until the child respawns from a fresh session file.
+All existing threads will surface degraded state on next prompt
+(session_state: degraded envelope) until the child respawns from a fresh
+session file. Note: the banner UI shipped with the chat-first frontend and
+is not yet ported to the thread surface — the envelope contract is intact.
 
 ## What NEVER to commit
 

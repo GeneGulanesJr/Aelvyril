@@ -83,15 +83,15 @@ the request body (platform-level chats don't need one).
 
 ### HTTP 429 `rate_limited`
 
-Per-user rate limit on `/v1/conversations/:id/prompt` (default 20/min).
+Per-user rate limit on `/v1/threads/:id/prompt` (default 20/min).
 Returns `Retry-After: 60`. Either raise the limit (override the
 `RateLimiter` via `AppOptions.rateLimiter` in tests; in prod, edit the
 token-bucket params in `apps/gateway/src/app.ts`) or wait 60s.
 
 ### HTTP 503 `conversation_limit_reached`
 
-Per-user concurrent-conversation cap (default 3). User must delete an
-old conversation (`DELETE /v1/conversations/:id`) before creating new
+Per-user concurrent-thread cap (default 3). User must delete an
+old thread (`DELETE /v1/threads/:id`) before creating new
 ones. To raise the cap, set `GATEWAY_MAX_CONVERSATIONS_PER_USER` in the
 env or override `maxConversationsPerUser` in `AppOptions`.
 
@@ -103,8 +103,10 @@ client (`apps/web/lib/api.ts openStream`) does this automatically.
 ### Child process exits mid-turn
 
 `Supervisor.onProtocolEvent` `exit` handler fires → `setConversationState(degraded)` →
-emits `session_state: degraded` envelope. The web UI shows the persistent
-degraded banner. Next prompt respawns the child (workspace cwd preserved).
+emits `session_state: degraded` envelope. Next prompt respawns the child
+(workspace cwd preserved). Note: the degraded **banner UI** shipped with the
+chat-first frontend and is not yet ported to the thread surface — the thread
+client still receives the envelope (see `apps/web/lib/use-thread.ts`).
 
 ## Database
 
@@ -115,12 +117,15 @@ Conversation history + event log live here. To reset (DESTRUCTIVE):
 # Stop the gateway first
 kill <pid>
 rm apps/gateway/data/gateway.db*
-# Restart — the Store constructor recreates schema + namespace index
+# Restart — runMigrations() (called from the Store constructor) recreates
+# tables, backfills namespace, and adds the thread status/spec columns
 pnpm --filter @aelvyril/gateway start
 ```
 
-`store.test.ts` covers the migration path for pre-namespace DBs (legacy
-`platform` namespace backfill).
+`store.test.ts` covers the migration paths: pre-namespace DBs (legacy
+`platform` namespace backfill) and thread status/spec columns
+(`status`, `spec_draft`, `spec_questions`, `spec_answers`), including
+idempotent re-runs.
 
 ### SSE keepalive
 
@@ -162,7 +167,7 @@ semantics.
 To inspect the negotiated encoding:
 
 ```sh
-curl -sI -H 'Accept-Encoding: gzip' http://127.0.0.1:8787/v1/conversations | grep -i encoding
+curl -sI -H 'Accept-Encoding: gzip' http://127.0.0.1:8787/v1/threads | grep -i encoding
 ```
 
 The Caddyfile (`infra/docker/Caddyfile`) also does `encode gzip zstd` on

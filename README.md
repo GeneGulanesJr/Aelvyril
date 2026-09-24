@@ -38,19 +38,18 @@ Per spec §4/§5/§9 (see ADR 0003), the full agent platform runs as five Docker
 - `LaPis/` — `LAPIS_PROJECT_KEY` env override for per-conversation namespaces (ADR 0002).
 - `LayaMCP/` — drops broken `mcp.server.fastapi`, mounts SSE on plain FastAPI, adds `/health`.
 
-The `gateway` is the only service with a published port in dev (3000) — production publishes `web:3000` and the rest stays internal.
+The `gateway` (8787) and `web` (3000, or 3001 if 3000 is taken on the dev host) are the only published ports locally. In production only Caddy is public (80/443); everything else stays internal, with `web:3000` behind the proxy.
 
 ## Abuse caps (spec §10)
 
-- **Rate limit**: 20 req/min/user on `/v1/conversations/:id/prompt` (token bucket, capacity 20, refill 20/60 tokens/sec). On exceed: HTTP 429 with `retry-after: 60`.
-- **Concurrent-conversation cap**: 3 total conversations per user. On exceed: HTTP 503 with `{error: "conversation_limit_reached", limit: 3}`. Delete old conversations to free space.
+- **Rate limit**: 20 req/min/user on `/v1/threads/:id/prompt` (token bucket, capacity 20, refill 20/60 tokens/sec). On exceed: HTTP 429 with `retry-after: 60`.
+- **Concurrent-thread cap**: 3 total threads per user. On exceed: HTTP 503 with `{error: "conversation_limit_reached", limit: 3}` (error key kept for compatibility). Delete old threads to free space.
 - **Workspace allowlist**: default-deny via `GATEWAY_WORKSPACE_ALLOWLIST` (comma-separated absolute paths). Relative paths and `..` rejected at parse time.
 - **1MB body limit**: enforced at the transport layer (Fastify `bodyLimit: 1_048_576`).
 
-## Banners (spec §10)
+## Degraded state (spec §10)
 
-- **Error banner** (orange, dismissable): per-request failures (network, 4xx/5xx).
-- **Degraded banner** (yellow, persistent): shown when the gateway's `session_state: degraded` envelope arrives. Disappears when a turn settles back to idle/streaming. Tells the user that chat continues and the next prompt will respawn the session host automatically.
+When a session host dies mid-turn the gateway emits a `session_state: degraded` envelope and marks the conversation degraded; the next prompt respawns the child automatically (workspace cwd preserved). The orange error / yellow degraded **banner UI shipped with the chat-first frontend and is not yet ported to the thread surface** — the thread client receives both envelopes (`error` kind, `session_state` kind) and the hook stores `error`, but no banner renders today.
 
 ## Observability (spec §11)
 
@@ -60,21 +59,23 @@ The `gateway` is the only service with a published port in dev (3000) — produc
 - **Request IDs** — every response carries `X-Request-Id` (8-char random base36) for log correlation.
 - **Response compression** — gzip + deflate above 1 KB. SSE streams are excluded (would break `Last-Event-ID` reconnect).
 
-## Thread primitives (search / rename / delete / stream)
+## Thread surface
 
-- **Search** (case-insensitive substring on title)
-- **Rename** (inline edit on Enter/blur, PATCH round-trip)
-- **Delete** (with yes/no confirmation, cascades gateway-side events)
-- **Stream reconnect** — Last-Event-ID survives drops
-- **Steer-queued sends** — `streamingBehavior: "steer"` while a turn is mid-flight
-- **Stop** — `POST /abort` cancels the current turn + resets the waiting flag immediately
-
-## Thread features
+**Wired in the thread UI** (`/thread/[id]`):
 
 - **Spec interview** — heuristic (`GATEWAY_SPEC_HEURISTIC=off` to disable) decides auto-trigger; force via "Ask + spec"
 - **Plan / Trace / Diff tabs** — diff lines color-coded; spec drafts editable inline (goal / files / plan / risks)
 - **Lifecycle** — draft → spec'ing → running → reviewed → merged / abandoned; approve / abandon / retry routes
-- **Threads** — create / list / rename / delete; legacy conversation aliases preserved
+- **Rename** (inline edit in the thread header, PATCH round-trip)
+- **Stream reconnect** — Last-Event-ID survives drops
+
+**Gateway + client capability, not yet wired in the thread UI** (carried over from the chat-first frontend):
+
+- **Search** — was client-side title filtering; needs a sidebar search box (the gateway list route returns full titles)
+- **Delete** — `DELETE /v1/threads/:id` route + client method exist; no UI affordance yet
+- **Stop/abort** — `POST /v1/threads/:id/abort` route + client method exist; the thread UI offers abandon (kills the session host) instead
+- **Steer-queued sends** — the prompt route still accepts `streamingBehavior: "steer"`; the thread UI doesn't send it
+- **Banners** — see Degraded state above
 
 ## Ops
 

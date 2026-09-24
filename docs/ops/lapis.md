@@ -3,7 +3,7 @@
 LaPis is the memory layer. Gateway and `lapis` container share the same
 `memory.db` file on the `lapis-data` volume (spec §5/§8).
 
-## Per-conversation namespaces
+## Per-user namespaces
 
 Phase 4 patch (commit `c49aeb3` in the LaPis repo) added the
 `LAPIS_PROJECT_KEY` env override at the top of two functions:
@@ -14,7 +14,13 @@ Phase 4 patch (commit `c49aeb3` in the LaPis repo) added the
 The gateway sets this per spawn via `extraEnv` in `Supervisor.prompt`:
 
 ```js
-supervisor.prompt(id, msg, undefined, { LAPIS_PROJECT_KEY: namespace });
+supervisor.prompt(
+  id,
+  body.message,
+  body.streamingBehavior,
+  { LAPIS_PROJECT_KEY: namespace },
+  conv.workspace ?? undefined, // spawn cwd for session resume
+);
 ```
 
 The namespace is derived from the Clerk user ID (`user:<id>.toLowerCase()`,

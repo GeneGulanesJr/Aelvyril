@@ -10,6 +10,20 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-23-agent-spec-centric-ui-redesign.md` (commit `8dbd073`).
 
+> **STATUS (2026-09-24): COMPLETE — all 23 tasks across 8 slices implemented and committed.**
+> Final gates: shared 33 + web 42 + gateway 99 = **174 unit tests green** (29 files), typecheck + lint clean × 3 packages, `next build` compiles.
+>
+> Slice commits: 1 — `4bfe721` (store migration), `1834521` (shared types), `140c016` (spec envelopes); 2 — `4f01f2f` (spec heuristic); 3 — `105c8aa` (AgentContract); 4 — `e7ffd5a` (threads rename), `0f1447f` (spec PATCH), `90edb8e` (lifecycle routes), `8975d19` (Fastify 5.12 logController startup fix found by Task 9 boot check); 5 — `b9048fb` (client methods), `4260d69` (SseParser pass-through — no parser change needed), `cf64c6f` (useThread); 6 — `d219950`/`18c3417`/`5cc9af6`/`4dc3495`/`6f5d702` (five thread components); 7 — `0ed1ff1` (`/thread/[id]` page), `33966fb` (redirects), `713267c` (legacy chat deleted); 8 — `8f61a0f` (e2e), `d455155` (docs).
+>
+> Deliberate deviations from the task sketches (all verified against real code first):
+> - **PromptBody extended, not replaced** (`message`/`streamingBehavior` kept; `specMode` added) — the sketch would have broken the live prompt route. `PromptBodyInput` (z.input) exported for wire typing.
+> - **Envelopes use the real grammar** (`kind`/`conversationId`/`ts`/`payload`, seq added by the store) — the sketch's `type`/`threadId` shape + `parseEnvelope()` were never part of the committed SSE contract; AgentContract reuses `JsonlDecoder`.
+> - **Spec heuristic rule corrected** — the sketch failed its own tests 4 & 5; added `verbHits >= 1 && wordCount >= 6`.
+> - **Route rename: mutating aliases are method-preserving** — a 302 on POST/PATCH/DELETE would make fetch re-issue them as GETs, dropping method + body; only GETs 302. List wire key stays `conversations`.
+> - **useThread uses the fetch-based `openStream`** (not EventSource — no Authorization header support) and `useParams()` (Next 16 params-as-Promise).
+>
+> Known follow-ups: degraded/error banner UI not yet ported from the deleted chat surface (envelope contract intact); search/delete/abort/steer are gateway+client capabilities awaiting thread-UI wiring; full sign-in e2e awaits Clerk test mode.
+
 ---
 
 ## File Structure

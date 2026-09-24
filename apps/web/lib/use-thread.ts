@@ -11,6 +11,10 @@ export interface ThreadState {
   trace: string[];
   diff: { path: string; patch: string }[];
   error: string | null;
+  /** Session host died mid-turn — next prompt respawns it (spec §10). */
+  degraded: boolean;
+  /** A prompt is in flight (drives the Stop button + steer-queued sends). */
+  waiting: boolean;
 }
 
 export interface UseThreadDeps {
@@ -39,6 +43,8 @@ export function useThread(
     trace: [],
     diff: [],
     error: null,
+    degraded: false,
+    waiting: false,
   });
   const clientRef = useRef<GatewayClient | null>(null);
 
@@ -61,10 +67,27 @@ export function useThread(
   const ask = useCallback(
     async (message: string, specMode: "auto" | "force" | "off") => {
       if (!clientRef.current || !threadId) return;
-      await clientRef.current.prompt(threadId, { message, specMode });
+      // Spec §6: a send while a turn is mid-flight queues as a steer.
+      const steer = state.waiting ? { streamingBehavior: "steer" as const } : {};
+      setState((s) => ({ ...s, waiting: true }));
+      try {
+        await clientRef.current.prompt(threadId, { message, specMode, ...steer });
+      } finally {
+        setState((s) => ({ ...s, waiting: false }));
+      }
     },
-    [threadId],
+    [threadId, state.waiting],
   );
+
+  const stop = useCallback(async () => {
+    if (!clientRef.current || !threadId) return;
+    await clientRef.current.abortThread(threadId);
+    setState((s) => ({ ...s, waiting: false }));
+  }, [threadId]);
+
+  const dismissError = useCallback(() => {
+    setState((s) => ({ ...s, error: null }));
+  }, []);
 
   const submitAnswers = useCallback(
     async (answers: Record<string, string>) => {
@@ -97,7 +120,7 @@ export function useThread(
     await clientRef.current.retryThread(threadId);
   }, [threadId]);
 
-  return { ...state, ask, submitAnswers, editSpec, approve, abandon, retry };
+  return { ...state, ask, submitAnswers, editSpec, approve, abandon, retry, stop, dismissError };
 }
 
 function applyEnvelope(s: ThreadState, e: EventEnvelope): ThreadState {
@@ -114,6 +137,14 @@ function applyEnvelope(s: ThreadState, e: EventEnvelope): ThreadState {
       return { ...s, diff: e.payload.files };
     case "error":
       return { ...s, error: e.payload.message };
+    case "session_state":
+      // Spec §10: degraded means the host died mid-turn; the next prompt
+      // respawns it. streaming/idle drive the waiting flag for Stop + steer.
+      return {
+        ...s,
+        degraded: e.payload.state === "degraded",
+        waiting: e.payload.state === "streaming",
+      };
     default:
       return s;
   }

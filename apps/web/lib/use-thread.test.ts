@@ -11,6 +11,8 @@ const instances: Array<{
   approveSpec: ReturnType<typeof vi.fn>;
   abandonThread: ReturnType<typeof vi.fn>;
   retryThread: ReturnType<typeof vi.fn>;
+  abortThread: ReturnType<typeof vi.fn>;
+  deleteThread: ReturnType<typeof vi.fn>;
   onEnvelope: ((e: EventEnvelope) => void) | null;
 }> = [];
 
@@ -26,6 +28,8 @@ vi.mock("./api.js", () => ({
       approveSpec: vi.fn().mockResolvedValue(undefined),
       abandonThread: vi.fn().mockResolvedValue(undefined),
       retryThread: vi.fn().mockResolvedValue(undefined),
+      abortThread: vi.fn().mockResolvedValue(undefined),
+      deleteThread: vi.fn().mockResolvedValue(undefined),
       onEnvelope: null as ((e: EventEnvelope) => void) | null,
     };
     instances.push(inst);
@@ -119,5 +123,61 @@ describe("useThread", () => {
     expect(inst.approveSpec).toHaveBeenCalledWith("t1");
     expect(inst.abandonThread).toHaveBeenCalledWith("t1");
     expect(inst.retryThread).toHaveBeenCalledWith("t1");
+  });
+
+  it("ask mid-flight steers; idle session clears waiting", async () => {
+    const { result, inst } = await renderThread();
+    await act(async () => {
+      await result.current.ask("first", "auto");
+    });
+    expect(inst.prompt).toHaveBeenCalledWith("t1", { message: "first", specMode: "auto" });
+    // Simulate the agent starting to stream: waiting flips on.
+    await act(async () => {
+      inst.onEnvelope!(env("session_state", { state: "streaming" }, 0));
+    });
+    expect(result.current.waiting).toBe(true);
+    // A second ask while waiting queues as a steer.
+    await act(async () => {
+      await result.current.ask("second", "auto");
+    });
+    expect(inst.prompt).toHaveBeenLastCalledWith("t1", {
+      message: "second",
+      specMode: "auto",
+      streamingBehavior: "steer",
+    });
+    // Agent settles: waiting clears.
+    await act(async () => {
+      inst.onEnvelope!(env("session_state", { state: "idle" }, 1));
+    });
+    expect(result.current.waiting).toBe(false);
+  });
+
+  it("degraded session sets the flag; stop aborts and clears waiting", async () => {
+    const { result, inst } = await renderThread();
+    await act(async () => {
+      inst.onEnvelope!(env("session_state", { state: "degraded" }, 0));
+    });
+    expect(result.current.degraded).toBe(true);
+    expect(result.current.waiting).toBe(false);
+    await act(async () => {
+      await result.current.ask("retry", "auto");
+    });
+    await act(async () => {
+      await result.current.stop();
+    });
+    expect(inst.abortThread).toHaveBeenCalledWith("t1");
+    expect(result.current.waiting).toBe(false);
+  });
+
+  it("error envelopes set a dismissable error", async () => {
+    const { result, inst } = await renderThread();
+    await act(async () => {
+      inst.onEnvelope!(env("error", { message: "boom" }, 0));
+    });
+    expect(result.current.error).toBe("boom");
+    await act(async () => {
+      result.current.dismissError();
+    });
+    expect(result.current.error).toBeNull();
   });
 });

@@ -15,6 +15,7 @@ import {
 import { Store } from "./store.js";
 import { EventBus } from "./bus.js";
 import { Supervisor } from "./supervisor.js";
+import type { AgentContract } from "./agent-contract.js";
 import type { TokenVerifier } from "./auth.js";
 import { createWorkspaceAllowlist, type WorkspaceAllowlist } from "./workspace-allowlist.js";
 import { createRateLimiter, type RateLimiter } from "./rate-limit.js";
@@ -331,9 +332,14 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   app.post("/v1/threads/:id/abort", abortThread);
   app.post("/v1/conversations/:id/abort", abortThread);
 
-  // Spec interview: user answers questions / edits draft fields (agent
-  // spec-centric UI, Slice 4). Blob accessors are namespaced — cross-tenant
-  // ids 404 like every other route.
+  // Spec interview + lifecycle (agent spec-centric UI, Slice 4). All blob
+  // and status accessors are namespaced — cross-tenant ids 404 like every
+  // other route.
+  // Active spec sessions per thread; populated when the supervisor wires an
+  // AgentContract into a spawned session. Absent entry = no live contract,
+  // lifecycle routes persist the transition and skip the forwarding.
+  const contracts = new Map<string, AgentContract>();
+
   app.patch<{ Params: { id: string }; Body: unknown }>(
     "/v1/threads/:id/spec",
     async (req, reply) => {
@@ -354,6 +360,41 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       return { ok: true };
     },
   );
+
+  app.post<{ Params: { id: string } }>("/v1/threads/:id/approve", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    const namespace = toUserNamespace(userId);
+    const { id } = req.params as { id: string };
+    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
+    store.updateThreadStatus(id, namespace, "running");
+    contracts.get(id)?.approve();
+    return { ok: true };
+  });
+
+  app.post<{ Params: { id: string } }>("/v1/threads/:id/abandon", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    const namespace = toUserNamespace(userId);
+    const { id } = req.params as { id: string };
+    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
+    store.updateThreadStatus(id, namespace, "abandoned");
+    const contract = contracts.get(id);
+    if (contract) contract.abandon();
+    else supervisor.killChild(id); // no live contract: still stop the child
+    return { ok: true };
+  });
+
+  app.post<{ Params: { id: string } }>("/v1/threads/:id/retry", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    const namespace = toUserNamespace(userId);
+    const { id } = req.params as { id: string };
+    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
+    store.updateThreadStatus(id, namespace, "running");
+    contracts.get(id)?.retry();
+    return { ok: true };
+  });
 
   app.get("/v1/conversations/:id/events", async (req, reply) => {
     const { id } = req.params as { id: string };

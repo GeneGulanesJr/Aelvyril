@@ -177,6 +177,15 @@ export class Store {
     return true;
   }
 
+  /** Set the thread lifecycle status. Returns false if the thread doesn't
+   *  exist under this namespace. Route layer validates the value. */
+  updateThreadStatus(id: string, namespace: string, status: string): boolean {
+    const res = this.db
+      .prepare("UPDATE conversations SET status = ? WHERE id = ? AND namespace = ?")
+      .run(status, id, namespace);
+    return res.changes > 0;
+  }
+
   /** Returns true if a conversation row was actually deleted. */
   deleteConversation(id: string, namespace: string): boolean {
     // Cascade events so a deleted conversation leaves no orphan history. The

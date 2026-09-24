@@ -440,3 +440,103 @@ describe("PATCH /v1/threads/:id/spec", () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+describe("thread lifecycle routes", () => {
+  let app: App | undefined;
+  let dbPath: string | undefined;
+  afterEach(async () => {
+    if (app) await app.close();
+    if (dbPath) {
+      try {
+        rmSync(dbPath, { force: true });
+      } catch {
+        // Windows can briefly hold the file handle after close
+      }
+    }
+  });
+
+  function makeAppWithDb() {
+    dbPath = join(tmpdir(), `aelvyril-life-${randomUUID()}.db`);
+    return buildApp({
+      dbPath,
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+    });
+  }
+
+  function seedStatus(id: string, status: string): void {
+    const db = new Database(dbPath!);
+    try {
+      db.prepare("UPDATE conversations SET status = ? WHERE id = ?").run(status, id);
+    } finally {
+      db.close();
+    }
+  }
+
+  function threadStatus(id: string): string {
+    const db = new Database(dbPath!);
+    try {
+      return (
+        db.prepare("SELECT status FROM conversations WHERE id = ?").get(id) as { status: string }
+      ).status;
+    } finally {
+      db.close();
+    }
+  }
+
+  it("POST /approve transitions spec'ing -> running", async () => {
+    app = await makeAppWithDb();
+    const t = (await (await authed(app, "good").post("/v1/threads", {})).json()) as { id: string };
+    seedStatus(t.id, "spec'ing");
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${t.id}/approve`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(threadStatus(t.id)).toBe("running");
+  });
+
+  it("POST /abandon marks abandoned", async () => {
+    app = await makeAppWithDb();
+    const t = (await (await authed(app, "good").post("/v1/threads", {})).json()) as { id: string };
+    seedStatus(t.id, "running");
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${t.id}/abandon`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(threadStatus(t.id)).toBe("abandoned");
+  });
+
+  it("POST /retry transitions reviewed -> running", async () => {
+    app = await makeAppWithDb();
+    const t = (await (await authed(app, "good").post("/v1/threads", {})).json()) as { id: string };
+    seedStatus(t.id, "reviewed");
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${t.id}/retry`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(threadStatus(t.id)).toBe("running");
+  });
+
+  it("404s a foreign user's thread on lifecycle actions", async () => {
+    app = await makeAppWithDb();
+    const t = (await (await authed(app, "good").post("/v1/threads", {})).json()) as { id: string };
+    seedStatus(t.id, "spec'ing");
+    for (const action of ["approve", "abandon", "retry"]) {
+      const res = await app.inject({
+        method: "POST",
+        url: `/v1/threads/${t.id}/${action}`,
+        headers: { authorization: "Bearer good2" },
+      });
+      expect(res.statusCode).toBe(404);
+    }
+    expect(threadStatus(t.id)).toBe("spec'ing");
+  });
+});

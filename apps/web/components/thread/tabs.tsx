@@ -21,16 +21,10 @@ export function TraceTab({ trace }: { trace: string[] }) {
   );
 }
 
-const LINE_COLOR: RegExp[] = [
-  /^\+/,
-  /^-/,
-  /^@@/,
-];
-
 function lineClass(line: string): string {
-  if (LINE_COLOR[0].test(line)) return "text-[#3fb950]"; // added
-  if (LINE_COLOR[1].test(line)) return "text-[#f85149]"; // removed
-  if (LINE_COLOR[2].test(line)) return "text-[#1f6feb]"; // hunk header
+  if (line.startsWith("+")) return "text-[#3fb950]"; // added
+  if (line.startsWith("-")) return "text-[#f85149]"; // removed
+  if (line.startsWith("@@")) return "text-[#1f6feb]"; // hunk header
   return "text-[#8b96a8]"; // context
 }
 

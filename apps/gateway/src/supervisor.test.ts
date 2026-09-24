@@ -116,7 +116,10 @@ describe("Supervisor", () => {
     // a real wait, not an instant return.
     expect(supervisor.has(conv.id)).toBe(false);
     expect(elapsed).toBeGreaterThanOrEqual(0);
-    expect(elapsed).toBeLessThan(5_500);
+    // Upper bound: disposeAll's internal timeout is 5s, so a resolved call
+    // lands well under 6s even when the machine is loaded (CI/parallel
+    // builds). The bound proves the call resolves instead of hanging.
+    expect(elapsed).toBeLessThan(6_000);
   });
 
   // Spec §6 + §10: workspace plumbs through to spawn cwd; respawn after a

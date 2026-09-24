@@ -25,8 +25,16 @@ describe("createProbes.tcp", () => {
 
   it("returns false when the host is unreachable within the timeout", async () => {
     const probes = createProbes();
-    // 192.0.2.1 is TEST-NET-1 (RFC 5737) — guaranteed not routable.
-    expect(await probes.tcp("192.0.2.1", 1, 200)).toBe(false);
+    // Deterministic unreachable target: bind a socket to grab a free port,
+    // then close it — the OS now refuses connections there (ECONNREFUSED on
+    // Windows/Linux; a firewall that silently drops still hits the 200ms
+    // timeout). Either path resolves false without touching real networks.
+    const { createServer } = await import("node:net");
+    const server = createServer();
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    await new Promise<void>((r) => server.close(() => r()));
+    expect(await probes.tcp("127.0.0.1", port, 200)).toBe(false);
   });
 });
 
@@ -42,7 +50,10 @@ describe("runHealthCheck", () => {
     const result = await runHealthCheck(
       {
         probes: okProbes,
-        serviceProbes: () => ({ lapis: "lapis:8788", layamcp: "layamcp:8765" }),
+        // IPv4 literals: safeResolve skips DNS for IPs — unit tests must
+        // not depend on the host resolver (a lookalike answer for "lapis"
+        // or a slow resolver would make this test slow/flaky).
+        serviceProbes: () => ({ lapis: "192.0.2.10:8788", layamcp: "192.0.2.10:8765" }),
       },
       Date.now() - 5_000,
     );
@@ -56,7 +67,7 @@ describe("runHealthCheck", () => {
     const result = await runHealthCheck(
       {
         probes: badProbes,
-        serviceProbes: () => ({ lapis: "lapis:8788" }),
+        serviceProbes: () => ({ lapis: "192.0.2.10:8788" }),
       },
       Date.now(),
     );

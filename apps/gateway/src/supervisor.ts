@@ -35,6 +35,11 @@ interface Handle {
 export class Supervisor {
   private handles = new Map<string, Handle>();
   private reaper: NodeJS.Timeout;
+  /** Security review #85: conversations whose host was SIGKILLed via
+   *  killChild (delete/abandon). Protocol events already queued in the
+   *  event loop for these ids are dropped instead of published, which
+   *  would re-insert orphan event rows for deleted threads. */
+  private dead = new Set<string>();
 
   constructor(private opts: SupervisorOptions) {
     this.reaper = setInterval(() => this.reapIdle(), Math.min(opts.idleMs, 5_000));
@@ -58,9 +63,11 @@ export class Supervisor {
     const handle: Handle = { rpc, child, lastActivity: Date.now(), exiting: false };
     rpc.on("event", (ev: RpcEvent) => this.onProtocolEvent(conversationId, ev));
     rpc.on("exit", () => {
+      // The host exited — the gauge reflects that regardless of whether the
+      // exit was expected (kill/reap/dispose) or a crash.
+      this.opts.onSessionHostExit?.();
       if (handle.exiting) return;
       this.handles.delete(conversationId);
-      this.opts.onSessionHostExit?.();
       // Best-effort: child may emit exit AFTER disposeAll closes the store
       // (test teardown race, or a real SIGTERM during shutdown). Silently
       // drop the event rather than crash the gateway — spec §10
@@ -111,6 +118,12 @@ export class Supervisor {
   killChild(conversationId: string): void {
     const handle = this.handles.get(conversationId);
     if (!handle) return;
+    // #85: mark exiting + forget the handle BEFORE the SIGKILL so the async
+    // exit path doesn't publish a spurious degraded session_state, and add
+    // to the dead set so in-flight protocol events are dropped.
+    handle.exiting = true;
+    this.handles.delete(conversationId);
+    this.dead.add(conversationId);
     handle.child.kill("SIGKILL");
   }
 
@@ -125,6 +138,7 @@ export class Supervisor {
   }
 
   private handleProtocolEvent(conversationId: string, ev: RpcEvent): void {
+    if (this.dead.has(conversationId)) return;
     const handle = this.handles.get(conversationId);
     if (handle) handle.lastActivity = Date.now();
 

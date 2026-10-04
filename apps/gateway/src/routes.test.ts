@@ -214,6 +214,33 @@ describe("v1 routes", () => {
     expect(stillThere.statusCode).toBe(200);
   });
 
+  it("DELETE kills the live session host (#85)", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    const conv = (await (await u1.post("/v1/threads", { title: "bye" })).json()) as { id: string };
+    const prompt = await u1.post(`/v1/threads/${conv.id}/prompt`, { message: "hi" });
+    expect(prompt.statusCode).toBe(202);
+    await vi.waitFor(async () => {
+      const one = await u1.get(`/v1/threads/${conv.id}`);
+      expect((one.json() as { state: string }).state).toBe("idle");
+    });
+    // Host is alive after the turn settles.
+    const before = await app.inject({ method: "GET", url: "/metrics" });
+    expect(before.body).toContain("aelvyril_active_session_hosts 1");
+    // DELETE must SIGKILL the host (exit decrements the gauge) instead of
+    // leaving an orphan publisher behind.
+    const del = await app.inject({
+      method: "DELETE",
+      url: `/v1/threads/${conv.id}`,
+      headers: { authorization: `Bearer good` },
+    });
+    expect(del.statusCode).toBe(204);
+    await vi.waitFor(async () => {
+      const after = await app.inject({ method: "GET", url: "/metrics" });
+      expect(after.body).toContain("aelvyril_active_session_hosts 0");
+    });
+  });
+
   // Spec §10: per-user rate limit on /v1/threads/:id/prompt.
   // Uses a deterministic 1-token-capacity limiter with no refill — the
   // second prompt from the same user in the same test must trip it.

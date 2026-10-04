@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,17 +14,20 @@ const fakePi = fileURLToPath(new URL("../fixtures/fake-pi.mjs", import.meta.url)
 function makeSupervisor() {
   const store = new Store(":memory:");
   const bus = new EventBus(store);
+  const children: ChildProcess[] = [];
   const supervisor = new Supervisor({
     bus,
     store,
     spawnChild: (conversationId, extraEnv) => {
       void conversationId;
       void extraEnv;
-      return spawn(process.execPath, [fakePi]);
+      const child = spawn(process.execPath, [fakePi]);
+      children.push(child);
+      return child;
     },
     idleMs: 60_000,
   });
-  return { store, bus, supervisor };
+  return { store, bus, supervisor, children };
 }
 
 describe("Supervisor", () => {
@@ -77,14 +80,17 @@ describe("Supervisor", () => {
   });
 
   it("marks degraded when the child dies, then recovers on next prompt", async () => {
-    const { store, supervisor } = makeSupervisor();
+    const { store, supervisor, children } = makeSupervisor();
     s = supervisor;
     const conv = store.createConversation({ namespace: "platform" });
     await supervisor.prompt(conv.id, "hi"); // accepted; turn settles async
     await vi.waitFor(() => {
       expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
     });
-    supervisor.killChild(conv.id); // simulate crash
+    // Simulate a crash: SIGKILL the child from the outside. (killChild is
+    // the gateway's INTENTIONAL kill — delete/abandon — and no longer
+    // publishes degraded since #85.)
+    children[0]!.kill("SIGKILL");
     await vi.waitFor(() => {
       expect(store.getConversation(conv.id, "platform")?.state).toBe("degraded");
     });
@@ -124,19 +130,22 @@ describe("Supervisor", () => {
 
   // Spec §6 + §10: workspace plumbs through to spawn cwd; respawn after a
   // crash reuses the same cwd so pi finds its prior session file on disk.
-  it("spawns session host with conversation.workspace as cwd, and reuses it after kill", async () => {
+  it("spawns session host with conversation.workspace as cwd, and reuses it after a crash", async () => {
     const dir = mkdtempSync(join(tmpdir(), "aelvyril-ws-"));
     tmpDirs.push(dir);
     const store = new Store(":memory:");
     const conv = store.createConversation({ workspace: dir, namespace: "platform" });
     const spawnCalls: Array<{ cwd: string | undefined; env: Record<string, string> }> = [];
+    const children: ChildProcess[] = [];
     const bus = new EventBus(store);
     const supervisor = new Supervisor({
       bus,
       store,
       spawnChild: (_cid, extraEnv, cwd) => {
         spawnCalls.push({ cwd: cwd ?? undefined, env: { ...extraEnv } });
-        return spawn(process.execPath, [fakePi], { cwd, env: { ...process.env, ...extraEnv } });
+        const child = spawn(process.execPath, [fakePi], { cwd, env: { ...process.env, ...extraEnv } });
+        children.push(child);
+        return child;
       },
       idleMs: 60_000,
     });
@@ -146,7 +155,8 @@ describe("Supervisor", () => {
     await vi.waitFor(() => {
       expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
     });
-    supervisor.killChild(conv.id);
+    // External crash (not killChild — see the degraded-on-crash test above).
+    children[0]!.kill("SIGKILL");
     await vi.waitFor(() => {
       expect(store.getConversation(conv.id, "platform")?.state).toBe("degraded");
     });

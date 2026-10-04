@@ -317,6 +317,12 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     // Cross-tenant guard: store.deleteConversation is namespaced, so a
     // foreign conv id is a no-op → 404, never a destructive 204.
     const deleted = store.deleteConversation(id, namespace);
+    // #85: kill the session host too — otherwise it keeps running and its
+    // next protocol event re-inserts orphan event rows for the deleted
+    // conversation. killChild marks the id dead synchronously, so protocol
+    // events already queued in the event loop are dropped as well. Only
+    // after the namespaced delete succeeded: killChild is not namespaced.
+    if (deleted) supervisor.killChild(id);
     return deleted ? reply.code(204).send() : reply.code(404).send({ error: "not_found" });
   };
   app.delete("/v1/threads/:id", deleteThread);
@@ -504,16 +510,21 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     // Returns false when the envelope was skipped. Security review #85:
     // validate at the wire boundary — store rows are replayed unvalidated,
     // so legacy/malformed rows must not reach the stream (a kind containing
-    // a newline would desync SSE framing).
+    // a newline would desync SSE framing). A failed write (EPIPE etc.)
+    // returns false instead of throwing an unhandled socket error.
     const writeEnvelope = (env: EventEnvelope): boolean => {
       const parsed = EventEnvelopeSchema.safeParse(env);
       if (!parsed.success) return false;
       const valid = parsed.data;
       if (valid.seq <= lastSeq) return false;
       lastSeq = valid.seq;
-      reply.raw.write(
-        `id: ${valid.seq}\nevent: ${valid.kind}\ndata: ${JSON.stringify(valid)}\n\n`,
-      );
+      try {
+        reply.raw.write(
+          `id: ${valid.seq}\nevent: ${valid.kind}\ndata: ${JSON.stringify(valid)}\n\n`,
+        );
+      } catch {
+        return false;
+      }
       return true;
     };
 
@@ -528,13 +539,23 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       if (writeEnvelope(env)) written++;
     }
     if (page.length >= sseReplayPageSize && written > 0) {
-      reply.raw.end();
+      try {
+        reply.raw.end();
+      } catch {
+        // socket already gone
+      }
       releaseStream();
       return;
     }
 
     const unsubscribe = bus.subscribe(id, (env) => writeEnvelope(env));
-    const heartbeat = setInterval(() => reply.raw.write(": ping\n\n"), opts.sseHeartbeatMs ?? 15_000);
+    const heartbeat = setInterval(() => {
+      try {
+        reply.raw.write(": ping\n\n");
+      } catch {
+        cleanup();
+      }
+    }, opts.sseHeartbeatMs ?? 15_000);
     let closed = false;
     const cleanup = () => {
       if (closed) return;
@@ -543,7 +564,11 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       clearInterval(heartbeat);
       releaseStream();
     };
+    // #85: the hijacked raw socket previously had no error handler — an
+    // ECONNRESET mid-stream surfaced as an unhandled 'error' event.
     req.raw.on("close", cleanup);
+    req.raw.on("error", cleanup);
+    reply.raw.on("error", cleanup);
   });
 
   app.addHook("onClose", async () => {

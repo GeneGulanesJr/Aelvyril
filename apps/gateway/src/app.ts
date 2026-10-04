@@ -379,9 +379,15 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       }
       if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
       if (parsed.data.kind === "answer") {
-        store.mergeSpecAnswers(id, namespace, parsed.data.answers);
+        const merged = store.mergeSpecAnswers(id, namespace, parsed.data.answers);
+        if (merged === "too_large") {
+          return reply.code(413).send({ error: "spec_too_large" });
+        }
       } else {
-        store.patchSpecDraft(id, namespace, parsed.data.field, parsed.data.value);
+        const patched = store.patchSpecDraft(id, namespace, parsed.data.field, parsed.data.value);
+        if (patched === "too_large") {
+          return reply.code(413).send({ error: "spec_too_large" });
+        }
       }
       return { ok: true };
     },

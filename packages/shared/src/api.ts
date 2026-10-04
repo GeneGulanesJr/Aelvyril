@@ -80,13 +80,23 @@ export type SpecDraft = z.infer<typeof SpecDraft>;
 export const ThreadStatus = z.enum(["draft", "spec'ing", "running", "reviewed", "merged", "abandoned"]);
 export type ThreadStatus = z.infer<typeof ThreadStatus>;
 
-/** Body for PATCH /v1/threads/:id/spec. */
+/** Body for PATCH /v1/threads/:id/spec. Security review #85: the answers
+ *  record and draft value are size-capped so the stored spec blobs (and the
+ *  merged accumulation) can't grow without bound. */
 export const PatchSpecBody = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("answer"), answers: z.record(z.string(), z.string()) }),
+  z.object({
+    kind: z.literal("answer"),
+    answers: z
+      .record(z.string().min(1).max(100), z.string().max(10_000))
+      .refine((a) => Object.keys(a).length <= 200, "at most 200 answers per patch"),
+  }),
   z.object({
     kind: z.literal("edit"),
     field: z.enum(["goal", "filesAffected", "plan", "risks"]),
-    value: z.union([z.string(), z.array(z.string())]),
+    value: z.union([
+      z.string().max(200_000),
+      z.array(z.string().max(10_000)).max(500),
+    ]),
   }),
 ]);
 export type PatchSpecBody = z.infer<typeof PatchSpecBody>;

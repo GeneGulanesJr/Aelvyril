@@ -170,4 +170,18 @@ describe("Store", () => {
     expect(store.getThreadSpec(conv.id, "user:a")?.specDraft?.goal).toBe("add RBAC");
     expect(store.getThreadSpec(conv.id, "user:b")).toBeNull();
   });
+
+  it("refuses to grow spec blobs past the accumulated-size cap (#85)", () => {
+    const store = new Store(":memory:");
+    const conv = store.createConversation({ namespace: "user:a" });
+    const huge = "x".repeat(400_000);
+    expect(store.mergeSpecAnswers(conv.id, "user:a", { q1: huge })).toBe(true);
+    // Merging again would exceed the cap -> refused, existing blob untouched.
+    expect(store.mergeSpecAnswers(conv.id, "user:a", { q2: huge })).toBe("too_large");
+    expect(store.getThreadSpec(conv.id, "user:a")?.specAnswers).toEqual({ q1: huge });
+
+    expect(store.patchSpecDraft(conv.id, "user:a", "goal", huge)).toBe(true);
+    expect(store.patchSpecDraft(conv.id, "user:a", "plan", [huge, huge])).toBe("too_large");
+    expect(store.getThreadSpec(conv.id, "user:a")?.specDraft?.plan).toEqual([]);
+  });
 });

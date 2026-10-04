@@ -400,6 +400,32 @@ describe("PATCH /v1/threads/:id/spec", () => {
     expect(JSON.parse(stored.spec_answers ?? "{}")).toEqual({ q1: "admin" });
   });
 
+  it("returns 413 when the accumulated spec blob would exceed the cap (#85)", async () => {
+    app = await makeAppWithDb();
+    const u1 = authed(app, "good");
+    const t = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    // Individual values are schema-capped at 10k; the accumulated merge is
+    // what hits the 512k store cap. Two 26-key patches of max-size values
+    // cross it.
+    const big = "x".repeat(10_000);
+    const patch = (offset: number) =>
+      app.inject({
+        method: "PATCH",
+        url: `/v1/threads/${t.id}/spec`,
+        headers: { authorization: "Bearer good", "content-type": "application/json" },
+        payload: {
+          kind: "answer",
+          answers: Object.fromEntries(
+            Array.from({ length: 26 }, (_, i) => [`k${offset + i}`, big]),
+          ),
+        },
+      });
+    expect((await patch(0)).statusCode).toBe(200);
+    const over = await patch(26);
+    expect(over.statusCode).toBe(413);
+    expect(over.json().error).toBe("spec_too_large");
+  });
+
   it("applies an edit patch and persists the draft field", async () => {
     app = await makeAppWithDb();
     const u1 = authed(app, "good");

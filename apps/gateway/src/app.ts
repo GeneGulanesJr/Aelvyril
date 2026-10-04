@@ -6,6 +6,7 @@ import Fastify, {
 import { spawn } from "node:child_process";
 import {
   CreateConversationBody,
+  EventEnvelope as EventEnvelopeSchema,
   PatchSpecBody,
   PromptBody,
   RenameConversationBody,
@@ -456,12 +457,18 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const parsed = Array.isArray(raw) ? Number(raw[0]) : Number(raw);
     let lastSeq = Number.isFinite(parsed) ? parsed : -1;
 
-    // Returns false when the envelope was skipped (validation, #85.2).
+    // Returns false when the envelope was skipped. Security review #85:
+    // validate at the wire boundary — store rows are replayed unvalidated,
+    // so legacy/malformed rows must not reach the stream (a kind containing
+    // a newline would desync SSE framing).
     const writeEnvelope = (env: EventEnvelope): boolean => {
-      if (env.seq <= lastSeq) return false;
-      lastSeq = env.seq;
+      const parsed = EventEnvelopeSchema.safeParse(env);
+      if (!parsed.success) return false;
+      const valid = parsed.data;
+      if (valid.seq <= lastSeq) return false;
+      lastSeq = valid.seq;
       reply.raw.write(
-        `id: ${env.seq}\nevent: ${env.kind}\ndata: ${JSON.stringify(env)}\n\n`,
+        `id: ${valid.seq}\nevent: ${valid.kind}\ndata: ${JSON.stringify(valid)}\n\n`,
       );
       return true;
     };

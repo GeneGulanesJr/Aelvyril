@@ -101,13 +101,18 @@ describe("SSE end-to-end", () => {
 
     // D7 contract end-to-end: the user's namespace reached the session host's
     // environment (fake-pi echoes LAPIS_PROJECT_KEY back before the tool_call).
-    const echoIdx = seen.findIndex((e) => (e.kind as string) === "custom_env_echo");
+    // #85: opaque custom_* events ride in the schema-validated "custom" kind.
+    const echoIdx = seen.findIndex((e) => e.kind === "custom");
     const toolCallIdx = seen.findIndex((e) => e.kind === "tool_call");
     expect(echoIdx).toBeGreaterThan(-1);
     expect(toolCallIdx).toBeGreaterThan(echoIdx);
-    const echo = seen[echoIdx]!.payload as unknown as { LAPIS_PROJECT_KEY: string | null };
-    expect(echo.LAPIS_PROJECT_KEY).toBe(toUserNamespace("user_test1"));
-    expect(echo.LAPIS_PROJECT_KEY).toBe("user:user_test1"); // the actual value
+    const echo = seen[echoIdx]!.payload as unknown as {
+      type: string;
+      data: { LAPIS_PROJECT_KEY: string | null };
+    };
+    expect(echo.type).toBe("custom_env_echo");
+    expect(echo.data.LAPIS_PROJECT_KEY).toBe(toUserNamespace("user_test1"));
+    expect(echo.data.LAPIS_PROJECT_KEY).toBe("user:user_test1"); // the actual value
     await sse.cancel();
   });
 

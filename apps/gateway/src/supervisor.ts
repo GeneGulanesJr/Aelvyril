@@ -128,14 +128,16 @@ export class Supervisor {
     const handle = this.handles.get(conversationId);
     if (handle) handle.lastActivity = Date.now();
 
-    // Probe channel: custom_* protocol events are forwarded verbatim onto the
-    // bus (kind is stored as free TEXT; the SSE wire layer does not re-validate
-    // against the zod union). Used by tests to observe child-side state such
-    // as the spawn environment.
+    // Probe channel: custom_* protocol events are forwarded onto the bus.
+    // Security review #85: they must not flow verbatim as the envelope kind
+    // (a kind with a newline desyncs SSE framing) — they are wrapped in the
+    // schema-validated "custom" kind instead. Events whose type falls
+    // outside the safe charset are dropped.
     if (ev.type.startsWith("custom_")) {
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(ev.type)) return;
       this.publish(conversationId, {
-        kind: ev.type as EventEnvelope["kind"],
-        payload: ev,
+        kind: "custom",
+        payload: { type: ev.type, data: ev },
       });
       return;
     }

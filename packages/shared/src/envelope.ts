@@ -16,6 +16,11 @@ export const EnvelopeKind = z.enum([
   "spec_draft",
   "spec_status",
   "diff",
+  // Security review #85: opaque child-agent protocol events no longer flow
+  // onto the wire as raw `custom_*` kinds (a kind containing a newline
+  // desyncs SSE framing). They arrive as kind "custom" with the original
+  // event type constrained into the payload.
+  "custom",
 ]);
 export type EnvelopeKind = z.infer<typeof EnvelopeKind>;
 
@@ -62,6 +67,13 @@ const payloadSchemas = {
   diff: z.object({
     files: z.array(z.object({ path: z.string().min(1), patch: z.string() })).min(1),
   }),
+  // Opaque child-agent protocol event (e.g. pi's custom_env_echo probe).
+  // type is the original protocol event name, charset-constrained so it can
+  // never break SSE framing; data is the verbatim protocol event.
+  custom: z.object({
+    type: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+    data: z.unknown(),
+  }),
 } as const;
 
 const envelopeShape = z.object({
@@ -86,5 +98,6 @@ export const EventEnvelope = z.discriminatedUnion("kind", [
   envelopeShape.extend({ kind: z.literal("spec_draft"), payload: payloadSchemas.spec_draft }),
   envelopeShape.extend({ kind: z.literal("spec_status"), payload: payloadSchemas.spec_status }),
   envelopeShape.extend({ kind: z.literal("diff"), payload: payloadSchemas.diff }),
+  envelopeShape.extend({ kind: z.literal("custom"), payload: payloadSchemas.custom }),
 ]);
 export type EventEnvelope = z.infer<typeof EventEnvelope>;

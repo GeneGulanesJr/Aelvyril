@@ -73,7 +73,30 @@ describe("EventEnvelope", () => {
       "spec_draft",
       "spec_status",
       "diff",
+      "custom",
     ]);
+  });
+
+  it("accepts a custom envelope with a safe type (#85)", () => {
+    const parsed = EventEnvelope.parse({
+      ...base,
+      kind: "custom",
+      payload: { type: "custom_env_echo", data: { LAPIS_PROJECT_KEY: "user:u" } },
+    });
+    expect(parsed.payload).toEqual({
+      type: "custom_env_echo",
+      data: { LAPIS_PROJECT_KEY: "user:u" },
+    });
+  });
+
+  it("rejects a custom envelope whose type breaks SSE framing (#85)", () => {
+    expect(
+      EventEnvelope.safeParse({
+        ...base,
+        kind: "custom",
+        payload: { type: "evil\nX", data: {} },
+      }).success,
+    ).toBe(false);
   });
 });
 

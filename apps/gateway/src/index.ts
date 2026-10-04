@@ -48,6 +48,17 @@ const app = await buildApp({
   logger: process.env.GATEWAY_LOG !== "silent",
   // SSE keepalive — operators may want to tune for proxy timeouts.
   sseHeartbeatMs: process.env.SSE_HEARTBEAT_MS ? Number(process.env.SSE_HEARTBEAT_MS) : undefined,
+  // Security review #85 caps: SSE streams per user, replay page size,
+  // event-log retention per thread.
+  maxSseStreamsPerUser: process.env.GATEWAY_MAX_SSE_STREAMS
+    ? Number(process.env.GATEWAY_MAX_SSE_STREAMS)
+    : undefined,
+  sseReplayPageSize: process.env.GATEWAY_SSE_REPLAY_PAGE
+    ? Number(process.env.GATEWAY_SSE_REPLAY_PAGE)
+    : undefined,
+  eventRetentionPerThread: process.env.GATEWAY_EVENT_RETENTION
+    ? Number(process.env.GATEWAY_EVENT_RETENTION)
+    : undefined,
 });
 
 // Default to dual-stack ("::" accepts IPv4-mapped too) so `localhost` resolves

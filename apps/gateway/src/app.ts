@@ -48,6 +48,13 @@ export interface AppOptions {
   compress?: boolean;
   /** SSE keepalive interval in ms (spec §6 heartbeat). Defaults to 15_000. */
   sseHeartbeatMs?: number;
+  /** Max concurrent SSE streams per user (security review #85). Default 10. */
+  maxSseStreamsPerUser?: number;
+  /** Replay events per SSE page; the client reconnects with Last-Event-ID to
+   *  page through a long backlog. Default 500. */
+  sseReplayPageSize?: number;
+  /** Max events retained per conversation. Default 10_000 (0 disables). */
+  eventRetentionPerThread?: number;
 }
 
 export type App = FastifyInstance;
@@ -71,7 +78,9 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     genReqId: () => Math.random().toString(36).slice(2, 10),
     requestIdHeader: "x-request-id",
   });
-  const store = new Store(opts.dbPath);
+  const store = new Store(opts.dbPath, {
+    eventRetentionPerThread: opts.eventRetentionPerThread,
+  });
   const bus = new EventBus(store);
   // Spec §10: default-deny workspace allowlist. Override via opts in tests.
   const workspaceAllowlist = opts.workspaceAllowlist ?? createWorkspaceAllowlist(process.env.GATEWAY_WORKSPACE_ALLOWLIST);
@@ -82,6 +91,11 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     refillPerSecond: 20 / 60,
   });
   const maxConversationsPerUser = opts.maxConversationsPerUser ?? 3;
+  // Security review #85: cap concurrent SSE streams per user (each holds a
+  // bus listener + a heartbeat timer). Keyed by userId, counted on connect.
+  const maxSseStreamsPerUser = opts.maxSseStreamsPerUser ?? 10;
+  const sseStreams = new Map<string, number>();
+  const sseReplayPageSize = opts.sseReplayPageSize ?? 500;
   const metrics = opts.metrics ?? createMetrics();
   const supervisor = new Supervisor({
     bus,
@@ -407,6 +421,19 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const { id } = req.params as { id: string };
     if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
 
+    // Security review #85: per-user concurrent stream cap.
+    const active = sseStreams.get(userId) ?? 0;
+    if (active >= maxSseStreamsPerUser) {
+      metrics.sseStreamsRejectedTotal.inc();
+      return reply.code(429).send({ error: "too_many_streams" });
+    }
+    sseStreams.set(userId, active + 1);
+    const releaseStream = () => {
+      const n = (sseStreams.get(userId) ?? 1) - 1;
+      if (n <= 0) sseStreams.delete(userId);
+      else sseStreams.set(userId, n);
+    };
+
     reply.hijack();
     // Hijacking the reply bypasses @fastify/cors reply hooks, so the streamed
     // response would go out with no Access-Control-Allow-Origin and the browser
@@ -429,23 +456,43 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const parsed = Array.isArray(raw) ? Number(raw[0]) : Number(raw);
     let lastSeq = Number.isFinite(parsed) ? parsed : -1;
 
-    const writeEnvelope = (env: EventEnvelope) => {
-      if (env.seq <= lastSeq) return;
+    // Returns false when the envelope was skipped (validation, #85.2).
+    const writeEnvelope = (env: EventEnvelope): boolean => {
+      if (env.seq <= lastSeq) return false;
       lastSeq = env.seq;
       reply.raw.write(
         `id: ${env.seq}\nevent: ${env.kind}\ndata: ${JSON.stringify(env)}\n\n`,
       );
+      return true;
     };
 
-    for (const env of bus.replay(id, lastSeq)) writeEnvelope(env);
+    // Replay one page, then either hand the rest to a clean EOF (the web
+    // client reconnects with Last-Event-ID and dedups by seq) or hold the
+    // stream open for live events. Ending on a full page with zero valid
+    // envelopes would loop the client on the same window, so fall through
+    // to live subscription instead.
+    const page = bus.replay(id, lastSeq, sseReplayPageSize);
+    let written = 0;
+    for (const env of page) {
+      if (writeEnvelope(env)) written++;
+    }
+    if (page.length >= sseReplayPageSize && written > 0) {
+      reply.raw.end();
+      releaseStream();
+      return;
+    }
 
     const unsubscribe = bus.subscribe(id, (env) => writeEnvelope(env));
     const heartbeat = setInterval(() => reply.raw.write(": ping\n\n"), opts.sseHeartbeatMs ?? 15_000);
-
-    req.raw.on("close", () => {
+    let closed = false;
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
       unsubscribe();
       clearInterval(heartbeat);
-    });
+      releaseStream();
+    };
+    req.raw.on("close", cleanup);
   });
 
   app.addHook("onClose", async () => {

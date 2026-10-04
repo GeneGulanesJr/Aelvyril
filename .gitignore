@@ -36,3 +36,4 @@ data/
 # Playwright run artifacts (HTML report + test results JSON/traces)
 playwright-report/
 test-results/
+.zcode/

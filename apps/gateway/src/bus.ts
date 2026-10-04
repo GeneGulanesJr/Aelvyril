@@ -30,7 +30,7 @@ export class EventBus {
     return full;
   }
 
-  replay(conversationId: string, sinceSeq: number): EventEnvelope[] {
-    return this.store.getEventsSince(conversationId, sinceSeq) as EventEnvelope[];
+  replay(conversationId: string, sinceSeq: number, limit?: number): EventEnvelope[] {
+    return this.store.getEventsSince(conversationId, sinceSeq, limit) as EventEnvelope[];
   }
 }

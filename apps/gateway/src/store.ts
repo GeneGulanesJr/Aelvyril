@@ -20,6 +20,12 @@ export interface NewEvent {
 
 export type StoredEvent = NewEvent & { seq: number };
 
+export interface StoreOptions {
+  /** Keep at most this many events per conversation (security review #85:
+   *  the events table grew indefinitely). 0 disables pruning. */
+  eventRetentionPerThread?: number;
+}
+
 /**
  * Idempotent schema migrations: table creation + column backfills.
  * Safe to run repeatedly (CREATE IF NOT EXISTS + column presence checks);
@@ -72,10 +78,12 @@ export function runMigrations(db: Database.Database): void {
 export class Store {
   private db: Database.Database;
   private appendTxn: (ev: NewEvent) => StoredEvent;
+  private eventRetentionPerThread: number;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, opts: StoreOptions = {}) {
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
+    this.eventRetentionPerThread = opts.eventRetentionPerThread ?? 10_000;
     runMigrations(this.db);
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_conversations_namespace ON conversations(namespace)",
@@ -94,6 +102,14 @@ export class Store {
           "INSERT INTO events(conversation_id, seq, ts, kind, payload) VALUES(?, ?, ?, ?, ?)",
         )
         .run(ev.conversationId, seq, ev.ts, ev.kind, JSON.stringify(ev.payload));
+      // Retention (#85): prune inside the same transaction so the events table
+      // stays bounded per conversation. Indexed range delete; usually matches
+      // 0 rows.
+      if (this.eventRetentionPerThread > 0) {
+        this.db
+          .prepare("DELETE FROM events WHERE conversation_id = ? AND seq <= ?")
+          .run(ev.conversationId, seq - this.eventRetentionPerThread);
+      }
       return { ...ev, seq };
     });
   }
@@ -250,12 +266,18 @@ export class Store {
     return this.appendTxn(ev);
   }
 
-  getEventsSince(conversationId: string, sinceSeq: number): StoredEvent[] {
+  getEventsSince(conversationId: string, sinceSeq: number, limit?: number): StoredEvent[] {
+    // LIMIT bounds the replay page (#85): the SSE route reconnects the client
+    // with Last-Event-ID instead of loading the whole backlog into one array.
+    const sql =
+      "SELECT * FROM events WHERE conversation_id = ? AND seq > ? ORDER BY seq ASC" +
+      (Number.isFinite(limit) && limit !== undefined && limit > 0 ? " LIMIT ?" : "");
+    const args = Number.isFinite(limit) && limit !== undefined && limit > 0
+      ? [conversationId, sinceSeq, limit]
+      : [conversationId, sinceSeq];
     const rows = this.db
-      .prepare(
-        "SELECT * FROM events WHERE conversation_id = ? AND seq > ? ORDER BY seq ASC",
-      )
-      .all(conversationId, sinceSeq) as Array<{
+      .prepare(sql)
+      .all(...args) as Array<{
       conversation_id: string;
       seq: number;
       ts: string;

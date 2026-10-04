@@ -99,6 +99,31 @@ describe("Store", () => {
     expect(replay.map((e) => e.seq)).toEqual([1, 2]);
   });
 
+  it("honors the replay page limit", () => {
+    const store = new Store(":memory:");
+    const conv = store.createConversation({ namespace: PLATFORM });
+    for (let i = 0; i < 5; i++) {
+      store.appendEvent({ conversationId: conv.id, ts, kind: "text_delta", payload: { delta: String(i) } });
+    }
+    expect(store.getEventsSince(conv.id, -1, 2).map((e) => e.seq)).toEqual([0, 1]);
+    expect(store.getEventsSince(conv.id, 1, 2).map((e) => e.seq)).toEqual([2, 3]);
+    // No limit → the full backlog (default behavior for direct callers).
+    expect(store.getEventsSince(conv.id, -1).map((e) => e.seq)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("prunes events beyond the retention window, per conversation", () => {
+    const store = new Store(":memory:", { eventRetentionPerThread: 5 });
+    const conv = store.createConversation({ namespace: PLATFORM });
+    const other = store.createConversation({ namespace: PLATFORM });
+    for (let i = 0; i < 8; i++) {
+      store.appendEvent({ conversationId: conv.id, ts, kind: "text_delta", payload: { delta: String(i) } });
+      store.appendEvent({ conversationId: other.id, ts, kind: "text_delta", payload: { delta: String(i) } });
+    }
+    // Only the newest 5 survive in each conversation.
+    expect(store.getEventsSince(conv.id, -1).map((e) => e.seq)).toEqual([3, 4, 5, 6, 7]);
+    expect(store.getEventsSince(other.id, -1).map((e) => e.seq)).toEqual([3, 4, 5, 6, 7]);
+  });
+
   it("updates conversation state", () => {
     const store = new Store(":memory:");
     const conv = store.createConversation({ namespace: PLATFORM });

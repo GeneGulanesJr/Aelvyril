@@ -235,8 +235,9 @@ describe("v1 routes", () => {
       headers: { authorization: `Bearer good` },
     });
     expect(del.statusCode).toBe(204);
+    const a = app;
     await vi.waitFor(async () => {
-      const after = await app.inject({ method: "GET", url: "/metrics" });
+      const after = await a.inject({ method: "GET", url: "/metrics" });
       expect(after.body).toContain("aelvyril_active_session_hosts 0");
     });
   });
@@ -473,15 +474,16 @@ describe("PATCH /v1/threads/:id/spec", () => {
   });
 
   it("returns 413 when the accumulated spec blob would exceed the cap (#85)", async () => {
-    app = await makeAppWithDb();
-    const u1 = authed(app, "good");
+    const a = await makeAppWithDb();
+    app = a;
+    const u1 = authed(a, "good");
     const t = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
     // Individual values are schema-capped at 10k; the accumulated merge is
     // what hits the 512k store cap. Two 26-key patches of max-size values
     // cross it.
     const big = "x".repeat(10_000);
     const patch = (offset: number) =>
-      app.inject({
+      a.inject({
         method: "PATCH",
         url: `/v1/threads/${t.id}/spec`,
         headers: { authorization: "Bearer good", "content-type": "application/json" },

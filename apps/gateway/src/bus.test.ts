@@ -45,14 +45,13 @@ describe("EventBus", () => {
     const fn = vi.fn();
     bus.subscribe(conv.id, fn);
     // kind not in the union
-    expect(
-      bus.publish({
-        conversationId: conv.id,
-        ts,
-        kind: "custom_env_echo\r\nX" as EventEnvelope["kind"],
-        payload: {},
-      }),
-    ).toBeNull();
+    const badKind = {
+      conversationId: conv.id,
+      ts,
+      kind: "custom_env_echo\r\nX",
+      payload: {},
+    } as unknown as Omit<EventEnvelope, "seq">;
+    expect(bus.publish(badKind)).toBeNull();
     // payload fails the per-kind schema
     expect(
       bus.publish({ conversationId: conv.id, ts, kind: "user_message", payload: { text: "" } }),

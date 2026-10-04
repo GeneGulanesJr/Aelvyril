@@ -56,6 +56,10 @@ export interface AppOptions {
   sseReplayPageSize?: number;
   /** Max events retained per conversation. Default 10_000 (0 disables). */
   eventRetentionPerThread?: number;
+  /** Optional scrape secret for /metrics (#85). When set, requests must send
+   *  `Authorization: Bearer <secret>`. Unset keeps /metrics open (the
+   *  reverse proxy is expected to gate it). */
+  metricsSecret?: string;
 }
 
 export type App = FastifyInstance;
@@ -182,10 +186,18 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     return reply.code(allOk ? 200 : 503).send(result);
   });
 
-  // Prometheus text format. Unauthenticated by design (Prometheus scrapes
-  // internally; an external scraper should go through the reverse proxy
-  // which gates /metrics on its own network policy).
-  app.get("/metrics", async (_req, reply) => {
+  // Prometheus text format. Unauthenticated by design when no scrape secret
+  // is configured (Prometheus scrapes internally; an external scraper should
+  // go through the reverse proxy which gates /metrics on its own network
+  // policy). #85: GATEWAY_METRICS_SECRET adds bearer-token gating for
+  // deployments that expose the gateway directly.
+  app.get("/metrics", async (req, reply) => {
+    if (opts.metricsSecret) {
+      const header = req.headers.authorization;
+      if (header !== `Bearer ${opts.metricsSecret}`) {
+        return reply.code(401).send({ error: "unauthorized" });
+      }
+    }
     reply.header("content-type", "text/plain; version=0.0.4");
     return metrics.render();
   });

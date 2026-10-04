@@ -86,4 +86,45 @@ describe("auth", () => {
     expect(mine.statusCode).toBe(200);
     await app.close();
   });
+
+  it("gates /metrics with the scrape secret when configured (#85)", async () => {
+    const app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      verifyToken: okVerifier,
+      metricsSecret: "s3cret",
+    });
+    expect((await app.inject({ method: "GET", url: "/metrics" })).statusCode).toBe(401);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/metrics",
+          headers: { authorization: "Bearer wrong" },
+        })
+      ).statusCode,
+    ).toBe(401);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/metrics",
+          headers: { authorization: "Bearer s3cret" },
+        })
+      ).statusCode,
+    ).toBe(200);
+    await app.close();
+  });
+
+  it("keeps /metrics open when no scrape secret is configured (#85)", async () => {
+    const app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      verifyToken: okVerifier,
+    });
+    expect((await app.inject({ method: "GET", url: "/metrics" })).statusCode).toBe(200);
+    await app.close();
+  });
 });

@@ -12,7 +12,12 @@ const useFakeChild = process.env.PI_FAKE === "1";
  */
 function resolveVerifier(): TokenVerifier {
   const secretKey = process.env.CLERK_SECRET_KEY;
-  if (secretKey) return createClerkVerifier(secretKey);
+  // #85: pin the token azp to the expected origins when configured
+  // (comma-separated, e.g. "http://localhost:3000,https://app.example.com").
+  const authorizedParties = process.env.CLERK_AUTHORIZED_PARTIES?.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (secretKey) return createClerkVerifier(secretKey, authorizedParties);
   if (useFakeChild) {
     // Dev-only: any bearer token is accepted; the token IS the user id.
     return async (token) => ({ userId: token });
@@ -59,6 +64,8 @@ const app = await buildApp({
   eventRetentionPerThread: process.env.GATEWAY_EVENT_RETENTION
     ? Number(process.env.GATEWAY_EVENT_RETENTION)
     : undefined,
+  // #85: optional bearer secret gating /metrics for direct exposure.
+  metricsSecret: process.env.GATEWAY_METRICS_SECRET,
 });
 
 // Default to dual-stack ("::" accepts IPv4-mapped too) so `localhost` resolves

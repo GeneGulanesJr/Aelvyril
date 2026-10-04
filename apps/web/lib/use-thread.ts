@@ -58,8 +58,22 @@ export function useThread(
     );
     clientRef.current = client;
     // fetch-based SSE (NOT EventSource — it cannot send an Authorization
-    // header); openStream owns reconnect + Last-Event-ID.
-    const close = client.openStream(threadId, (e) => setState((s) => applyEnvelope(s, e)));
+    // header); openStream owns reconnect + Last-Event-ID. A terminal stream
+    // loss (#85: 404 or repeated failures) surfaces in the error banner
+    // instead of an invisible 1s retry loop.
+    const close = client.openStream(
+      threadId,
+      (e) => setState((s) => applyEnvelope(s, e)),
+      undefined,
+      (reason) =>
+        setState((s) => ({
+          ...s,
+          error:
+            reason === "not_found"
+              ? "This thread no longer exists."
+              : "Live updates stopped after repeated failures — reload to reconnect.",
+        })),
+    );
     return () => {
       close();
       clientRef.current = null;

@@ -185,3 +185,77 @@ describe("thread client methods", () => {
     expect((fetchMock.mock.calls[1]![1] as RequestInit).method).toBe("DELETE");
   });
 });
+
+describe("openStream (#85)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const sseBlock = (seq: number) =>
+    `id: ${seq}\nevent: text_delta\ndata: ${JSON.stringify({
+      seq,
+      conversationId: "t1",
+      ts: "2026-09-22T12:00:00.000Z",
+      kind: "text_delta",
+      payload: { delta: "x" },
+    })}\n\n`;
+
+  function mockSse(responses: Array<{ status: number; text?: string }>) {
+    const calls: string[] = [];
+    let i = 0;
+    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+      calls.push(String(url));
+      const r = responses[i++] ?? { status: 500 };
+      return new Response(r.text ?? "", { status: r.status });
+    }) as unknown as typeof fetch;
+    return { calls };
+  }
+
+  it("404 is terminal: fires onLost and stops", async () => {
+    const { client } = makeClient();
+    const { calls } = mockSse([{ status: 404 }]);
+    const onLost = vi.fn();
+    client.openStream("t1", () => {}, undefined, onLost);
+    await vi.waitFor(() => expect(onLost).toHaveBeenCalledWith("not_found"));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBe("http://example.test/v1/threads/t1/events");
+  });
+
+  it("three consecutive auth failures are terminal", async () => {
+    vi.useFakeTimers();
+    const { client } = makeClient();
+    const { calls } = mockSse([{ status: 401 }, { status: 401 }, { status: 401 }]);
+    const onLost = vi.fn();
+    client.openStream("t1", () => {}, undefined, onLost);
+    // Backs off between attempts (1s, 2s); the third auth failure is terminal.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toHaveLength(3);
+    expect(onLost).toHaveBeenCalledWith("gave_up");
+  });
+
+  it("backs off between failures and gives up after 8", async () => {
+    vi.useFakeTimers();
+    const { client } = makeClient();
+    const { calls } = mockSse([]); // every fetch 500s
+    const onLost = vi.fn();
+    client.openStream("t1", () => {}, undefined, onLost);
+    // 1s+2s+4s+8s+16s+30s+30s ≈ 91s of backoff across the 8 attempts.
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(calls).toHaveLength(8);
+    expect(onLost).toHaveBeenCalledWith("gave_up");
+  });
+
+  it("reconnects immediately on a clean EOF (paged replay) and keeps receiving", async () => {
+    const { client } = makeClient();
+    const { calls } = mockSse([{ status: 200, text: sseBlock(0) }, { status: 200, text: sseBlock(1) }]);
+    const seen: number[] = [];
+    const close = client.openStream("t1", (e) => seen.push(e.seq));
+    await vi.waitFor(() => expect(seen).toContain(1));
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    // The second request resumes from the advanced cursor.
+    expect(
+      ((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[1]![1] as RequestInit).headers,
+    ).toMatchObject({ "last-event-id": "0" });
+    close();
+  });
+});

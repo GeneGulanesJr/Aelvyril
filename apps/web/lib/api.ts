@@ -146,29 +146,66 @@ export class GatewayClient {
 
   /**
    * Streaming fetch of the event channel (NOT EventSource — it cannot send
-   * an Authorization header). Reconnects with Last-Event-ID until aborted.
+   * an Authorization header). Reconnects with Last-Event-ID and exponential
+   * backoff until aborted.
+   *
+   * #85: failure is no longer a 1-second hot loop forever. A clean EOF (the
+   * server paging the replay) reconnects immediately; errors back off
+   * 1s→30s; a 404 or repeated auth/network failure is terminal and fires
+   * onLost so the UI can say the stream is gone instead of silently
+   * retrying.
    */
   openStream(
     id: string,
     onEnvelope: (env: EventEnvelope) => void,
     signal?: AbortSignal,
+    onLost?: (reason: "not_found" | "gave_up") => void,
   ): () => void {
     const controller = new AbortController();
     if (signal) signal.addEventListener("abort", () => controller.abort(), { once: true });
+    const MAX_FAILURES = 8;
+    const MAX_AUTH_FAILURES = 3;
     void (async () => {
       const parser = new SseParser();
+      let failures = 0;
+      let authFailures = 0;
       while (!controller.signal.aborted) {
+        let paged = false;
         try {
-          const res = await fetch(`${this.baseUrl}${ROUTES.conversationEvents(id)}`, {
-            headers: { authorization: `Bearer ${await this.getToken()}`, "last-event-id": String(parser.lastSeenSeq) },
+          const token = await this.getToken();
+          if (!token) throw new Error("stream auth: no token");
+          const res = await fetch(`${this.baseUrl}${ROUTES.threadEvents(id)}`, {
+            headers: { authorization: `Bearer ${token}`, "last-event-id": String(parser.lastSeenSeq) },
             signal: controller.signal,
           });
-          if (!res.ok || !res.body) throw new Error(`stream failed: ${res.status}`);
+          if (!res.ok) {
+            if (res.status === 404) {
+              onLost?.("not_found");
+              return;
+            }
+            if (res.status === 401 || res.status === 403) {
+              authFailures++;
+              if (authFailures >= MAX_AUTH_FAILURES) {
+                onLost?.("gave_up");
+                return;
+              }
+              throw new Error(`stream auth failed: ${res.status}`);
+            }
+            throw new Error(`stream failed: ${res.status}`);
+          }
+          if (!res.body) throw new Error("stream failed: no body");
+          failures = 0;
+          authFailures = 0;
           const reader = res.body.getReader();
           const decoder = new TextDecoder();
           for (;;) {
             const { value, done } = await reader.read();
-            if (done) break;
+            if (done) {
+              // Clean EOF: the server ended a full replay page. Fetch the
+              // next page immediately — this is progress, not a failure.
+              paged = true;
+              break;
+            }
             for (const env of parser.push(decoder.decode(value, { stream: true }))) {
               onEnvelope(env);
             }
@@ -176,8 +213,16 @@ export class GatewayClient {
         } catch (err) {
           if (controller.signal.aborted) return;
           console.error("stream error, retrying", err);
-          await new Promise((r) => setTimeout(r, 1000));
         }
+        if (controller.signal.aborted) return;
+        if (paged) continue;
+        failures++;
+        if (failures >= MAX_FAILURES) {
+          onLost?.("gave_up");
+          return;
+        }
+        const delay = Math.min(30_000, 1000 * 2 ** (failures - 1)) + Math.random() * 250;
+        await new Promise((r) => setTimeout(r, delay));
       }
     })();
     return () => controller.abort();

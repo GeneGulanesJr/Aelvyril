@@ -60,7 +60,14 @@ describe("useThread", () => {
 
   it("opens the event stream for a live thread", async () => {
     const { inst } = await renderThread("t1");
-    expect(inst.openStream).toHaveBeenCalledWith("t1", expect.any(Function));
+    // (id, onEnvelope, signal=undefined, onLost) — onLost surfaces terminal
+    // stream loss in the error banner (#85).
+    expect(inst.openStream).toHaveBeenCalledWith(
+      "t1",
+      expect.any(Function),
+      undefined,
+      expect.any(Function),
+    );
   });
 
   it("does not open a stream when threadId is null (new thread)", async () => {

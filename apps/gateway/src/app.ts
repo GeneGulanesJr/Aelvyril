@@ -80,8 +80,16 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     // are silent already (tests + GATEWAY_LOG=silent dev). No logController
     // override: Fastify 5.12 validates it must be a real LogController
     // instance and rejects plain objects at startup.
-    genReqId: () => Math.random().toString(36).slice(2, 10),
-    requestIdHeader: "x-request-id",
+    // #85: the client-supplied x-request-id flows into structured logs and
+    // the response echo, so it is accepted only with a bounded safe charset
+    // (and never trusted as a Fastify requestIdHeader). genReqId is called
+    // for every request and applies the sanitization itself.
+    genReqId: (req) => {
+      const header = req.headers["x-request-id"];
+      const raw = Array.isArray(header) ? header[0] : header;
+      if (raw && /^[A-Za-z0-9_.:@-]{1,64}$/.test(raw)) return raw;
+      return Math.random().toString(36).slice(2, 10);
+    },
   });
   const store = new Store(opts.dbPath, {
     eventRetentionPerThread: opts.eventRetentionPerThread,
@@ -259,7 +267,17 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const namespace = toUserNamespace(userId);
     return { conversations: store.listConversations(namespace) };
   });
-  app.get("/v1/conversations", async (_req, reply) => reply.redirect("/v1/threads", 302));
+  // #85: the 302 aliases are authenticated like every other route (they
+  // used to be open) and the reflected :id is charset-validated +
+  // percent-encoded so it can't smuggle arbitrary header content.
+  const threadIdOr400 = (rawId: string): string | undefined =>
+    /^[A-Za-z0-9_-]{1,128}$/.test(rawId) ? encodeURIComponent(rawId) : undefined;
+
+  app.get("/v1/conversations", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    return reply.redirect("/v1/threads", 302);
+  });
 
   app.get("/v1/threads/:id", async (req, reply) => {
     const userId = await user(req, reply);
@@ -270,8 +288,12 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     return conv ? conv : reply.code(404).send({ error: "not_found" });
   });
   app.get("/v1/conversations/:id", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
     const { id } = req.params as { id: string };
-    return reply.redirect(`/v1/threads/${id}`, 302);
+    const safeId = threadIdOr400(id);
+    if (!safeId) return reply.code(400).send({ error: "bad_request" });
+    return reply.redirect(`/v1/threads/${safeId}`, 302);
   });
 
   const renameThread = async (req: FastifyRequest, reply: FastifyReply) => {
@@ -429,8 +451,12 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   });
 
   app.get("/v1/conversations/:id/events", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
     const { id } = req.params as { id: string };
-    return reply.redirect(`/v1/threads/${id}/events`, 302);
+    const safeId = threadIdOr400(id);
+    if (!safeId) return reply.code(400).send({ error: "bad_request" });
+    return reply.redirect(`/v1/threads/${safeId}/events`, 302);
   });
 
   app.get("/v1/threads/:id/events", async (req, reply) => {

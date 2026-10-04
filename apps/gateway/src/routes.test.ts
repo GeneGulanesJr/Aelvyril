@@ -281,6 +281,51 @@ describe("v1 routes", () => {
     // 8-char random base36: matches the genReqId implementation.
     expect(r1.headers["x-request-id"]).toMatch(/^[a-z0-9]{8}$/);
   });
+
+  it("echoes a sanitized client x-request-id and refuses unsafe ones (#85)", async () => {
+    app = await makeApp();
+    const safe = await app.inject({
+      method: "GET",
+      url: "/healthz",
+      headers: { "x-request-id": "abc-123_DEF:4.5" },
+    });
+    expect(safe.headers["x-request-id"]).toBe("abc-123_DEF:4.5");
+    // Newline (log injection) and over-length ids are replaced, not echoed.
+    const injected = await app.inject({
+      method: "GET",
+      url: "/healthz",
+      headers: { "x-request-id": "evil\ninjected" },
+    });
+    expect(injected.headers["x-request-id"]).toMatch(/^[a-z0-9]{8}$/);
+    const tooLong = await app.inject({
+      method: "GET",
+      url: "/healthz",
+      headers: { "x-request-id": "a".repeat(65) },
+    });
+    expect(tooLong.headers["x-request-id"]).toMatch(/^[a-z0-9]{8}$/);
+  });
+
+  it("401s the 302 aliases without auth and 400s an unsafe :id (#85)", async () => {
+    app = await makeApp();
+    const bare = await app.inject({ method: "GET", url: "/v1/conversations" });
+    expect(bare.statusCode).toBe(401);
+    const bareId = await app.inject({
+      method: "GET",
+      url: "/v1/conversations/some-id/events",
+    });
+    expect(bareId.statusCode).toBe(401);
+    const u1 = authed(app, "good");
+    const bad = await u1.get(`/v1/conversations/${encodeURIComponent("bad id\n")}/events`);
+    expect(bad.statusCode).toBe(400);
+  });
+
+  it("redirects an authenticated alias with the id percent-encoded (#85)", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    const res = await u1.get("/v1/conversations/conv_abc-123");
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe("/v1/threads/conv_abc-123");
+  });
 });
 
 describe("thread route rename", () => {

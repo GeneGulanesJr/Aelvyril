@@ -203,6 +203,12 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   // requests; for the outgoing echo we need an explicit onSend hook.
   app.addHook("onSend", async (req, reply) => {
     if (req.id) reply.header("x-request-id", req.id);
+    // #79: the gateway is an internal-only API (behind Caddy /v1/* in
+    // prod) — responses are never framed and never MIME-sniffed. This
+    // covers the helmet essentials without the dependency; CSP belongs
+    // at the HTML-serving edge (the Caddyfile), not on JSON APIs.
+    reply.header("x-content-type-options", "nosniff");
+    reply.header("x-frame-options", "DENY");
   });
 
   // Spec §11: request-level metrics. onResponse fires after the route

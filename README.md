@@ -38,7 +38,7 @@ Per spec §4/§5/§9 (see ADR 0003), the full agent platform runs as five Docker
 - `LaPis/` — `LAPIS_PROJECT_KEY` env override for per-conversation namespaces (ADR 0002).
 - `LayaMCP/` — drops broken `mcp.server.fastapi`, mounts SSE on plain FastAPI, adds `/health`.
 
-The `gateway` (8787) and `web` (3000, or 3001 if 3000 is taken on the dev host) are the only published ports locally. In production only Caddy is public (80/443); everything else stays internal, with `web:3000` behind the proxy.
+The `gateway` (8787) and `web` (3000, or 3001 if 3000 is taken on the dev host) are the only host-published ports, and only on loopback (#79) — plaintext HTTP never leaves the host. In production only Caddy is public (80/443); everything else stays internal, and browsers call the gateway same-origin through Caddy's `/v1/*` route (build the web bundle with `NEXT_PUBLIC_GATEWAY_URL=` empty for that).
 
 ## Abuse caps (spec §10)
 

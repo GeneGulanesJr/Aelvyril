@@ -1,7 +1,10 @@
 # Spec §4/§5/§9: Aelvyril stack topology.
 #
-# Five services on one network (aelvyril-net). web is the only host-published
-# port (3000). Everything else is loopback / internal. Two profiles:
+# Five services on one network (aelvyril-net). Only caddy publishes public
+# ports (80/443). web (3000) + gateway (8787) are published LOOPBACK-ONLY
+# for the dev profile + smoke script (#79) — plaintext HTTP never leaves
+# the host; browsers reach web + gateway through Caddy TLS in prod.
+# Two profiles:
 #   dev   — bind-mounts apps/* for hot reload; uses local builds
 #   prod  — uses prebuilt images; no source mounts
 #
@@ -23,6 +26,13 @@ services:
       - "443:443/udp"  # HTTP/3
     environment:
       AELVYRIL_DOMAIN: ${AELVYRIL_DOMAIN:-localhost}
+      # #79: Clerk Frontend-API origins added to the CSP's script-src +
+      # connect-src (space-separated; include both the https:// and wss://
+      # spellings Clerk needs, e.g. "https://clerk.acmeinc.com
+      # wss://clerk.acmeinc.com"). Empty = self-only CSP, which blocks
+      # Clerk sign-in — set this in prod from your Clerk dashboard
+      # (API Keys → Frontend API).
+      CSP_CLERK_ORIGINS: ${CSP_CLERK_ORIGINS:-}
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -36,11 +46,26 @@ services:
     build:
       context: ..
       dockerfile: infra/docker/Dockerfile.web
+      # NEXT_PUBLIC_* is inlined into the client bundle at BUILD time.
+      # Unset -> http://localhost:8787 (dev profile: browser on the host
+      # hits the loopback-published gateway). Set-but-EMPTY (prod: set the
+      # var to nothing in .env) -> same-origin /v1/* via the Caddy route —
+      # the gateway stays internal-only and no CORS is involved (#79).
+      # Note `-${...}` (not `:-`): an explicitly empty value must survive.
+      args:
+        NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL-http://localhost:8787}
     restart: unless-stopped
+    # #79: loopback-only. The compose comment used to promise "web only
+    # reachable via Caddy TLS" while publishing plaintext HTTP on every
+    # interface. 127.0.0.1 keeps the smoke + a local browser working; in
+    # prod the public path is Caddy. To remove the mapping entirely:
+    #   docker compose -f infra/compose.yaml -f infra/compose.hardened.yaml
+    # (override file with `ports: !override []` under web + gateway).
     ports:
-      - "3000:3000"
+      - "${WEB_BIND_HOST:-127.0.0.1}:3000:3000"
     environment:
-      NEXT_PUBLIC_GATEWAY_URL: http://gateway:8787
+      # Runtime value only (SSR); the client bundle took the build arg.
+      NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL-http://localhost:8787}
       NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:?required}
       CLERK_SECRET_KEY: ${WEB_CLERK_SECRET_KEY:?required}
     depends_on:
@@ -62,7 +87,15 @@ services:
       dockerfile: infra/docker/Dockerfile.gateway
     restart: unless-stopped
     expose:
-      - "8787"  # internal-only; only web needs to reach it
+      - "8787"  # container-to-container (web, caddy /v1/* route)
+    # #79: loopback-only host publication. The smoke script polls
+    # /healthz from the host and the dev-profile browser prompts
+    # http://localhost:8787 directly. In prod the browser path is Caddy
+    # (same-origin /v1/*) — this binding never leaves the host. Never
+    # point GATEWAY_BIND_HOST at a public interface: /metrics is
+    # unauthenticated unless GATEWAY_METRICS_SECRET is set.
+    ports:
+      - "${GATEWAY_BIND_HOST:-127.0.0.1}:8787:8787"
     environment:
       GATEWAY_PORT: "8787"
       GATEWAY_HOST: "::"

@@ -17,6 +17,11 @@ RUN pnpm install --frozen-lockfile --offline --prod=false
 
 FROM deps AS build
 ENV NEXT_TELEMETRY_DISABLED=1
+# #79: NEXT_PUBLIC_* is inlined into the client bundle by `next build`.
+# compose passes the build arg; EMPTY value = same-origin /v1/* (prod
+# behind Caddy), unset falls back to http://localhost:8787 (compose dev).
+ARG NEXT_PUBLIC_GATEWAY_URL
+ENV NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL}
 RUN pnpm --filter @aelvyril/shared build || true
 RUN pnpm --filter @aelvyril/web build
 

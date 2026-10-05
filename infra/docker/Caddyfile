@@ -1,4 +1,4 @@
-# Spec §11: TLS termination in front of web.
+# Spec §11: TLS termination in front of web + gateway.
 #
 # Caddy auto-provisions Let's Encrypt certs via ACME (no manual renewal).
 # Set AELVYRIL_DOMAIN (e.g., aelvyril.example.com) and Caddy will request
@@ -8,13 +8,32 @@
 # In dev (no public DNS), set AELVYRIL_DOMAIN to localhost and Caddy
 # falls back to its internal CA (the ondemand tls policy is skipped).
 # Override the caddy_image + log level via env if needed.
+#
+# #79: this proxy is the ONLY public ingress. web and gateway are
+# internal-only (loopback host bindings exist for the dev smoke); the
+# browser calls the gateway same-origin via the /v1/* route below
+# (NEXT_PUBLIC_GATEWAY_URL is built empty for prod), so no CORS and no
+# second published port are involved.
 
 {$AELVYRIL_DOMAIN:localhost} {
     encode gzip zstd
-    reverse_proxy web:3000
+
+    # Same-origin API route (#79): the gateway container stays internal.
+    # flush_interval -1 disables proxy buffering so SSE event streams
+    # (text/event-stream, Last-Event-ID reconnect) flush per write.
+    handle /v1/* {
+        reverse_proxy gateway:8787 {
+            flush_interval -1
+        }
+    }
+
+    # Everything else is the Next.js app.
+    handle {
+        reverse_proxy web:3000
+    }
 
     # Expose /metrics over TLS too (optional — gated by your scraper's
-    # network policy). Uncomment to enable.
+    # network policy; the gateway also supports GATEWAY_METRICS_SECRET).
     # @metrics header X-Scrape-Secret {http.request.header.X-Scrape-Secret}
     # handle @metrics {
     #     reverse_proxy gateway:8787 {
@@ -25,10 +44,21 @@
     #     respond 403
     # }
 
-    # HSTS (1 year, include subdomains). Only meaningful over HTTPS.
-    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
-
     # Security headers — apply to all responses.
-    header X-Content-Type-Options "nosniff"
-    header Referrer-Policy "strict-origin-when-cross-origin"
+    header {
+        # HSTS (1 year, include subdomains). Only meaningful over HTTPS.
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # #79: clickjacking — CSP frame-ancestors (modern) plus
+        # X-Frame-Options (legacy) both forbid framing the app.
+        X-Frame-Options "DENY"
+        # #79: content-Security-Policy. 'unsafe-inline' on script-src is
+        # the pragmatic Next.js posture (hydration payloads are inline
+        # scripts); tightening to nonces needs Next middleware — deferred.
+        # CSP_CLERK_ORIGINS (compose env) adds the Clerk Frontend API
+        # origins used by sign-in (script + connect); empty = self-only,
+        # which blocks Clerk until the operator sets it.
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' {$CSP_CLERK_ORIGINS:}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' {$CSP_CLERK_ORIGINS:}; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    }
 }

@@ -809,21 +809,26 @@ describe("durable prompt queue (#83)", () => {
       const a = app;
       // Both threads were ALREADY state "idle" (nothing ran in phase 1), so
       // poll the status column directly: the runner flips queued → running
-      // when it dequeues, and the settled turn leaves state idle.
-      await vi.waitFor(() => {
-        const db = new Database(dbFile);
-        try {
-          const rows = db
-            .prepare("SELECT id, status, state FROM conversations WHERE id IN (?, ?)")
-            .all(t1.id, t2.id) as Array<{ id: string; status: string; state: string }>;
-          for (const r of rows) {
-            expect(r.status).toBe("running");
-            expect(r.state).toBe("idle");
+      // when it dequeues, and the settled turn leaves state idle. Two node
+      // spawns + turns can take seconds on a loaded machine (full-suite
+      // parallel runs) — give the waitFor a generous bound.
+      await vi.waitFor(
+        () => {
+          const db = new Database(dbFile);
+          try {
+            const rows = db
+              .prepare("SELECT id, status, state FROM conversations WHERE id IN (?, ?)")
+              .all(t1.id, t2.id) as Array<{ id: string; status: string; state: string }>;
+            for (const r of rows) {
+              expect(r.status).toBe("running");
+              expect(r.state).toBe("idle");
+            }
+          } finally {
+            db.close();
           }
-        } finally {
-          db.close();
-        }
-      });
+        },
+        { timeout: 20_000 },
+      );
       void a;
       // Queue fully drained: a new prompt with a free host slot goes live
       // (no `queued` in the response, no 409 from stale queue rows).

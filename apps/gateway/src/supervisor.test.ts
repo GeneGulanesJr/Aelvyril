@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +25,83 @@ function makeSupervisor(opts: Partial<SupervisorOptions> = {}) {
       const child = spawn(process.execPath, [fakePi]);
       children.push(child);
       return child;
+    },
+    idleMs: 60_000,
+    ...opts,
+  });
+  return { store, bus, supervisor, children };
+}
+
+type FakeChild = Omit<
+  ChildProcess,
+  "stdin" | "stdout" | "stderr" | "kill" | "exitCode" | "signalCode"
+> & {
+  stdin: EventEmitter & { write: (buf: string) => boolean };
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+  kill: (signal?: NodeJS.Signals) => boolean;
+  kills: string[];
+  // ChildProcess types these readonly; the fake drives them on SIGKILL.
+  exitCode: number | null;
+  signalCode: string | null;
+};
+
+/**
+ * A ChildProcess-shaped EventEmitter speaking just enough of the pi
+ * protocol for RpcClient + Supervisor: answers every command success, then
+ * agent_settled for prompts. SIGTERM/SIGKILL are recorded in `kills`;
+ * SIGTERM is IGNORED (the escalation case #77) while SIGKILL emits exit.
+ */
+function fakeRpcChild(): FakeChild {
+  const child = new EventEmitter() as unknown as FakeChild;
+  child.kills = [];
+  // A live child has both null; the supervisor checks !== null to detect
+  // "already exited" — undefined would be misread as dead.
+  child.exitCode = null;
+  child.signalCode = null;
+  const stdin = new EventEmitter() as FakeChild["stdin"];
+  stdin.write = (buf: string) => {
+    const cmd = JSON.parse(buf) as { id?: string; type: string };
+    setImmediate(() => {
+      if (typeof cmd.id === "string") {
+        child.stdout.emit(
+          "data",
+          Buffer.from(
+            JSON.stringify({ id: cmd.id, type: "response", command: cmd.type, success: true }) + "\n",
+          ),
+        );
+      }
+      if (cmd.type === "prompt") {
+        child.stdout.emit("data", Buffer.from(JSON.stringify({ type: "agent_settled" }) + "\n"));
+      }
+    });
+    return true;
+  };
+  child.stdin = stdin;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = (signal: NodeJS.Signals = "SIGTERM") => {
+    child.kills.push(String(signal));
+    if (String(signal) === "SIGKILL") {
+      child.signalCode = "SIGKILL";
+      setImmediate(() => child.emit("exit", null, "SIGKILL"));
+    }
+    return true;
+  };
+  return child;
+}
+
+function makeFakeSupervisor(opts: Partial<SupervisorOptions> = {}) {
+  const store = new Store(":memory:");
+  const bus = new EventBus(store);
+  const children: FakeChild[] = [];
+  const supervisor = new Supervisor({
+    bus,
+    store,
+    spawnChild: () => {
+      const child = fakeRpcChild();
+      children.push(child);
+      return child as unknown as ChildProcess;
     },
     idleMs: 60_000,
     ...opts,
@@ -319,5 +397,64 @@ describe("Supervisor", () => {
     );
     expect(blockedState?.payload).toMatchObject({ state: "blocked", reason: "capped" });
     expect(store.getConversation(conv.id, "platform")?.usage?.cost).toBe(0.0042);
+  });
+
+  // #77: the kill is SIGTERM-first with a timed SIGKILL escalation — the
+  // old unconditional SIGKILL threw away the graceful-drain chance.
+  it("killChild SIGTERMs first and escalates to SIGKILL after the grace (#77)", async () => {
+    const { store, supervisor, children } = makeFakeSupervisor({ killGraceMs: 80 });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    expect(await supervisor.prompt(conv.id, "hi")).toBe(true);
+    const child = children[0]!;
+    supervisor.killChild(conv.id);
+    // First signal is SIGTERM; the fake ignores it (stays alive).
+    expect(child.kills).toEqual(["SIGTERM"]);
+    expect(supervisor.has(conv.id)).toBe(false); // handle forgotten synchronously
+    // The grace expiry lands the SIGKILL and the exit fires.
+    await vi.waitFor(() => expect(child.signalCode).toBe("SIGKILL"));
+    expect(child.kills).toEqual(["SIGTERM", "SIGKILL"]);
+    await vi.waitFor(() => expect(supervisor.runningCount()).toBe(0));
+  });
+
+  // #77 finding 2: the reaper used to delete the handle right after the
+  // SIGTERM — a child ignoring SIGTERM became an unkillable orphan AND the
+  // next prompt spawned a second pi on the same session file.
+  it("reapIdle keeps the handle until exit; the next prompt waits instead of double-spawning (#77)", async () => {
+    const { store, supervisor, children } = makeFakeSupervisor({ idleMs: 30, killGraceMs: 1_000 });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    expect(await supervisor.prompt(conv.id, "hi")).toBe(true);
+    // The reaper ticks every min(idleMs, 5s) = 30ms and SIGTERMs the idle host.
+    await vi.waitFor(() => expect(children[0]!.kills).toContain("SIGTERM"));
+    // The handle stays registered until 'exit' fires (well inside the 1s grace).
+    expect(supervisor.has(conv.id)).toBe(true);
+    // A prompt while the SIGTERMed host is still alive must NOT spawn a
+    // second pi on the same session file — it waits for the dying host.
+    const duringGrace = supervisor.prompt(conv.id, "during grace");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(children).toHaveLength(1);
+    // The SIGKILL escalation (killGraceMs) ends it; the waiting prompt
+    // respawns a fresh host and completes.
+    expect(await duringGrace).toBe(true);
+    expect(children).toHaveLength(2);
+    expect(children[0]!.kills).toEqual(["SIGTERM", "SIGKILL"]);
+    // The respawned fake ignores SIGTERM — dispose it here with a short
+    // grace so afterEach's unawaited disposeAll doesn't park a 5s timer.
+    await supervisor.disposeAll(50);
+  });
+
+  // #77: shutdown used to orphan a child that ignored SIGTERM — disposeAll
+  // now escalates to SIGKILL at the timeout instead of giving up.
+  it("disposeAll escalates to SIGKILL when the shutdown grace expires (#77)", async () => {
+    const { store, supervisor, children } = makeFakeSupervisor({ killGraceMs: 60 });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    await supervisor.prompt(conv.id, "hi");
+    const start = Date.now();
+    await supervisor.disposeAll(60);
+    expect(children[0]!.kills).toEqual(["SIGTERM", "SIGKILL"]);
+    // The wait held until the escalation fired, not an instant return.
+    expect(Date.now() - start).toBeGreaterThanOrEqual(50);
   });
 });

@@ -49,4 +49,16 @@ describe("RpcClient over fake child", () => {
     expect(events.some((e) => e.type === "message_update")).toBe(true);
     child.kill();
   });
+
+  // #77: a prompt in flight while the child dies (e.g. a concurrent
+  // abandon) writes to a dead stdin. Without the constructor's stdin
+  // 'error' listener that surfaces as an UNHANDLED 'error' event and takes
+  // the whole gateway down (authenticated DoS); with it, send() rejects
+  // through the normal timeout/exit path instead.
+  it("a write racing child death rejects instead of crashing the process (#77)", async () => {
+    const child = spawn(process.execPath, ["-e", "process.exit(0)"]);
+    const rpc = new RpcClient(child);
+    await new Promise((resolve) => child.once("exit", resolve));
+    await expect(rpc.send({ type: "prompt", message: "hi" }, 500)).rejects.toThrow();
+  });
 });

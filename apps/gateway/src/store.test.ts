@@ -147,6 +147,45 @@ describe("Store", () => {
     expect(store.getConversation(conv.id, PLATFORM)?.usage).toEqual(next);
   });
 
+  it("manages the durable prompt queue FIFO per namespace (#83)", () => {
+    const store = new Store(":memory:");
+    const a = store.createConversation({ namespace: "user:a" });
+    const b = store.createConversation({ namespace: "user:b" });
+    expect(store.countQueued("user:a")).toBe(0);
+    expect(store.dequeueOldestPrompt("user:a")).toBeNull();
+
+    store.enqueuePrompt({ conversationId: a.id, namespace: "user:a", message: "a1" });
+    store.enqueuePrompt({ conversationId: a.id, namespace: "user:a", message: "a2" });
+    store.enqueuePrompt({ conversationId: b.id, namespace: "user:b", message: "b1" });
+    expect(store.countQueued("user:a")).toBe(2);
+
+    // Fairness order: the namespace with the oldest item comes first.
+    expect(store.listQueuedNamespaces()).toEqual(["user:a", "user:b"]);
+    // FIFO within a namespace; dequeue removes the row.
+    expect(store.dequeueOldestPrompt("user:a")).toEqual({ conversationId: a.id, message: "a1" });
+    expect(store.dequeueOldestPrompt("user:a")).toEqual({ conversationId: a.id, message: "a2" });
+    expect(store.dequeueOldestPrompt("user:a")).toBeNull();
+    expect(store.dequeueOldestPrompt("user:b")).toEqual({ conversationId: b.id, message: "b1" });
+  });
+
+  it("deletes queued work per namespace and sweeps stale streaming rows (#83)", () => {
+    const store = new Store(":memory:");
+    const a = store.createConversation({ namespace: "user:a" });
+    const b = store.createConversation({ namespace: "user:b" });
+    store.enqueuePrompt({ conversationId: a.id, namespace: "user:a", message: "x" });
+    store.enqueuePrompt({ conversationId: b.id, namespace: "user:b", message: "y" });
+    store.deleteQueuedForNamespace("user:a");
+    expect(store.countQueued("user:a")).toBe(0);
+    expect(store.countQueued("user:b")).toBe(1);
+
+    // Boot sweep: a host that died with the process leaves 'streaming' behind.
+    store.setConversationState(a.id, "streaming");
+    store.setConversationState(b.id, "idle");
+    store.markStaleStreamingDegraded();
+    expect(store.getConversation(a.id, "user:a")?.state).toBe("degraded");
+    expect(store.getConversation(b.id, "user:b")?.state).toBe("idle");
+  });
+
   it("adds thread status + spec columns idempotently", () => {
     const dbPath = join(tmpdir(), `aelvyril-store-mig-${randomUUID()}.db`);
     const db = new Database(dbPath);

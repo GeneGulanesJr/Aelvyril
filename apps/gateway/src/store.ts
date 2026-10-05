@@ -83,6 +83,19 @@ export function runMigrations(db: Database.Database): void {
   if (!names.has("usage")) {
     db.exec("ALTER TABLE conversations ADD COLUMN usage TEXT");
   }
+  // #83: durable prompt queue — prompts enqueued when the user is at their
+  // running-host cap; the background runner starts them when a slot frees.
+  // Survives gateway restarts (execution is decoupled from any viewer).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS prompt_queue(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id TEXT NOT NULL,
+      namespace TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_prompt_queue_namespace ON prompt_queue(namespace)");
 }
 
 export class Store {
@@ -271,6 +284,66 @@ export class Store {
    *  total (session resume keeps counting from where it left off). */
   recordUsage(id: string, usage: Usage): void {
     this.db.prepare("UPDATE conversations SET usage = ? WHERE id = ?").run(JSON.stringify(usage), id);
+  }
+
+  /** #83: lifecycle status for a thread, or null if the id/namespace pair
+   *  has no row. */
+  getThreadStatus(id: string, namespace: string): string | null {
+    const row = this.db
+      .prepare("SELECT status FROM conversations WHERE id = ? AND namespace = ?")
+      .get(id, namespace) as { status: string } | undefined;
+    return row?.status ?? null;
+  }
+
+  // --- #83: durable prompt queue -------------------------------------
+
+  enqueuePrompt(input: { conversationId: string; namespace: string; message: string }): void {
+    this.db
+      .prepare(
+        "INSERT INTO prompt_queue(conversation_id, namespace, message, created_at) VALUES(?, ?, ?, ?)",
+      )
+      .run(input.conversationId, input.namespace, input.message, new Date().toISOString());
+  }
+
+  /** Namespaces with queued work, oldest item first — one namespace gets a
+   *  slot per runner pass before a busy one hogs the runner. */
+  listQueuedNamespaces(): string[] {
+    return (
+      this.db
+        .prepare("SELECT namespace FROM prompt_queue GROUP BY namespace ORDER BY MIN(id) ASC")
+        .all() as Array<{ namespace: string }>
+    ).map((r) => r.namespace);
+  }
+
+  /** Pop the oldest queued prompt for a namespace (transactional read+delete).
+   *  Returns null when the queue for that namespace is empty. */
+  dequeueOldestPrompt(namespace: string): { conversationId: string; message: string } | null {
+    const txn = this.db.transaction((): { conversationId: string; message: string } | null => {
+      const row = this.db
+        .prepare("SELECT id, conversation_id, message FROM prompt_queue WHERE namespace = ? ORDER BY id ASC LIMIT 1")
+        .get(namespace) as { id: number; conversation_id: string; message: string } | undefined;
+      if (!row) return null;
+      this.db.prepare("DELETE FROM prompt_queue WHERE id = ?").run(row.id);
+      return { conversationId: row.conversation_id, message: row.message };
+    });
+    return txn();
+  }
+
+  countQueued(namespace: string): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n FROM prompt_queue WHERE namespace = ?")
+      .get(namespace) as { n: number };
+    return row.n;
+  }
+
+  deleteQueuedForNamespace(namespace: string): void {
+    this.db.prepare("DELETE FROM prompt_queue WHERE namespace = ?").run(namespace);
+  }
+
+  /** #83: hosts die with the gateway process; rows still marked streaming
+   *  after a restart are stale. Called once at boot. */
+  markStaleStreamingDegraded(): void {
+    this.db.prepare("UPDATE conversations SET state = 'degraded' WHERE state = 'streaming'").run();
   }
 
   /** Spec §10: total conversations for a namespace — used for the cap check. */

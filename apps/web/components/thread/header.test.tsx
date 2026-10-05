@@ -35,6 +35,17 @@ describe("ThreadHeader", () => {
     expect(screen.queryByTestId("thread-usage")).toBeNull();
   });
 
+  it("liveStatus wins over the stale mount-time status (#83)", () => {
+    const { unmount } = render(
+      <ThreadHeader thread={thread} liveStatus="running" onRename={() => {}} onAbandon={() => {}} />,
+    );
+    expect(screen.getByTestId("thread-status").textContent).toBe("running");
+    unmount();
+    // No live status yet → the mount-time snapshot.
+    render(<ThreadHeader thread={thread} liveStatus={null} onRename={() => {}} onAbandon={() => {}} />);
+    expect(screen.getByTestId("thread-status").textContent).toBe("spec'ing");
+  });
+
   it("falls back to untitled when title is null", () => {
     render(<ThreadHeader thread={{ ...thread, title: null }} onRename={() => {}} onAbandon={() => {}} />);
     expect(screen.getByTestId("thread-title").textContent).toBe("untitled");

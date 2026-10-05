@@ -82,7 +82,10 @@ export const SpecDraft = z.object({
 });
 export type SpecDraft = z.infer<typeof SpecDraft>;
 
-export const ThreadStatus = z.enum(["draft", "spec'ing", "running", "reviewed", "merged", "abandoned"]);
+// #83: "queued" = the prompt is durably queued, waiting for a running-host
+// slot (long-horizon execution — threads are cheap rows, hosts are the
+// scarce resource).
+export const ThreadStatus = z.enum(["draft", "spec'ing", "running", "reviewed", "merged", "abandoned", "queued"]);
 export type ThreadStatus = z.infer<typeof ThreadStatus>;
 
 /** #84: cumulative per-thread usage (pi SessionStats subset). */

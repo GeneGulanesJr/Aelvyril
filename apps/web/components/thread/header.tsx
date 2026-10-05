@@ -1,9 +1,12 @@
 "use client";
 import { useState } from "react";
-import type { Thread, Usage } from "@aelvyril/shared";
+import type { Thread, ThreadStatus, Usage } from "@aelvyril/shared";
 
-export function ThreadHeader({ thread, usage, onRename, onAbandon, onDelete }: {
+export function ThreadHeader({ thread, liveStatus, usage, onRename, onAbandon, onDelete }: {
   thread: Thread;
+  /** #83: live status from the SSE stream — wins over the stale
+   *  mount-time snapshot so queued→running transitions are visible. */
+  liveStatus?: ThreadStatus | null;
   /** #84: cumulative cost/token usage (live from the SSE usage envelope). */
   usage?: Usage | null;
   onRename: (title: string) => void;
@@ -37,7 +40,7 @@ export function ThreadHeader({ thread, usage, onRename, onAbandon, onDelete }: {
       ) : (
         <h1 className="font-semibold" data-testid="thread-title">{thread.title ?? "untitled"}</h1>
       )}
-      <span data-testid="thread-status" className="rounded bg-[#21262d] px-2 py-0.5 text-xs">{thread.status}</span>
+      <span data-testid="thread-status" className="rounded bg-[#21262d] px-2 py-0.5 text-xs">{liveStatus ?? thread.status}</span>
       {usage && (
         <span data-testid="thread-usage" className="rounded bg-[#21262d] px-2 py-0.5 text-xs text-[#8b96a8]">
           ${usage.cost.toFixed(4)} · {usage.tokens.total.toLocaleString()} tok

@@ -35,8 +35,17 @@ export interface AppOptions {
   workspaceAllowlist?: WorkspaceAllowlist;
   /** Optional rate-limiter override for tests. Defaults to 20 req/min/user. */
   rateLimiter?: RateLimiter;
-  /** Max total conversations per user (spec §10). Default 3. */
+  /** Max total conversations per user (spec §10). #83 raised the default
+   *  from 3 to 30: threads are cheap rows; the running-host cap below is
+   *  the real resource limit. */
   maxConversationsPerUser?: number;
+  /** #83: max concurrent running session hosts per user. Prompts beyond
+   *  this are durably queued. Default 2. */
+  maxRunningHostsPerUser?: number;
+  /** #83: global ceiling on live session hosts across all users. Default 100. */
+  maxSessionHosts?: number;
+  /** #83: queue-runner tick interval in ms. Default 2_000 (tests shrink it). */
+  queueIntervalMs?: number;
   /** Optional metrics override for tests. Defaults to a fresh in-memory registry. */
   metrics?: Metrics;
   /** Optional logger override for tests. Defaults to silent (logger: false). */
@@ -99,6 +108,10 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   const store = new Store(opts.dbPath, {
     eventRetentionPerThread: opts.eventRetentionPerThread,
   });
+  // #83: hosts die with the gateway process; rows still marked streaming
+  // after a restart are stale. Queued prompts are durable and picked up
+  // by the runner below, so recovery after a restart is automatic.
+  store.markStaleStreamingDegraded();
   const bus = new EventBus(store);
   // Spec §10: default-deny workspace allowlist. Override via opts in tests.
   const workspaceAllowlist = opts.workspaceAllowlist ?? createWorkspaceAllowlist(process.env.GATEWAY_WORKSPACE_ALLOWLIST);
@@ -108,7 +121,11 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     capacity: 20,
     refillPerSecond: 20 / 60,
   });
-  const maxConversationsPerUser = opts.maxConversationsPerUser ?? 3;
+  // #83: the running-host cap is the real resource limit; the thread count
+  // is not (rows are cheap). Defaults per the long-horizon execution issue.
+  const maxConversationsPerUser = opts.maxConversationsPerUser ?? 30;
+  const maxRunningHostsPerUser = opts.maxRunningHostsPerUser ?? 2;
+  const maxSessionHosts = opts.maxSessionHosts ?? 100;
   // Security review #85: cap concurrent SSE streams per user (each holds a
   // bus listener + a heartbeat timer). Keyed by userId, counted on connect.
   const maxSseStreamsPerUser = opts.maxSseStreamsPerUser ?? 10;
@@ -366,6 +383,41 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       });
     }
     const body = PromptBody.parse(req.body ?? {});
+    // Auto-title from the first prompt — the picker shows words, not uuids.
+    if (conv.title === null) store.renameConversation(id, namespace, body.message.slice(0, 80));
+
+    // #83: long-horizon execution. Steers target a live run and pass
+    // through; a fresh prompt when the user is at their running-host cap
+    // (or the global ceiling is hit) is durably queued instead — execution
+    // is decoupled from any viewer.
+    if (!body.streamingBehavior) {
+      if (store.getThreadStatus(id, namespace) === "queued") {
+        return reply.code(409).send({ error: "already_queued" });
+      }
+      const atUserCap = store.countStreaming(namespace) >= maxRunningHostsPerUser;
+      const atGlobalCap = supervisor.runningCount() >= maxSessionHosts;
+      if (atUserCap || atGlobalCap) {
+        store.enqueuePrompt({ conversationId: id, namespace, message: body.message });
+        store.updateThreadStatus(id, namespace, "queued");
+        bus.publish({
+          conversationId: id,
+          ts: new Date().toISOString(),
+          kind: "spec_status",
+          payload: { status: "queued" },
+        });
+        // Persist the user's prompt so SSE replay reconstructs the
+        // conversation even before the queued turn starts.
+        bus.publish({
+          conversationId: id,
+          ts: new Date().toISOString(),
+          kind: "user_message",
+          payload: { text: body.message },
+        });
+        metrics.queuedPromptsTotal.inc();
+        return reply.code(202).send({ accepted: true, queued: true });
+      }
+    }
+
     // Spec §6/§10: workspace -> spawn cwd so pi finds its prior session file
     // on disk after a crash + re-prompt (session resume).
     const ok = await supervisor.prompt(
@@ -380,8 +432,6 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       return reply.code(502).send({ error: "agent_rejected" });
     }
     metrics.promptRequestsTotal.inc();
-    // Auto-title from the first prompt — the picker shows words, not uuids.
-    if (conv.title === null) store.renameConversation(id, namespace, body.message.slice(0, 80));
     // Persist the user's prompt as an envelope so SSE replay reconstructs the
     // full conversation (assistant-only history was the "my chats are gone" bug).
     bus.publish({
@@ -477,15 +527,18 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     return { ok: true };
   });
 
-  // #84: global kill switch — abandon is per-thread only today; this takes
-  // down every live thread for the calling user in one shot.
+  // #83: global kill switch — abandon is per-thread only today; this takes
+  // down every live thread for the calling user in one shot, and drops
+  // their queued work too.
   app.post("/v1/threads/kill-all", async (req, reply) => {
     const userId = await user(req, reply);
     if (!userId) return;
     const namespace = toUserNamespace(userId);
     let abandoned = 0;
     for (const conv of store.listConversations(namespace)) {
-      if (conv.state !== "streaming" && conv.state !== "blocked") continue;
+      const status = store.getThreadStatus(conv.id, namespace);
+      const live = conv.state === "streaming" || conv.state === "blocked";
+      if (!live && status !== "queued") continue;
       supervisor.killChild(conv.id);
       store.updateThreadStatus(conv.id, namespace, "abandoned");
       store.setConversationState(conv.id, "idle");
@@ -497,6 +550,7 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       });
       abandoned++;
     }
+    store.deleteQueuedForNamespace(namespace);
     return { abandoned };
   });
 
@@ -615,10 +669,68 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     reply.raw.on("error", cleanup);
   });
 
+  // #83: background queue runner. Pops durably queued prompts (FIFO per
+  // namespace, fair across namespaces) whenever the user has a free
+  // running-host slot. Execution is fully decoupled from any viewer: the
+  // queue survives restarts and hosts spawn on demand via the supervisor.
+  const queueTimer = setInterval(() => {
+    try {
+      for (const ns of store.listQueuedNamespaces()) {
+        while (store.countStreaming(ns) < maxRunningHostsPerUser && supervisor.runningCount() < maxSessionHosts) {
+          const item = store.dequeueOldestPrompt(ns);
+          if (!item) break;
+          const queued = store.getConversation(item.conversationId, ns);
+          if (!queued) continue; // thread deleted while queued
+          store.updateThreadStatus(item.conversationId, ns, "running");
+          bus.publish({
+            conversationId: item.conversationId,
+            ts: new Date().toISOString(),
+            kind: "spec_status",
+            payload: { status: "running" },
+          });
+          void supervisor
+            .prompt(
+              item.conversationId,
+              item.message,
+              undefined,
+              { LAPIS_PROJECT_KEY: ns },
+              queued.workspace ?? undefined,
+            )
+            .then((ok) => {
+              if (ok) {
+                metrics.promptRequestsTotal.inc();
+                return;
+              }
+              metrics.promptRejections.inc();
+              try {
+                store.setConversationState(item.conversationId, "degraded");
+                store.updateThreadStatus(item.conversationId, ns, "reviewed");
+                bus.publish({
+                  conversationId: item.conversationId,
+                  ts: new Date().toISOString(),
+                  kind: "error",
+                  payload: { message: "queued prompt was rejected by the agent" },
+                });
+              } catch {
+                // store closed (shutdown); ignore
+              }
+            })
+            .catch(() => {
+              // prompt rejected at the rpc layer; already handled above
+            });
+        }
+      }
+    } catch {
+      // store closed during shutdown; skip this tick
+    }
+  }, opts.queueIntervalMs ?? 2_000);
+  queueTimer.unref();
+
   app.addHook("onClose", async () => {
     // Graceful shutdown: wait up to 5s for in-flight pi children to exit
     // before closing the store. Without this, a deploy during a turn kills
     // the child mid-prompt and the user sees a partial response.
+    clearInterval(queueTimer);
     await supervisor.disposeAll();
     store.close();
   });

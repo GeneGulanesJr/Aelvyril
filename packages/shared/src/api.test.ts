@@ -101,8 +101,8 @@ describe("SpecDraft", () => {
 });
 
 describe("ThreadStatus", () => {
-  it("accepts all 6 statuses", () => {
-    for (const s of ["draft", "spec'ing", "running", "reviewed", "merged", "abandoned"] as const) {
+  it("accepts all 7 statuses", () => {
+    for (const s of ["draft", "spec'ing", "running", "reviewed", "merged", "abandoned", "queued"] as const) {
       expect(ThreadStatus.parse(s)).toBe(s);
     }
   });

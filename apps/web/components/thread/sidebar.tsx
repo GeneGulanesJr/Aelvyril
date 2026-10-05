@@ -5,6 +5,7 @@ import type { Thread, ThreadStatus } from "@aelvyril/shared";
 const STATUS_COLORS: Record<ThreadStatus, string> = {
   draft: "bg-[#2b3245] text-[#8b96a8]",
   "spec'ing": "bg-[#e3b341]/20 text-[#e3b341]",
+  queued: "bg-[#1f6feb]/10 text-[#8b96a8]",
   running: "bg-[#1f6feb]/20 text-[#1f6feb]",
   reviewed: "bg-[#3fb950]/20 text-[#3fb950]",
   merged: "bg-[#3fb950]/10 text-[#3fb950]/60",

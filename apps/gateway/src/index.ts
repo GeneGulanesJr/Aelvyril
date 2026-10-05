@@ -74,6 +74,13 @@ const app = await buildApp({
   // "blocked" (escalate blocking dialogs to the needs-you state).
   dialogMode:
     process.env.GATEWAY_DIALOG_MODE === "blocked" ? ("blocked" as const) : ("auto-responder" as const),
+  // #83: long-horizon execution caps — cheap threads vs scarce hosts.
+  maxRunningHostsPerUser: process.env.GATEWAY_MAX_RUNNING_HOSTS
+    ? Number(process.env.GATEWAY_MAX_RUNNING_HOSTS)
+    : undefined,
+  maxSessionHosts: process.env.GATEWAY_MAX_SESSION_HOSTS
+    ? Number(process.env.GATEWAY_MAX_SESSION_HOSTS)
+    : undefined,
 });
 
 // Default to dual-stack ("::" accepts IPv4-mapped too) so `localhost` resolves

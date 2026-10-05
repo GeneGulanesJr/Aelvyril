@@ -14,6 +14,7 @@ export interface Metrics {
   workspaceRejectionsTotal: Counter;
   sseStreamsRejectedTotal: Counter;
   costCapRejections: Counter;
+  queuedPromptsTotal: Counter;
   activeSessionHosts: Gauge;
   /** Render the Prometheus text exposition format. */
   render(): string;
@@ -204,6 +205,10 @@ export function createMetrics(): Metrics {
     "aelvyril_cost_cap_rejections_total",
     "Total 403 responses from the per-thread budget cap",
   );
+  const queuedPromptsTotal = makeCounter(
+    "aelvyril_queued_prompts_total",
+    "Total prompts durably queued at the running-host cap",
+  );
   const activeSessionHosts = makeGauge(
     "aelvyril_active_session_hosts",
     "Currently-spawned pi children",
@@ -221,6 +226,7 @@ export function createMetrics(): Metrics {
       renderCounter(workspaceRejectionsTotal),
       renderCounter(sseStreamsRejectedTotal),
       renderCounter(costCapRejections),
+      renderCounter(queuedPromptsTotal),
       renderGauge(activeSessionHosts),
       "",
     ].join("\n");
@@ -237,6 +243,7 @@ export function createMetrics(): Metrics {
     workspaceRejectionsTotal,
     sseStreamsRejectedTotal,
     costCapRejections,
+    queuedPromptsTotal,
     activeSessionHosts,
     render,
   };

@@ -94,6 +94,7 @@ export default function ThreadPage() {
         {activeThread && (
           <ThreadHeader
             thread={activeThread}
+            liveStatus={threadState.status}
             usage={threadState.usage ?? activeThread.usage}
             onRename={(title) => void client.renameConversation(activeThread.id, { title }).then(() => {
               setThreads((ts) => ts.map((t) => (t.id === activeThread.id ? { ...t, title } : t)));

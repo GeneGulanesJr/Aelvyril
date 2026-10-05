@@ -88,4 +88,18 @@ describe("ThreadSidebar", () => {
     render(<ThreadSidebar threads={threads} activeId="t1" onSelect={() => {}} onCreate={() => {}} />);
     expect(screen.queryByTestId("kill-all-button")).toBeNull();
   });
+
+  it("renders the queued status pill (#83)", () => {
+    render(
+      <ThreadSidebar
+        threads={[{ ...threads[0]!, status: "queued" as const }]}
+        activeId="t1"
+        onSelect={() => {}}
+        onCreate={() => {}}
+      />,
+    );
+    const pill = screen.getByTestId("status-pill");
+    expect(pill.textContent).toBe("queued");
+    expect(pill.className).toContain("text-[#8b96a8]");
+  });
 });

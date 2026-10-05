@@ -58,6 +58,11 @@ export class Supervisor {
     return this.handles.has(conversationId);
   }
 
+  /** #83: total live session hosts across all users — global ceiling. */
+  runningCount(): number {
+    return this.handles.size;
+  }
+
   private ensureSession(conversationId: string, extraEnv: Record<string, string>, cwd?: string): Handle {
     const existing = this.handles.get(conversationId);
     if (existing) return existing;

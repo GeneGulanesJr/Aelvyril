@@ -372,9 +372,18 @@ describe("v1 routes", () => {
     expect(second.json()).toEqual({ error: "rate_limited" });
   });
 
-  // Spec §10: per-user concurrent-conversation cap (v1: 3/user).
-  it("caps total conversations per user at 3 (503 + limit field on the 4th)", async () => {
-    app = await makeApp();
+  // Spec §10: per-user concurrent-conversation cap. #83 raised the DEFAULT
+  // to 30 (threads are cheap rows; hosts are the real limit) — this test
+  // pins the mechanism with an explicit low cap.
+  it("caps total conversations per user at the configured limit (503 + limit field)", async () => {
+    app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      maxConversationsPerUser: 3,
+    });
     const u1 = authed(app, "good");
     await u1.post("/v1/threads", { title: "1" });
     await u1.post("/v1/threads", { title: "2" });
@@ -386,6 +395,15 @@ describe("v1 routes", () => {
     const u2 = authed(app, "good2");
     const u2first = await u2.post("/v1/threads", { title: "u2-1" });
     expect(u2first.statusCode).toBe(201);
+  });
+
+  it("defaults the thread cap to 30 (threads are cheap, hosts are not — #83)", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    for (let i = 0; i < 4; i++) {
+      const res = await u1.post("/v1/threads", { title: `t${i}` });
+      expect(res.statusCode).toBe(201);
+    }
   });
 
   // Spec §11: every response carries X-Request-Id. The web client + reverse
@@ -730,5 +748,136 @@ describe("thread lifecycle routes", () => {
       expect(res.statusCode).toBe(404);
     }
     expect(threadStatus(t.id)).toBe("spec'ing");
+  });
+});
+
+describe("durable prompt queue (#83)", () => {
+  let app: App | undefined;
+  afterEach(async () => app && (await app.close()));
+
+  function makeQueueApp(
+    dbPath: string,
+    maxRunningHostsPerUser: number,
+    queueIntervalMs: number,
+  ) {
+    return buildApp({
+      dbPath,
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      maxRunningHostsPerUser,
+      queueIntervalMs,
+    });
+  }
+
+  it("queues prompts at the running-host cap and refuses duplicates", async () => {
+    // Cap 0: every non-steer prompt queues; the long interval keeps the
+    // runner out of this test's assertions.
+    app = await makeQueueApp(":memory:", 0, 3_600_000);
+    const u1 = authed(app, "good");
+    const t1 = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const t2 = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+
+    const p1 = await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "first" });
+    expect(p1.statusCode).toBe(202);
+    expect(p1.json()).toEqual({ accepted: true, queued: true });
+    const p2 = await u1.post(`/v1/threads/${t2.id}/prompt`, { message: "second" });
+    expect(p2.json()).toEqual({ accepted: true, queued: true });
+
+    // A second non-steer prompt on an already-queued thread is a 409.
+    const dup = await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "dup" });
+    expect(dup.statusCode).toBe(409);
+    expect(dup.json()).toEqual({ error: "already_queued" });
+  });
+
+  it("survives a restart: the next process's runner drains the queue", async () => {
+    const dbFile = join(tmpdir(), `aelvyril-queue-${randomUUID()}.db`);
+    try {
+      // Phase 1: enqueue two prompts with the runner effectively stopped.
+      const app1 = await makeQueueApp(dbFile, 0, 3_600_000);
+      const u1 = authed(app1, "good");
+      const t1 = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+      const t2 = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+      await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "one" });
+      await u1.post(`/v1/threads/${t2.id}/prompt`, { message: "two" });
+      await app1.close();
+
+      // Phase 2: a fresh gateway with a free host slot and a fast runner.
+      app = await makeQueueApp(dbFile, 1, 10);
+      const u2 = authed(app, "good");
+      const a = app;
+      // Both threads were ALREADY state "idle" (nothing ran in phase 1), so
+      // poll the status column directly: the runner flips queued → running
+      // when it dequeues, and the settled turn leaves state idle.
+      await vi.waitFor(() => {
+        const db = new Database(dbFile);
+        try {
+          const rows = db
+            .prepare("SELECT id, status, state FROM conversations WHERE id IN (?, ?)")
+            .all(t1.id, t2.id) as Array<{ id: string; status: string; state: string }>;
+          for (const r of rows) {
+            expect(r.status).toBe("running");
+            expect(r.state).toBe("idle");
+          }
+        } finally {
+          db.close();
+        }
+      });
+      void a;
+      // Queue fully drained: a new prompt with a free host slot goes live
+      // (no `queued` in the response, no 409 from stale queue rows).
+      const again = await u2.post(`/v1/threads/${t1.id}/prompt`, { message: "three" });
+      expect(again.statusCode).toBe(202);
+      expect(again.json()).toEqual({ accepted: true });
+    } finally {
+      try {
+        rmSync(dbFile, { force: true });
+      } catch {
+        // Windows can briefly hold the file handle after close
+      }
+    }
+  });
+
+  it("kill-all drops queued work and abandons queued threads", async () => {
+    app = await makeQueueApp(":memory:", 0, 3_600_000);
+    const u1 = authed(app, "good");
+    const t1 = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "queued work" });
+    const kill = await app.inject({
+      method: "POST",
+      url: "/v1/threads/kill-all",
+      headers: { authorization: "Bearer good" },
+    });
+    expect(kill.json()).toEqual({ abandoned: 1 });
+    // The queue was dropped: the thread is no longer "queued" (no 409), and
+    // with the cap still 0 the new prompt queues fresh.
+    const reprompt = await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "again" });
+    expect(reprompt.statusCode).toBe(202);
+    expect(reprompt.json()).toEqual({ accepted: true, queued: true });
+  });
+
+  it("boot sweep marks stale streaming rows degraded after a restart", async () => {
+    const dbFile = join(tmpdir(), `aelvyril-sweep-${randomUUID()}.db`);
+    try {
+      const app1 = await makeQueueApp(dbFile, 2, 3_600_000);
+      const u1 = authed(app1, "good");
+      const t1 = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+      // Simulate a host dying with the process: the row is left 'streaming'.
+      const db = new Database(dbFile);
+      db.prepare("UPDATE conversations SET state = 'streaming' WHERE id = ?").run(t1.id);
+      db.close();
+      await app1.close();
+
+      app = await makeQueueApp(dbFile, 2, 3_600_000);
+      const one = await authed(app, "good").get(`/v1/threads/${t1.id}`);
+      expect((one.json() as { state: string }).state).toBe("degraded");
+    } finally {
+      try {
+        rmSync(dbFile, { force: true });
+      } catch {
+        // Windows can briefly hold the file handle after close
+      }
+    }
   });
 });

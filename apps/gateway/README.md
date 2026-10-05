@@ -11,6 +11,11 @@ metrics, structured pino logs, request-ID correlation, response compression.
 
     GATEWAY_PORT=8787 PI_FAKE=1 pnpm --filter @aelvyril/gateway dev
 
+`PI_FAKE=1` without `CLERK_SECRET_KEY` enables the dev verifier: **any
+bearer token is accepted** (userId = token). The gateway then binds
+`127.0.0.1` by default and refuses to boot on a non-loopback `GATEWAY_HOST`
+(#78). Set `GATEWAY_ADMIN_USER_IDS` to call `/v1/admin/*` (#76).
+
 ## Run (real pi session hosts)
 
     GATEWAY_PORT=8787 PI_COMMAND=pi pnpm --filter @aelvyril/gateway dev
@@ -45,11 +50,12 @@ reverse proxy (`infra/docker/Caddyfile`), not in this app.
 |---|---|---|
 | `CLERK_SECRET_KEY` | _required_ | Real Clerk secret key for `@clerk/backend.verifyToken`. |
 | `GATEWAY_PORT` | `8787` | Listen port (loopback). |
-| `GATEWAY_HOST` | `::` | Listen host. Dual-stack so `localhost` resolves over either ::1 or 127.0.0.1. Set to `127.0.0.1` if IPv6 unavailable. |
+| `GATEWAY_HOST` | `::` (`127.0.0.1` when the PI_FAKE dev verifier is active) | Listen host. Dual-stack so `localhost` resolves over either ::1 or 127.0.0.1. Set to `127.0.0.1` if IPv6 unavailable. #78: fake mode refuses non-loopback hosts. |
 | `GATEWAY_DB` | `./data/gateway.db` | SQLite path (WAL). Conversations + event log. |
 | `GATEWAY_IDLE_MS` | `300000` | Idle reap timeout for session-host child processes. |
 | `GATEWAY_ALLOWED_ORIGIN` | _required_ | Comma-separated CORS allow-list for the web app. |
 | `GATEWAY_WORKSPACE_ALLOWLIST` | empty (default-deny) | Comma-separated ABSOLUTE paths for workspace allowlist. Relative paths and `..` rejected. |
+| `GATEWAY_ADMIN_USER_IDS` | empty (default-deny) | #76: comma-separated Clerk user ids allowed to call `/v1/admin/*` (update status/apply). |
 | `GATEWAY_RATE_LIMIT_PER_MIN` | `20` | Per-user rate limit on `/prompt`. Token-bucket capacity 20, refill 20/60/sec. |
 | `GATEWAY_MAX_CONVERSATIONS_PER_USER` | `3` | Per-user cap on total conversations. |
 | `GATEWAY_LOG` | not "silent" → JSON logs | Set to `silent` to disable structured pino output (dev). |

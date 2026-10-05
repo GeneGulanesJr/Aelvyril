@@ -25,6 +25,10 @@ export interface SupervisorOptions {
    *  "auto-responder" (default) answers them cancelled so headless runs
    *  can't hang (spec §14.3); "blocked" escalates to the blocked state. */
   dialogMode?: "auto-responder" | "blocked";
+  /** #77: grace period between the initial SIGTERM and the SIGKILL
+   *  escalation when stopping a session host. Default 2_000ms (tests
+   *  shrink it). */
+  killGraceMs?: number;
 }
 
 interface Handle {
@@ -84,8 +88,15 @@ export class Supervisor {
       // (abandon → change mind → re-prompt) spawns a live host whose events
       // are not silently dropped (2nd review).
       this.dead.delete(conversationId);
-      if (handle.exiting) return;
+      // #77: only the CURRENT handle's exit mutates map/state. A stale
+      // child's late exit event must not delete a respawned host's handle
+      // or publish a spurious degraded state for a live session.
+      if (this.handles.get(conversationId) !== handle) return;
+      // #77: reapIdle keeps an exiting host registered until THIS event
+      // fires, so the delete happens here for the reap path (killChild
+      // already deleted synchronously — a no-op for that path).
       this.handles.delete(conversationId);
+      if (handle.exiting) return;
       // Best-effort: child may emit exit AFTER disposeAll closes the store
       // (test teardown race, or a real SIGTERM during shutdown). Silently
       // drop the event rather than crash the gateway — spec §10
@@ -114,6 +125,12 @@ export class Supervisor {
     extraEnv?: Record<string, string>,
     cwd?: string,
   ): Promise<boolean> {
+    // #77: an idle-reaped host keeps its handle until its exit fires. Wait
+    // for it so this prompt is not written into a dying child's stdin and
+    // does not double-spawn a second pi on the same session file while the
+    // SIGTERMed original is still alive.
+    const existing = this.handles.get(conversationId);
+    if (existing?.exiting) await this.exitOf(existing);
     // extraEnv + cwd only apply at spawn time; a reused session keeps its env.
     const handle = this.ensureSession(conversationId, extraEnv ?? {}, cwd);
     this.opts.store.setConversationState(conversationId, "streaming");
@@ -127,22 +144,60 @@ export class Supervisor {
 
   async abort(conversationId: string): Promise<boolean> {
     const handle = this.handles.get(conversationId);
-    if (!handle) return false;
+    // An exiting host is already going down; writing to its stdin would
+    // only park this call until the rpc timeout.
+    if (!handle || handle.exiting) return false;
     handle.lastActivity = Date.now();
     const res = await handle.rpc.send({ type: "abort" });
     return res.success;
   }
 
+  /**
+   * #77: resolves once the child has exited (already-dead children resolve
+   * immediately). Bounded by the kill grace + a small margin, so a child
+   * that ignores every signal can't hang a prompt forever.
+   */
+  private exitOf(handle: Handle): Promise<void> {
+    if (handle.child.exitCode !== null || handle.child.signalCode !== null) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, (this.opts.killGraceMs ?? 2_000) + 250);
+      timer.unref();
+      handle.child.once("exit", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * #77: SIGTERM first, escalate to SIGKILL after the kill grace. A pi that
+   * ignores SIGTERM used to stay alive forever (reaper deleted the handle
+   * right after SIGTERM — unkillable orphan) or died instantly (killChild's
+   * unconditional SIGKILL, losing the graceful-drain chance).
+   */
+  private sigtermWithEscalation(handle: Handle): void {
+    handle.child.kill("SIGTERM");
+    const timer = setTimeout(() => {
+      if (handle.child.exitCode === null && handle.child.signalCode === null) {
+        handle.child.kill("SIGKILL");
+      }
+    }, this.opts.killGraceMs ?? 2_000);
+    timer.unref();
+    handle.child.once("exit", () => clearTimeout(timer));
+  }
+
   killChild(conversationId: string): void {
     const handle = this.handles.get(conversationId);
     if (!handle) return;
-    // #85: mark exiting + forget the handle BEFORE the SIGKILL so the async
+    // #85: mark exiting + forget the handle BEFORE the kill so the async
     // exit path doesn't publish a spurious degraded session_state, and add
     // to the dead set so in-flight protocol events are dropped.
     handle.exiting = true;
     this.handles.delete(conversationId);
     this.dead.add(conversationId);
-    handle.child.kill("SIGKILL");
+    this.sigtermWithEscalation(handle);
   }
 
   private onProtocolEvent(conversationId: string, ev: RpcEvent): void {
@@ -317,29 +372,45 @@ export class Supervisor {
 
   private reapIdle(): void {
     const now = Date.now();
-    for (const [id, handle] of this.handles) {
+    for (const handle of this.handles.values()) {
+      // Already being torn down (reap or kill in flight): its SIGKILL
+      // escalation is pending and the exit listener will clean up.
+      if (handle.exiting) continue;
       if (now - handle.lastActivity > this.opts.idleMs) {
         handle.exiting = true;
-        handle.child.kill("SIGTERM");
-        this.handles.delete(id);
+        // #77: keep the handle in the map until 'exit' fires. Deleting it
+        // here used to let the next prompt spawn a SECOND pi on the same
+        // session file while the SIGTERMed original was still alive, and
+        // left the original as an unkillable orphan if it ignored SIGTERM.
+        // sigtermWithEscalation guarantees the exit actually happens.
+        this.sigtermWithEscalation(handle);
       }
     }
   }
 
   /**
-   * Async: SIGTERM every child, wait for each to exit (or 5s timeout),
+   * Async: SIGTERM every child, wait for each to exit (or the timeout),
    * then clear the handle map. Used by Fastify's onClose hook during
    * graceful shutdown so in-flight prompts don't get killed mid-send.
+   * #77: a child that ignores SIGTERM is SIGKILLed at the timeout instead
+   * of being orphaned past shutdown.
    */
   async disposeAll(timeoutMs = 5_000): Promise<void> {
     clearInterval(this.reaper);
     const waits: Promise<void>[] = [];
     for (const [, handle] of this.handles) {
-      handle.exiting = true;
-      handle.child.kill("SIGTERM");
+      if (!handle.exiting) {
+        handle.exiting = true;
+        handle.child.kill("SIGTERM");
+      }
       waits.push(
         new Promise<void>((resolve) => {
-          const timer = setTimeout(() => resolve(), timeoutMs);
+          const timer = setTimeout(() => {
+            if (handle.child.exitCode === null && handle.child.signalCode === null) {
+              handle.child.kill("SIGKILL");
+            }
+            resolve();
+          }, timeoutMs);
           handle.child.once("exit", () => {
             clearTimeout(timer);
             resolve();

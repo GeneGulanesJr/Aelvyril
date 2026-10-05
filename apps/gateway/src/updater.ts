@@ -2,10 +2,9 @@
 // apply them in-place. Designed for the dev / self-hosted case — in
 // production, Docker's restart policy handles container lifecycle.
 //
-// Security note (v1): any signed-in user can trigger an update. There's
-// no admin-role gate yet. For a multi-tenant SaaS, this needs Clerk
-// Organizations + a `admin` role on the user. The endpoint lives under
-// `/v1/admin/` to make the privilege boundary explicit when that lands.
+// Security note (#76): /v1/admin/* is admin-gated in app.ts via the
+// GATEWAY_ADMIN_USER_IDS allowlist (default-deny). This module stays
+// authorization-free — it must only ever be invoked behind that gate.
 
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";

@@ -7,6 +7,17 @@ export interface VerifiedUser {
 export type TokenVerifier = (token: string) => Promise<VerifiedUser | null>;
 
 /**
+ * #78: true for listen hosts reachable only from this machine (localhost,
+ * 127.0.0.0/8, ::1). Anything else — "::" or "0.0.0.0" (all interfaces), a
+ * LAN IP, a hostname — counts as network-exposed. Brackets are stripped so
+ * "[::1]" (URI-style spelling) also matches.
+ */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return h === "localhost" || h === "::1" || h.startsWith("127.");
+}
+
+/**
  * Real Clerk verifier (spec §8). Bearer token on every /v1 call.
  * Requires CLERK_SECRET_KEY in the gateway env.
  *

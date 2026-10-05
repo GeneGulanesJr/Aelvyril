@@ -433,6 +433,15 @@ describe("v1 routes", () => {
     expect(r1.headers["x-request-id"]).toMatch(/^[a-z0-9]{8}$/);
   });
 
+  // #79: the gateway is an internal-only API — nosniff + never framed
+  // (the CSP/frame-ancestors equivalent lives at the Caddy edge).
+  it("sets x-content-type-options and x-frame-options on every response", async () => {
+    app = await makeApp();
+    const res = await app.inject({ method: "GET", url: "/healthz" });
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(res.headers["x-frame-options"]).toBe("DENY");
+  });
+
   it("echoes a sanitized client x-request-id and refuses unsafe ones (#85)", async () => {
     app = await makeApp();
     const safe = await app.inject({

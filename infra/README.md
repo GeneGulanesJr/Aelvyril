@@ -23,7 +23,8 @@ infra/
 Requires Docker + docker compose v2 + sibling repos cloned at `../LaPis`, `../PiSandboxed`, `../LayaMCP`. Operator must pre-seed the sandd auth token file (see comment in compose.yaml).
 
 ```sh
-# Dev profile (port 3000 only — gateway + backing services stay internal)
+# Dev profile: web 3000 + gateway 8787 published LOOPBACK-ONLY (#79);
+# lapis/sandd/layamcp stay internal.
 docker compose -f infra/compose.yaml --profile dev up -d --build
 
 # Tail logs
@@ -33,12 +34,30 @@ docker compose -f infra/compose.yaml logs -f gateway
 ./infra/smoke.sh --down
 ```
 
-The `prod` profile additionally starts Caddy for TLS termination:
+The `prod` profile additionally starts Caddy for TLS termination. The
+browser reaches the gateway **same-origin through Caddy** (`/v1/*` route,
+#79) — set `NEXT_PUBLIC_GATEWAY_URL` to the empty string so the client
+bundle is built for same-origin calls, and add your Clerk Frontend API
+origins so the CSP allows sign-in:
 
 ```sh
 AELVYRIL_DOMAIN=aelvyril.example.com \
+NEXT_PUBLIC_GATEWAY_URL= \
+CSP_CLERK_ORIGINS="https://clerk.acmeinc.com wss://clerk.acmeinc.com" \
   docker compose -f infra/compose.yaml --profile prod up -d --build
 ```
+
+### Network exposure (#79)
+
+- **Public (all interfaces):** only caddy (80/443).
+- **Loopback-only:** web `3000` and gateway `8787` — dev/smoke
+  convenience; plaintext never leaves the host. To drop them entirely,
+  add an override file with `ports: !override []` under both services and
+  start with `-f infra/compose.yaml -f <override>`.
+- **Internal-only:** lapis, layamcp (and sandd via host networking).
+- The gateway is never exposed unauthenticated: `/metrics` is gated by
+  `GATEWAY_METRICS_SECRET`, and everything under `/v1/*` requires a Clerk
+  JWT; in prod those paths are only reachable through the Caddy route.
 
 ## Two upstream patches (already shipped)
 

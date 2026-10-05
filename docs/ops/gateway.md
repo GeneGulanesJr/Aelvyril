@@ -357,6 +357,17 @@ Production deploys route through the Caddy service in `infra/compose.yaml`:
 - Certs + account keys persist in `caddy-data` + `caddy-config` volumes.
 - All other services stay internal on the `aelvyril-net` bridge.
 
+#79: the browser reaches the gateway **same-origin** via Caddy's `/v1/*`
+route (SSE flushed per-write, `flush_interval -1`) — build the web bundle
+with an empty `NEXT_PUBLIC_GATEWAY_URL` for this. The host bindings for
+web/gateway are loopback-only (dev + smoke); never point
+`GATEWAY_BIND_HOST`/`WEB_BIND_HOST` at a public interface. Caddy also
+sets the security headers (CSP with `frame-ancestors 'none'`,
+`X-Frame-Options: DENY`, HSTS, nosniff); the gateway itself answers with
+`x-content-type-options`/`x-frame-options` on every response. Set
+`CSP_CLERK_ORIGINS` to your Clerk Frontend API origins or the CSP will
+block sign-in.
+
 For local dev without a public domain, Caddy falls back to its internal
 CA — browsers will show a cert warning. Override `AELVYRIL_DOMAIN=localhost`
 to use this.

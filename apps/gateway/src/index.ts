@@ -1,9 +1,34 @@
 import { fileURLToPath } from "node:url";
 import { buildApp } from "./app.js";
-import { createClerkVerifier, type TokenVerifier } from "./auth.js";
+import { createClerkVerifier, isLoopbackHost, type TokenVerifier } from "./auth.js";
 
 const port = Number(process.env.GATEWAY_PORT ?? 8787);
 const useFakeChild = process.env.PI_FAKE === "1";
+const configuredHost = process.env.GATEWAY_HOST;
+// The fake verifier is in play only when there is no real Clerk secret AND
+// PI_FAKE=1 (with a secret, PI_FAKE only swaps the pi child for the fixture).
+const fakeVerifier = !process.env.CLERK_SECRET_KEY && useFakeChild;
+
+// #78: the fake verifier accepts ANY bearer token and derives the identity
+// from the token itself — full cross-tenant access for anyone who can
+// reach the socket. That is tolerable on loopback only: refuse to boot it
+// pointed at a non-loopback interface.
+if (fakeVerifier && configuredHost !== undefined && !isLoopbackHost(configuredHost)) {
+  throw new Error(
+    `PI_FAKE=1 enables a dev verifier that accepts any bearer token; ` +
+      `refusing to bind non-loopback GATEWAY_HOST=${configuredHost}. ` +
+      `Set GATEWAY_HOST=127.0.0.1 for dev, or configure CLERK_SECRET_KEY for real auth.`,
+  );
+}
+
+if (fakeVerifier) {
+  // #78: make the dev-only auth mode impossible to miss in the logs.
+  console.warn(
+    "[PI_FAKE] DEV AUTH VERIFIER ACTIVE: any bearer token is accepted and the " +
+      "token itself becomes the userId. Local development ONLY — the gateway is " +
+      "bound to loopback unless you know what you are doing.",
+  );
+}
 
 /**
  * Verifier policy (spec §8): CLERK_SECRET_KEY -> real Clerk verification.
@@ -87,15 +112,22 @@ const app = await buildApp({
   queueIntervalMs: process.env.GATEWAY_QUEUE_INTERVAL_MS
     ? Number(process.env.GATEWAY_QUEUE_INTERVAL_MS)
     : undefined,
+  // #76: who may call /v1/admin/* (update status/apply). Empty/unset = deny all.
+  adminUserIds: process.env.GATEWAY_ADMIN_USER_IDS?.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
 });
 
 // Default to dual-stack ("::" accepts IPv4-mapped too) so `localhost` resolves
 // over either ::1 or 127.0.0.1; fall back to IPv4-only when IPv6 is unavailable.
-// GATEWAY_HOST overrides both.
+// GATEWAY_HOST overrides both. #78: with the fake dev verifier, default to
+// IPv4 loopback instead — an unconfigured dev box must not come up listening
+// on every interface while accepting any bearer token.
+const bindHost = configuredHost ?? (fakeVerifier ? "127.0.0.1" : "::");
 try {
-  await app.listen({ port, host: process.env.GATEWAY_HOST ?? "::" });
+  await app.listen({ port, host: bindHost });
 } catch {
-  await app.listen({ port, host: process.env.GATEWAY_HOST ?? "127.0.0.1" });
+  await app.listen({ port, host: configuredHost ?? "127.0.0.1" });
 }
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {

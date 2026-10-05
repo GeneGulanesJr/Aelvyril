@@ -18,7 +18,7 @@ Requires Node 22+ and pnpm 10. Real Clerk dev keys go in `apps/web/.env.local` +
 
 Open <http://localhost:3000>. If port 3000 is held by something on your host, run `pnpm exec next dev --webpack -p 3001` instead and update `GATEWAY_ALLOWED_ORIGIN` in `apps/gateway/.env` to match.
 
-To fall back to the scripted fake `pi` child (no real LLM calls), set `PI_FAKE=1` in `apps/gateway/.env`.
+To fall back to the scripted fake `pi` child (no real LLM calls), set `PI_FAKE=1` in `apps/gateway/.env`. Without `CLERK_SECRET_KEY` this also enables the dev verifier — any bearer token is accepted — so the gateway then binds `127.0.0.1` by default and refuses to boot on a non-loopback `GATEWAY_HOST` (#78). `/v1/admin/*` (update status/apply) is admin-gated via `GATEWAY_ADMIN_USER_IDS` (#76, default-deny).
 
 ## Checks
 

@@ -74,6 +74,14 @@ app you pasted them from.
 - **Expired session** → Clerk throws → 401. User re-signs in.
 - **`CLERK_SECRET_KEY` missing** → gateway refuses to start (throws on init).
 
+### HTTP 403 `forbidden` on `/v1/admin/*`
+
+#76 default-deny: `GET /v1/admin/update/status` and `POST /v1/admin/update`
+require the calling user id to be listed in `GATEWAY_ADMIN_USER_IDS`
+(comma-separated Clerk user ids). Unset, **nobody** is an admin. The apply
+route restarts the gateway and pulls `origin/main`, so it is never available
+to ordinary signed-in users.
+
 ### HTTP 400 `workspace_not_allowed`
 
 Spec §10 default-deny. The conversation's `workspace` field isn't in
@@ -151,6 +159,7 @@ agent dialog instead of declining it.
 | Variable | Default | Purpose |
 |---|---|---|
 | `GATEWAY_PORT` | 8787 | Listen port |
+| `GATEWAY_HOST` | `::` (dual-stack); `127.0.0.1` in PI_FAKE dev mode | Listen host (#78: the fake verifier refuses non-loopback hosts) |
 | `GATEWAY_DB` | ./data/gateway.db | SQLite path |
 | `GATEWAY_IDLE_MS` | 300000 | Session-host idle reap (inactivity-based) |
 | `GATEWAY_LOG` | (on) | `silent` to disable pino logs |
@@ -159,7 +168,8 @@ agent dialog instead of declining it.
 | `SSE_HEARTBEAT_MS` | 15000 | SSE keepalive interval |
 | `CLERK_SECRET_KEY` | (required) | Real token verification |
 | `CLERK_AUTHORIZED_PARTIES` | (unset) | #85: comma-separated origins to pin the token `azp` claim |
-| `PI_FAKE` | (off) | `1` = dev verifier + fake child |
+| `PI_FAKE` | (off) | `1` = dev verifier + fake child (#78: verifier accepts ANY token; loopback-only, loud banner at boot) |
+| `GATEWAY_ADMIN_USER_IDS` | (deny all) | #76: comma-separated Clerk user ids allowed to call `/v1/admin/*` |
 | `GATEWAY_METRICS_SECRET` | (unset) | #85: when set, `/metrics` requires `Authorization: Bearer <secret>` |
 | `GATEWAY_MAX_SSE_STREAMS` | 10 | #85: per-user concurrent SSE streams |
 | `GATEWAY_SSE_REPLAY_PAGE` | 500 | #85: events per replay page (client resumes via Last-Event-ID) |

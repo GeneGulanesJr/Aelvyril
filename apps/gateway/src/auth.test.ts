@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { buildApp } from "./app.js";
 import type { App } from "./app.js";
-import type { TokenVerifier } from "./auth.js";
+import { isLoopbackHost, type TokenVerifier } from "./auth.js";
 
 const fakePi = fileURLToPath(new URL("../fixtures/fake-pi.mjs", import.meta.url));
 
@@ -125,6 +125,97 @@ describe("auth", () => {
       verifyToken: okVerifier,
     });
     expect((await app.inject({ method: "GET", url: "/metrics" })).statusCode).toBe(200);
+    await app.close();
+  });
+});
+
+describe("isLoopbackHost (#78)", () => {
+  it("accepts loopback spellings only", () => {
+    for (const host of ["localhost", "LOCALHOST", "127.0.0.1", "127.9.9.9", "::1", "[::1]", " ::1 "]) {
+      expect(isLoopbackHost(host)).toBe(true);
+    }
+    // All-interfaces and hostname spellings are network-exposed.
+    for (const host of ["::", "0.0.0.0", "", "192.168.1.10", "gateway.example.com", "[::]", "*"]) {
+      expect(isLoopbackHost(host)).toBe(false);
+    }
+  });
+});
+
+describe("admin route authorization (#76)", () => {
+  const fakeStatus = {
+    currentSha: "a".repeat(40),
+    currentShort: "aaaaaaa",
+    remoteSha: "b".repeat(40),
+    remoteShort: "bbbbbbb",
+    behind: 1,
+    fetchedAt: new Date().toISOString(),
+    repoPath: "/tmp/repo",
+  };
+
+  // Stub flows: the real ones run git + spawn a detached restart script —
+  // never acceptable in tests. The stubs also count calls so the 403 tests
+  // can prove the guard runs BEFORE any update side effect.
+  function makeAdminApp(adminUserIds?: string[]) {
+    const calls = { status: 0, apply: 0 };
+    const built = buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      verifyToken: okVerifier,
+      adminUserIds,
+      updateStatus: async () => {
+        calls.status++;
+        return fakeStatus;
+      },
+      applyUpdate: async () => {
+        calls.apply++;
+        return { started: true, message: "stubbed" };
+      },
+    });
+    return { built, calls };
+  }
+
+  it("401s /v1/admin/* without a bearer token", async () => {
+    const { built } = makeAdminApp(["user_good"]);
+    const app = await built;
+    expect((await app.inject({ method: "GET", url: "/v1/admin/update/status" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "POST", url: "/v1/admin/update" })).statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("403s an authenticated non-admin and never reaches the updater", async () => {
+    const { built, calls } = makeAdminApp(["user_good2"]); // admin is user_test2
+    const app = await built;
+    const status = await authed(app, "good").get("/v1/admin/update/status");
+    expect(status.statusCode).toBe(403);
+    expect(status.json()).toEqual({ error: "forbidden" });
+    const apply = await authed(app, "good").post("/v1/admin/update");
+    expect(apply.statusCode).toBe(403);
+    expect(calls.status).toBe(0);
+    expect(calls.apply).toBe(0);
+    await app.close();
+  });
+
+  it("default-denies when no admin allowlist is configured", async () => {
+    const { built, calls } = makeAdminApp();
+    const app = await built;
+    expect((await authed(app, "good").get("/v1/admin/update/status")).statusCode).toBe(403);
+    expect((await authed(app, "good").post("/v1/admin/update")).statusCode).toBe(403);
+    expect(calls.apply).toBe(0);
+    await app.close();
+  });
+
+  it("admits an allowlisted admin on both routes", async () => {
+    const { built, calls } = makeAdminApp(["user_good"]);
+    const app = await built;
+    const status = await authed(app, "good").get("/v1/admin/update/status");
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toMatchObject({ behind: 1, currentShort: "aaaaaaa" });
+    const apply = await authed(app, "good").post("/v1/admin/update");
+    expect(apply.statusCode).toBe(202);
+    expect(apply.json()).toMatchObject({ started: true });
+    expect(calls.status).toBe(1);
+    expect(calls.apply).toBe(1);
     await app.close();
   });
 });

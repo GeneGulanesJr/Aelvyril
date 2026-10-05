@@ -74,6 +74,14 @@ export interface AppOptions {
   maxCostPerThreadUsd?: number;
   /** #84: pi extension_ui_request handling. Default "auto-responder". */
   dialogMode?: "auto-responder" | "blocked";
+  /** #76: user ids allowed to call /v1/admin/*. Default-deny: with no
+   *  allowlist configured, /v1/admin/* answers 403 for everyone. */
+  adminUserIds?: string[];
+  /** Optional update-flow overrides for tests. Defaults run real git. */
+  updateStatus?: typeof getUpdateStatus;
+  /** Optional update-flow override for tests. Defaults to the real
+   *  applyUpdate (spawns a detached restart script — never run in tests). */
+  applyUpdate?: typeof applyUpdate;
 }
 
 export type App = FastifyInstance;
@@ -156,6 +164,21 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     return user.userId;
   }
 
+  // #76: /v1/admin/* is privileged — the update route restarts the process
+  // and force-executes whatever lands on origin/main, so any authenticated
+  // user (or stolen JWT) must NOT reach it. Allowlist via
+  // GATEWAY_ADMIN_USER_IDS (Clerk Organizations admin wiring can slot in
+  // later); default-deny when nothing is configured.
+  const adminUserIds = new Set(opts.adminUserIds ?? []);
+  async function admin(req: FastifyRequest, reply: FastifyReply): Promise<string | undefined> {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    if (!adminUserIds.has(userId)) {
+      return void reply.code(403).send({ error: "forbidden" });
+    }
+    return userId;
+  }
+
   // CORS before routes so preflight/headers apply to every /v1 handler.
   await app.register(import("@fastify/cors"), {
     origin: opts.allowedOrigins ?? false,
@@ -234,24 +257,24 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     return metrics.render();
   });
 
-  // Spec §11: manual update flow. Self-hosted convenience — any
-  // signed-in user can check for + apply upstream commits. For a multi-
-  // tenant SaaS, gate behind a Clerk Organizations admin role.
+  // Spec §11: manual update flow (#76: admin-gated — see the `admin` guard).
+  // Self-hosted convenience for operators on the allowlist; check for +
+  // apply upstream commits.
   app.get("/v1/admin/update/status", async (req, reply) => {
-    const userId = await user(req, reply);
+    const userId = await admin(req, reply);
     if (!userId) return;
     try {
-      return await getUpdateStatus();
+      return await (opts.updateStatus ?? getUpdateStatus)();
     } catch (err) {
       return reply.code(503).send({ error: "update_status_failed", message: String(err) });
     }
   });
 
   app.post("/v1/admin/update", async (req, reply) => {
-    const userId = await user(req, reply);
+    const userId = await admin(req, reply);
     if (!userId) return;
     try {
-      const result = await applyUpdate();
+      const result = await (opts.applyUpdate ?? applyUpdate)();
       // The applyUpdate subprocess will SIGTERM us in ~2s. Respond first.
       return reply.code(202).send(result);
     } catch (err) {

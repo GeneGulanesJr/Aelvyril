@@ -184,6 +184,16 @@ describe("thread client methods", () => {
     expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe("POST");
     expect((fetchMock.mock.calls[1]![1] as RequestInit).method).toBe("DELETE");
   });
+
+  it("killAllThreads POSTs to the kill-all route (#84)", async () => {
+    const { client } = makeClient();
+    const { fetchMock } = mockFetchSequence([{ ok: true, body: { abandoned: 2 } }]);
+    const out = await client.killAllThreads();
+    expect(out).toEqual({ abandoned: 2 });
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe("http://example.test/v1/threads/kill-all");
+    expect((call[1] as RequestInit).method).toBe("POST");
+  });
 });
 
 describe("openStream (#85)", () => {

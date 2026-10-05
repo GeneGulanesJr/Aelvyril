@@ -112,6 +112,13 @@ export class GatewayClient {
     if (!res.ok) throw new Error(`abandon failed: ${res.status}`);
   }
 
+  /** #84: global kill switch — abandon every live thread for the user. */
+  async killAllThreads(): Promise<{ abandoned: number }> {
+    const res = await fetch(`${this.baseUrl}${ROUTES.threadKillAll}`, await this.authed({ method: "POST" }));
+    if (!res.ok) throw new Error(`kill-all failed: ${res.status}`);
+    return (await res.json()) as { abandoned: number };
+  }
+
   async retryThread(threadId: string): Promise<void> {
     const res = await fetch(`${this.baseUrl}${ROUTES.threadRetry(threadId)}`, await this.authed({ method: "POST" }));
     if (!res.ok) throw new Error(`retry failed: ${res.status}`);

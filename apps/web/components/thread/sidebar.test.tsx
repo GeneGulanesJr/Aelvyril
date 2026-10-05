@@ -66,4 +66,26 @@ describe("ThreadSidebar", () => {
     fireEvent.change(screen.getByTestId("thread-search"), { target: { value: "T1" } });
     expect(screen.getByTestId("thread-t1")).toBeTruthy();
   });
+
+  it("kill all requires a second confirming click (#84)", () => {
+    const onKillAll = vi.fn();
+    render(
+      <ThreadSidebar
+        threads={threads}
+        activeId="t1"
+        onSelect={() => {}}
+        onCreate={() => {}}
+        onKillAll={onKillAll}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("kill-all-button"));
+    expect(onKillAll).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("kill-all-button"));
+    expect(onKillAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("kill all is hidden when the callback is absent (#84)", () => {
+    render(<ThreadSidebar threads={threads} activeId="t1" onSelect={() => {}} onCreate={() => {}} />);
+    expect(screen.queryByTestId("kill-all-button")).toBeNull();
+  });
 });

@@ -477,6 +477,29 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     return { ok: true };
   });
 
+  // #84: global kill switch — abandon is per-thread only today; this takes
+  // down every live thread for the calling user in one shot.
+  app.post("/v1/threads/kill-all", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    const namespace = toUserNamespace(userId);
+    let abandoned = 0;
+    for (const conv of store.listConversations(namespace)) {
+      if (conv.state !== "streaming" && conv.state !== "blocked") continue;
+      supervisor.killChild(conv.id);
+      store.updateThreadStatus(conv.id, namespace, "abandoned");
+      store.setConversationState(conv.id, "idle");
+      bus.publish({
+        conversationId: conv.id,
+        ts: new Date().toISOString(),
+        kind: "spec_status",
+        payload: { status: "abandoned" },
+      });
+      abandoned++;
+    }
+    return { abandoned };
+  });
+
   app.get("/v1/conversations/:id/events", async (req, reply) => {
     const userId = await user(req, reply);
     if (!userId) return;

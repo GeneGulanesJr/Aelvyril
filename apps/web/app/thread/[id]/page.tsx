@@ -67,6 +67,22 @@ export default function ThreadPage() {
         activeId={isNew ? null : id}
         onSelect={(tid) => router.push(`/thread/${tid}`)}
         onCreate={() => router.push("/thread/new")}
+        onKillAll={() =>
+          void client
+            .killAllThreads()
+            .then(({ abandoned }) => {
+              if (abandoned > 0) {
+                setThreads((ts) =>
+                  ts.map((t) =>
+                    t.state === "streaming" || t.state === "blocked"
+                      ? { ...t, status: "abandoned" as const, state: "idle" as const }
+                      : t,
+                  ),
+                );
+              }
+            })
+            .catch((err) => console.error("kill-all failed", err))
+        }
       />
       <main className="flex flex-1 flex-col overflow-hidden">
         <Banners

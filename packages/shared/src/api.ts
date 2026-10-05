@@ -19,6 +19,8 @@ export const ROUTES = {
   threadApprove: (id: string) => `/v1/threads/${id}/approve`,
   threadAbandon: (id: string) => `/v1/threads/${id}/abandon`,
   threadRetry: (id: string) => `/v1/threads/${id}/retry`,
+  // #84: global kill switch — abandon every live/queued thread for the user.
+  threadKillAll: "/v1/threads/kill-all",
 } as const;
 
 export const CreateConversationBody = z.object({

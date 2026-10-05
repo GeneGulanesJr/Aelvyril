@@ -266,6 +266,74 @@ describe("v1 routes", () => {
     expect((second.json() as { cap: number }).cap).toBe(0.001);
   });
 
+  it("POST /v1/threads/kill-all abandons every live thread for the user (#84)", async () => {
+    // File-backed db so the test can read the status column directly (the
+    // conversation DTO predates Thread.status and doesn't expose it).
+    const dbFile = join(tmpdir(), `aelvyril-killall-${randomUUID()}.db`);
+    app = await buildApp({
+      dbPath: dbFile,
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+    });
+    const u1 = authed(app, "good");
+    const live = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const idle = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    await u1.post(`/v1/threads/${live.id}/prompt`, { message: "hi" });
+    const a = app;
+    await vi.waitFor(async () => {
+      const one = await u1.get(`/v1/threads/${live.id}`);
+      expect((one.json() as { state: string }).state).toBe("idle");
+    });
+
+    const res = await a.inject({
+      method: "POST",
+      url: "/v1/threads/kill-all",
+      headers: { authorization: "Bearer good" },
+    });
+    // The thread already settled (state idle) — the kill switch only takes
+    // down threads that are live (streaming/blocked). Nothing to do here.
+    expect(res.json()).toEqual({ abandoned: 0 });
+
+    // Make it live again, then pull the switch.
+    await u1.post(`/v1/threads/${live.id}/prompt`, { message: "hi again" });
+    await vi.waitFor(async () => {
+      const m = await a.inject({ method: "GET", url: "/metrics" });
+      expect(m.body).toContain("aelvyril_active_session_hosts 1");
+    });
+    const kill = await a.inject({
+      method: "POST",
+      url: "/v1/threads/kill-all",
+      headers: { authorization: "Bearer good" },
+    });
+    expect(kill.json()).toEqual({ abandoned: 1 });
+    const db = new Database(dbFile);
+    try {
+      expect(
+        (db.prepare("SELECT status, state FROM conversations WHERE id = ?").get(live.id) as { status: string; state: string }),
+      ).toEqual({ status: "abandoned", state: "idle" });
+      expect(
+        (db.prepare("SELECT status FROM conversations WHERE id = ?").get(idle.id) as { status: string }).status,
+      ).toBe("draft");
+    } finally {
+      db.close();
+    }
+    // Host killed: gauge drains to zero.
+    await vi.waitFor(async () => {
+      const m = await a.inject({ method: "GET", url: "/metrics" });
+      expect(m.body).toContain("aelvyril_active_session_hosts 0");
+    });
+    // Unauthenticated callers can't pull it.
+    const bare = await a.inject({ method: "POST", url: "/v1/threads/kill-all" });
+    expect(bare.statusCode).toBe(401);
+    try {
+      rmSync(dbFile, { force: true });
+    } catch {
+      // Windows can briefly hold the file handle after close
+    }
+  });
+
   // Spec §10: per-user rate limit on /v1/threads/:id/prompt.
   // Uses a deterministic 1-token-capacity limiter with no refill — the
   // second prompt from the same user in the same test must trip it.

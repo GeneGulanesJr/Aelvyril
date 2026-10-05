@@ -21,6 +21,8 @@ export const EnvelopeKind = z.enum([
   // desyncs SSE framing). They arrive as kind "custom" with the original
   // event type constrained into the payload.
   "custom",
+  // #84: per-thread cost/token accounting.
+  "usage",
 ]);
 export type EnvelopeKind = z.infer<typeof EnvelopeKind>;
 
@@ -74,6 +76,18 @@ const payloadSchemas = {
     type: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
     data: z.unknown(),
   }),
+  // #84: per-thread cost/token accounting, harvested from the session
+  // host's get_session_stats (cumulative per session file).
+  usage: z.object({
+    tokens: z.object({
+      input: z.number().int().nonnegative(),
+      output: z.number().int().nonnegative(),
+      cacheRead: z.number().int().nonnegative(),
+      cacheWrite: z.number().int().nonnegative(),
+      total: z.number().int().nonnegative(),
+    }),
+    cost: z.number().nonnegative(),
+  }),
 } as const;
 
 const envelopeShape = z.object({
@@ -99,5 +113,6 @@ export const EventEnvelope = z.discriminatedUnion("kind", [
   envelopeShape.extend({ kind: z.literal("spec_status"), payload: payloadSchemas.spec_status }),
   envelopeShape.extend({ kind: z.literal("diff"), payload: payloadSchemas.diff }),
   envelopeShape.extend({ kind: z.literal("custom"), payload: payloadSchemas.custom }),
+  envelopeShape.extend({ kind: z.literal("usage"), payload: payloadSchemas.usage }),
 ]);
 export type EventEnvelope = z.infer<typeof EventEnvelope>;

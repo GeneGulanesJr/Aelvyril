@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import type { Conversation, SpecDraft } from "@aelvyril/shared";
+import type { Conversation, SpecDraft, Usage } from "@aelvyril/shared";
 
 interface ConvRow {
   id: string;
@@ -9,6 +9,7 @@ interface ConvRow {
   namespace: string;
   state: string;
   created_at: string;
+  usage: string | null;
 }
 
 export interface NewEvent {
@@ -78,6 +79,10 @@ export function runMigrations(db: Database.Database): void {
   if (!names.has("spec_answers")) {
     db.exec("ALTER TABLE conversations ADD COLUMN spec_answers TEXT");
   }
+  // #84: cumulative cost/token usage per thread (JSON blob).
+  if (!names.has("usage")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN usage TEXT");
+  }
 }
 
 export class Store {
@@ -132,7 +137,7 @@ export class Store {
       )
       .run(id, input.title ?? null, input.workspace ?? null, input.namespace, createdAt);
     // namespace is internal routing, not exposed on the public DTO.
-    return { id, title: input.title ?? null, workspace: input.workspace ?? null, state: "idle", createdAt };
+    return { id, title: input.title ?? null, workspace: input.workspace ?? null, state: "idle", createdAt, usage: null };
   }
 
   renameConversation(id: string, namespace: string, title: string): void {
@@ -261,6 +266,13 @@ export class Store {
     this.db.prepare("UPDATE conversations SET state = ? WHERE id = ?").run(state, id);
   }
 
+  /** #84: persist the latest cumulative session usage. pi's SessionStats
+   *  are cumulative per session file, so "latest observed" IS the thread
+   *  total (session resume keeps counting from where it left off). */
+  recordUsage(id: string, usage: Usage): void {
+    this.db.prepare("UPDATE conversations SET usage = ? WHERE id = ?").run(JSON.stringify(usage), id);
+  }
+
   /** Spec §10: total conversations for a namespace — used for the cap check. */
   countConversations(namespace: string): number {
     const row = this.db
@@ -319,6 +331,7 @@ export class Store {
       workspace: r.workspace,
       state: r.state as Conversation["state"],
       createdAt: r.created_at,
+      usage: r.usage ? (JSON.parse(r.usage) as Usage) : null,
     };
   }
 }

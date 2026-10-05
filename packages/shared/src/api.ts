@@ -80,6 +80,19 @@ export type SpecDraft = z.infer<typeof SpecDraft>;
 export const ThreadStatus = z.enum(["draft", "spec'ing", "running", "reviewed", "merged", "abandoned"]);
 export type ThreadStatus = z.infer<typeof ThreadStatus>;
 
+/** #84: cumulative per-thread usage (pi SessionStats subset). */
+export const Usage = z.object({
+  tokens: z.object({
+    input: z.number().int().nonnegative(),
+    output: z.number().int().nonnegative(),
+    cacheRead: z.number().int().nonnegative(),
+    cacheWrite: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+  }),
+  cost: z.number().nonnegative(),
+});
+export type Usage = z.infer<typeof Usage>;
+
 /** Body for PATCH /v1/threads/:id/spec. Security review #85: the answers
  *  record and draft value are size-capped so the stored spec blobs (and the
  *  merged accumulation) can't grow without bound. */
@@ -107,6 +120,9 @@ export const Conversation = z.object({
   workspace: z.string().nullable(),
   state: ConversationState,
   createdAt: z.string().datetime({ offset: true }),
+  // #84: latest cumulative session usage (cost/token accounting). Null
+  // until the first get_session_stats harvest lands.
+  usage: Usage.nullish(),
 });
 export type Conversation = z.infer<typeof Conversation>;
 

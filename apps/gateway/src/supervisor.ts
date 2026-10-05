@@ -185,6 +185,7 @@ export class Supervisor {
     if (ev.type === "agent_settled") {
       this.opts.store.setConversationState(conversationId, "idle");
       this.publish(conversationId, { kind: "session_state", payload: { state: "idle" } });
+      if (handle) void this.harvestUsage(conversationId, handle);
       return;
     }
     if (ev.type === "extension_error") {
@@ -205,6 +206,36 @@ export class Supervisor {
       kind: part.kind,
       payload: part.payload,
     } as Parameters<EventBus["publish"]>[0]);
+  }
+
+  /**
+   * #84: per-thread cost/token accounting. pi's get_session_stats returns
+   * cumulative SessionStats for the session file, so the latest observation
+   * IS the thread total (a respawned host resumes the same session).
+   * Fire-and-forget: a stats failure never affects the turn itself.
+   */
+  private async harvestUsage(conversationId: string, handle: Handle): Promise<void> {
+    try {
+      const res = await handle.rpc.send({ type: "get_session_stats" });
+      if (!res.success || !res.data) return;
+      const stats = res.data as { tokens?: Record<string, unknown>; cost?: unknown };
+      if (!stats.tokens) return;
+      const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0);
+      const usage = {
+        tokens: {
+          input: num(stats.tokens.input),
+          output: num(stats.tokens.output),
+          cacheRead: num(stats.tokens.cacheRead),
+          cacheWrite: num(stats.tokens.cacheWrite),
+          total: num(stats.tokens.total),
+        },
+        cost: num(stats.cost),
+      };
+      this.publish(conversationId, { kind: "usage", payload: usage });
+      this.opts.store.recordUsage(conversationId, usage);
+    } catch {
+      // rpc closed (host exiting mid-harvest); ignore
+    }
   }
 
   private reapIdle(): void {

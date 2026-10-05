@@ -74,6 +74,7 @@ describe("EventEnvelope", () => {
       "spec_status",
       "diff",
       "custom",
+      "usage",
     ]);
   });
 
@@ -95,6 +96,34 @@ describe("EventEnvelope", () => {
         ...base,
         kind: "custom",
         payload: { type: "evil\nX", data: {} },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts a usage envelope (#84)", () => {
+    const parsed = EventEnvelope.parse({
+      ...base,
+      kind: "usage",
+      payload: {
+        tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 },
+        cost: 0.0042,
+      },
+    });
+    expect(parsed.payload).toEqual({
+      tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 },
+      cost: 0.0042,
+    });
+  });
+
+  it("rejects a usage envelope with negative tokens (#84)", () => {
+    expect(
+      EventEnvelope.safeParse({
+        ...base,
+        kind: "usage",
+        payload: {
+          tokens: { input: -1, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          cost: 0,
+        },
       }).success,
     ).toBe(false);
   });

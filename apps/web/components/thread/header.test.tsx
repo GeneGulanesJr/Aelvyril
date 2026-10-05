@@ -24,6 +24,17 @@ describe("ThreadHeader", () => {
     expect(screen.getByTestId("thread-status").textContent).toBe("spec'ing");
   });
 
+  it("renders the usage pill when usage exists, nothing when null (#84)", () => {
+    const usage = { tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 }, cost: 0.0042 };
+    const { unmount } = render(
+      <ThreadHeader thread={thread} usage={usage} onRename={() => {}} onAbandon={() => {}} />,
+    );
+    expect(screen.getByTestId("thread-usage").textContent).toBe("$0.0042 · 165 tok");
+    unmount();
+    render(<ThreadHeader thread={thread} usage={null} onRename={() => {}} onAbandon={() => {}} />);
+    expect(screen.queryByTestId("thread-usage")).toBeNull();
+  });
+
   it("falls back to untitled when title is null", () => {
     render(<ThreadHeader thread={{ ...thread, title: null }} onRename={() => {}} onAbandon={() => {}} />);
     expect(screen.getByTestId("thread-title").textContent).toBe("untitled");

@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GatewayClient } from "./api.js";
-import type { EventEnvelope, SpecDraft, SpecQuestion, ThreadStatus } from "@aelvyril/shared";
+import type { EventEnvelope, SpecDraft, SpecQuestion, ThreadStatus, Usage } from "@aelvyril/shared";
 
 export interface ThreadState {
   status: ThreadStatus;
@@ -15,6 +15,8 @@ export interface ThreadState {
   degraded: boolean;
   /** A prompt is in flight (drives the Stop button + steer-queued sends). */
   waiting: boolean;
+  /** #84: cumulative cost/token usage for this thread (live via SSE). */
+  usage: Usage | null;
 }
 
 export interface UseThreadDeps {
@@ -47,6 +49,7 @@ export function useThread(
     error: null,
     degraded: false,
     waiting: false,
+    usage: null,
   });
   const clientRef = useRef<GatewayClient | null>(null);
 
@@ -153,6 +156,9 @@ function applyEnvelope(s: ThreadState, e: EventEnvelope): ThreadState {
       return { ...s, diff: e.payload.files };
     case "error":
       return { ...s, error: e.payload.message };
+    case "usage":
+      // #84: cumulative cost/token accounting, harvested at turn settle.
+      return { ...s, usage: e.payload };
     case "session_state":
       // Spec §10: degraded means the host died mid-turn; the next prompt
       // respawns it. streaming/idle drive the waiting flag for Stop + steer.

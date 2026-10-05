@@ -187,4 +187,22 @@ describe("useThread", () => {
     });
     expect(result.current.error).toBeNull();
   });
+
+  it("usage envelopes accumulate the cost/token signal (#84)", async () => {
+    const { result, inst } = await renderThread();
+    expect(result.current.usage).toBeNull();
+    await act(async () => {
+      inst.onEnvelope!(
+        env(
+          "usage",
+          { tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 }, cost: 0.0042 },
+          0,
+        ),
+      );
+    });
+    expect(result.current.usage).toEqual({
+      tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 },
+      cost: 0.0042,
+    });
+  });
 });

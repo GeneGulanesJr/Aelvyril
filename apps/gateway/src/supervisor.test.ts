@@ -77,6 +77,20 @@ describe("Supervisor", () => {
       .map((e) => (e.payload as { delta: string }).delta)
       .join("");
     expect(deltas).toBe("Hello, world!");
+    // #84: usage is harvested at settle (fake-pi's get_session_stats) and
+    // lands both on the bus and in the store.
+    await vi.waitFor(() => {
+      expect(seen.some((e) => e.kind === "usage")).toBe(true);
+    });
+    const usageEnv = seen.find((e) => e.kind === "usage")!;
+    expect(usageEnv.payload).toEqual({
+      tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 },
+      cost: 0.0042,
+    });
+    expect(store.getConversation(conv.id, "platform")?.usage).toEqual({
+      tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 },
+      cost: 0.0042,
+    });
   });
 
   it("marks degraded when the child dies, then recovers on next prompt", async () => {

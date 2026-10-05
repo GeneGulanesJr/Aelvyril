@@ -13,6 +13,26 @@ function send(obj) {
 for await (const line of rl) {
   if (!line.trim()) continue;
   const cmd = JSON.parse(line);
+  // #84: usage accounting harvest — respond with fixed cumulative stats.
+  if (cmd.type === "get_session_stats") {
+    send({
+      id: cmd.id,
+      type: "response",
+      command: cmd.type,
+      success: true,
+      data: {
+        sessionId: "fake-session",
+        userMessages: 1,
+        assistantMessages: 1,
+        toolCalls: 1,
+        toolResults: 1,
+        totalMessages: 2,
+        tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 },
+        cost: 0.0042,
+      },
+    });
+    continue;
+  }
   send({ id: cmd.id, type: "response", command: cmd.type, success: true });
   if (cmd.type === "prompt") {
     // Probe: echoes the gateway-injected env back over the protocol so tests

@@ -131,6 +131,22 @@ describe("Store", () => {
     expect(store.getConversation(conv.id, PLATFORM)?.state).toBe("streaming");
   });
 
+  it("records and returns cumulative usage (#84)", () => {
+    const store = new Store(":memory:");
+    const conv = store.createConversation({ namespace: PLATFORM });
+    expect(store.getConversation(conv.id, PLATFORM)?.usage ?? null).toBeNull();
+    const usage = {
+      tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 },
+      cost: 0.0042,
+    };
+    store.recordUsage(conv.id, usage);
+    expect(store.getConversation(conv.id, PLATFORM)?.usage).toEqual(usage);
+    // Latest observation replaces the previous one (cumulative session stats).
+    const next = { ...usage, cost: 0.01 };
+    store.recordUsage(conv.id, next);
+    expect(store.getConversation(conv.id, PLATFORM)?.usage).toEqual(next);
+  });
+
   it("adds thread status + spec columns idempotently", () => {
     const dbPath = join(tmpdir(), `aelvyril-store-mig-${randomUUID()}.db`);
     const db = new Database(dbPath);

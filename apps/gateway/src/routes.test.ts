@@ -270,67 +270,80 @@ describe("v1 routes", () => {
     // File-backed db so the test can read the status column directly (the
     // conversation DTO predates Thread.status and doesn't expose it).
     const dbFile = join(tmpdir(), `aelvyril-killall-${randomUUID()}.db`);
-    app = await buildApp({
-      dbPath: dbFile,
-      childCommand: process.execPath,
-      childArgs: [fakePi],
-      idleMs: 60_000,
-      verifyToken: testVerifier,
-    });
-    const u1 = authed(app, "good");
-    const live = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
-    const idle = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
-    await u1.post(`/v1/threads/${live.id}/prompt`, { message: "hi" });
-    const a = app;
-    await vi.waitFor(async () => {
-      const one = await u1.get(`/v1/threads/${live.id}`);
-      expect((one.json() as { state: string }).state).toBe("idle");
-    });
-
-    const res = await a.inject({
-      method: "POST",
-      url: "/v1/threads/kill-all",
-      headers: { authorization: "Bearer good" },
-    });
-    // The thread already settled (state idle) — the kill switch only takes
-    // down threads that are live (streaming/blocked). Nothing to do here.
-    expect(res.json()).toEqual({ abandoned: 0 });
-
-    // Make it live again, then pull the switch.
-    await u1.post(`/v1/threads/${live.id}/prompt`, { message: "hi again" });
-    await vi.waitFor(async () => {
-      const m = await a.inject({ method: "GET", url: "/metrics" });
-      expect(m.body).toContain("aelvyril_active_session_hosts 1");
-    });
-    const kill = await a.inject({
-      method: "POST",
-      url: "/v1/threads/kill-all",
-      headers: { authorization: "Bearer good" },
-    });
-    expect(kill.json()).toEqual({ abandoned: 1 });
-    const db = new Database(dbFile);
+    // Slow the fake child's deltas so a prompted turn is mid-stream (not
+    // yet settled) when the switch is pulled — no timing race.
+    process.env.FAKE_DELAY_MS = "300";
     try {
-      expect(
-        (db.prepare("SELECT status, state FROM conversations WHERE id = ?").get(live.id) as { status: string; state: string }),
-      ).toEqual({ status: "abandoned", state: "idle" });
-      expect(
-        (db.prepare("SELECT status FROM conversations WHERE id = ?").get(idle.id) as { status: string }).status,
-      ).toBe("draft");
+      app = await buildApp({
+        dbPath: dbFile,
+        childCommand: process.execPath,
+        childArgs: [fakePi],
+        idleMs: 60_000,
+        verifyToken: testVerifier,
+      });
+      const u1 = authed(app, "good");
+      const live = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+      const idle = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+      await u1.post(`/v1/threads/${live.id}/prompt`, { message: "hi" });
+      const a = app;
+      // The slowed fake turn takes ~1.3s (FAKE_DELAY_MS) — past the 1s
+      // vi.waitFor default, so give it an explicit bound.
+      await vi.waitFor(
+        async () => {
+          const one = await u1.get(`/v1/threads/${live.id}`);
+          expect((one.json() as { state: string }).state).toBe("idle");
+        },
+        { timeout: 10_000 },
+      );
+
+      const res = await a.inject({
+        method: "POST",
+        url: "/v1/threads/kill-all",
+        headers: { authorization: "Bearer good" },
+      });
+      // The thread already settled (state idle) — the kill switch only takes
+      // down threads that are live (streaming/blocked). Nothing to do here.
+      expect(res.json()).toEqual({ abandoned: 0 });
+
+      // Make it live again, then pull the switch mid-stream. The gauge wait
+      // is deterministic: the host stays alive ≥ idleMs after settling.
+      await u1.post(`/v1/threads/${live.id}/prompt`, { message: "hi again" });
+      await vi.waitFor(async () => {
+        const m = await a.inject({ method: "GET", url: "/metrics" });
+        expect(m.body).toContain("aelvyril_active_session_hosts 1");
+      });
+      const kill = await a.inject({
+        method: "POST",
+        url: "/v1/threads/kill-all",
+        headers: { authorization: "Bearer good" },
+      });
+      expect(kill.json()).toEqual({ abandoned: 1 });
+      const db = new Database(dbFile);
+      try {
+        expect(
+          (db.prepare("SELECT status, state FROM conversations WHERE id = ?").get(live.id) as { status: string; state: string }),
+        ).toEqual({ status: "abandoned", state: "idle" });
+        expect(
+          (db.prepare("SELECT status FROM conversations WHERE id = ?").get(idle.id) as { status: string }).status,
+        ).toBe("draft");
+      } finally {
+        db.close();
+      }
+      // Host killed: gauge drains to zero.
+      await vi.waitFor(async () => {
+        const m = await a.inject({ method: "GET", url: "/metrics" });
+        expect(m.body).toContain("aelvyril_active_session_hosts 0");
+      });
+      // Unauthenticated callers can't pull it.
+      const bare = await a.inject({ method: "POST", url: "/v1/threads/kill-all" });
+      expect(bare.statusCode).toBe(401);
     } finally {
-      db.close();
-    }
-    // Host killed: gauge drains to zero.
-    await vi.waitFor(async () => {
-      const m = await a.inject({ method: "GET", url: "/metrics" });
-      expect(m.body).toContain("aelvyril_active_session_hosts 0");
-    });
-    // Unauthenticated callers can't pull it.
-    const bare = await a.inject({ method: "POST", url: "/v1/threads/kill-all" });
-    expect(bare.statusCode).toBe(401);
-    try {
-      rmSync(dbFile, { force: true });
-    } catch {
-      // Windows can briefly hold the file handle after close
+      delete process.env.FAKE_DELAY_MS;
+      try {
+        rmSync(dbFile, { force: true });
+      } catch {
+        // Windows can briefly hold the file handle after close
+      }
     }
   });
 
@@ -857,6 +870,26 @@ describe("durable prompt queue (#83)", () => {
     expect(kill.json()).toEqual({ abandoned: 1 });
     // The queue was dropped: the thread is no longer "queued" (no 409), and
     // with the cap still 0 the new prompt queues fresh.
+    const reprompt = await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "again" });
+    expect(reprompt.statusCode).toBe(202);
+    expect(reprompt.json()).toEqual({ accepted: true, queued: true });
+  });
+
+  it("abandon drops the thread's queued prompt (runner must not resurrect it, 2nd review)", async () => {
+    app = await makeQueueApp(":memory:", 0, 3_600_000);
+    const u1 = authed(app, "good");
+    const t1 = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const queued = await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "queued work" });
+    expect(queued.json()).toEqual({ accepted: true, queued: true });
+    const abandon = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${t1.id}/abandon`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(abandon.statusCode).toBe(200);
+    // The queued row was dropped with the thread: a new prompt queues fresh
+    // instead of 409 already_queued, and the long runner interval guarantees
+    // the abandoned thread is never started behind our backs.
     const reprompt = await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "again" });
     expect(reprompt.statusCode).toBe(202);
     expect(reprompt.json()).toEqual({ accepted: true, queued: true });

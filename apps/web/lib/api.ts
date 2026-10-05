@@ -177,50 +177,56 @@ export class GatewayClient {
       let failures = 0;
       let authFailures = 0;
       while (!controller.signal.aborted) {
-        let paged = false;
-        try {
-          const token = await this.getToken();
-          if (!token) throw new Error("stream auth: no token");
-          const res = await fetch(`${this.baseUrl}${ROUTES.threadEvents(id)}`, {
-            headers: { authorization: `Bearer ${token}`, "last-event-id": String(parser.lastSeenSeq) },
-            signal: controller.signal,
-          });
-          if (!res.ok) {
-            if (res.status === 404) {
-              onLost?.("not_found");
+      let paged = false;
+      let gotBytes = false;
+      try {
+        const token = await this.getToken();
+        if (!token) throw new Error("stream auth: no token");
+        const res = await fetch(`${this.baseUrl}${ROUTES.threadEvents(id)}`, {
+          headers: { authorization: `Bearer ${token}`, "last-event-id": String(parser.lastSeenSeq) },
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          if (res.status === 404) {
+            onLost?.("not_found");
+            return;
+          }
+          if (res.status === 401 || res.status === 403) {
+            authFailures++;
+            if (authFailures >= MAX_AUTH_FAILURES) {
+              onLost?.("gave_up");
               return;
             }
-            if (res.status === 401 || res.status === 403) {
-              authFailures++;
-              if (authFailures >= MAX_AUTH_FAILURES) {
-                onLost?.("gave_up");
-                return;
-              }
-              throw new Error(`stream auth failed: ${res.status}`);
-            }
-            throw new Error(`stream failed: ${res.status}`);
+            throw new Error(`stream auth failed: ${res.status}`);
           }
-          if (!res.body) throw new Error("stream failed: no body");
-          failures = 0;
-          authFailures = 0;
-          const reader = res.body.getReader();
-          const decoder = new TextDecoder();
-          for (;;) {
-            const { value, done } = await reader.read();
-            if (done) {
-              // Clean EOF: the server ended a full replay page. Fetch the
-              // next page immediately — this is progress, not a failure.
-              paged = true;
-              break;
-            }
-            for (const env of parser.push(decoder.decode(value, { stream: true }))) {
-              onEnvelope(env);
-            }
-          }
-        } catch (err) {
-          if (controller.signal.aborted) return;
-          console.error("stream error, retrying", err);
+          throw new Error(`stream failed: ${res.status}`);
         }
+        if (!res.body) throw new Error("stream failed: no body");
+        failures = 0;
+        authFailures = 0;
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) {
+            // Clean EOF: the server ended a full replay page. Fetch the
+            // next page immediately — this is progress, not a failure.
+            // A close with NO bytes at all is not a page boundary (a proxy
+            // swallowing the connection looks identical) — treat it as a
+            // failure so the backoff applies instead of a hot reconnect
+            // loop (2nd review).
+            paged = gotBytes;
+            break;
+          }
+          gotBytes = true;
+          for (const env of parser.push(decoder.decode(value, { stream: true }))) {
+            onEnvelope(env);
+          }
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        console.error("stream error, retrying", err);
+      }
         if (controller.signal.aborted) return;
         if (paged) continue;
         failures++;

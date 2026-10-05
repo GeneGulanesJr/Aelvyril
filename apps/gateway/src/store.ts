@@ -340,6 +340,12 @@ export class Store {
     this.db.prepare("DELETE FROM prompt_queue WHERE namespace = ?").run(namespace);
   }
 
+  /** #83 (2nd review): abandon/delete must drop the thread's own queued
+   *  prompt, or the runner dequeues it later and resurrects the thread. */
+  deleteQueuedForConversation(conversationId: string): void {
+    this.db.prepare("DELETE FROM prompt_queue WHERE conversation_id = ?").run(conversationId);
+  }
+
   /** #83: hosts die with the gateway process; rows still marked streaming
    *  after a restart are stale. Called once at boot. */
   markStaleStreamingDegraded(): void {

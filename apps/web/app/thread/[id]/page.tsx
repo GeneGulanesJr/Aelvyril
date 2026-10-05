@@ -74,7 +74,7 @@ export default function ThreadPage() {
               if (abandoned > 0) {
                 setThreads((ts) =>
                   ts.map((t) =>
-                    t.state === "streaming" || t.state === "blocked"
+                    t.state === "streaming" || t.state === "blocked" || t.status === "queued"
                       ? { ...t, status: "abandoned" as const, state: "idle" as const }
                       : t,
                   ),

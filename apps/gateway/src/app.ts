@@ -346,7 +346,10 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     // conversation. killChild marks the id dead synchronously, so protocol
     // events already queued in the event loop are dropped as well. Only
     // after the namespaced delete succeeded: killChild is not namespaced.
-    if (deleted) supervisor.killChild(id);
+    if (deleted) {
+      supervisor.killChild(id);
+      store.deleteQueuedForConversation(id);
+    }
     return deleted ? reply.code(204).send() : reply.code(404).send({ error: "not_found" });
   };
   app.delete("/v1/threads/:id", deleteThread);
@@ -513,6 +516,9 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const contract = contracts.get(id);
     if (contract) contract.abandon();
     else supervisor.killChild(id); // no live contract: still stop the child
+    // #83 (2nd review): a queued prompt for an abandoned thread must not be
+    // picked up by the runner later — abandoning is terminal.
+    store.deleteQueuedForConversation(id);
     return { ok: true };
   });
 

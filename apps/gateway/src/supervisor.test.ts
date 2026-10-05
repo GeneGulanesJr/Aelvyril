@@ -116,6 +116,33 @@ describe("Supervisor", () => {
     });
   });
 
+  it("re-prompting after killChild lifts the dead mark so events flow again (2nd review)", async () => {
+    const { store, bus, supervisor } = makeSupervisor();
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    await supervisor.prompt(conv.id, "hi");
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
+    });
+    // abandon route semantics: intentional kill.
+    supervisor.killChild(conv.id);
+    // Wait for the killed host's exit to fire (dead lifted there), then
+    // re-prompt. Before the fix, the dead set permanently silenced the
+    // respawned host: no deltas, and agent_settled was dropped so the
+    // thread stayed "streaming" forever.
+    await vi.waitFor(() => {
+      expect(supervisor.has(conv.id)).toBe(false);
+    });
+    const eventsBefore = store.getEventsSince(conv.id, -1).length;
+    expect(await supervisor.prompt(conv.id, "round two")).toBe(true);
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
+    });
+    const kinds = bus.replay(conv.id, eventsBefore - 1).map((e) => e.kind);
+    expect(kinds).toContain("text_delta");
+    expect(kinds).toContain("session_state"); // idle — agent_settled not dropped
+  });
+
   it("replays nothing for a fresh conversation", () => {
     const { bus, store } = makeSupervisor();
     const conv = store.createConversation({ namespace: "platform" });

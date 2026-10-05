@@ -56,6 +56,11 @@ export class RpcClient extends EventEmitter {
 
   constructor(private child: ChildProcess) {
     super();
+    // Writes race child death (dialog auto-responder, prompts at the moment
+    // of a crash): a write on the destroyed stdin would otherwise surface as
+    // an UNHANDLED 'error' event and take the gateway down. Failures that
+    // matter surface through send()'s timeout/exit rejection instead.
+    child.stdin!.on("error", () => {});
     child.stdout!.on("data", (chunk: Buffer) => {
       for (const msg of this.decoder.push(chunk)) this.handle(msg as RpcMessage);
     });

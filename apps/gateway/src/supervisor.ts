@@ -79,6 +79,11 @@ export class Supervisor {
       // The host exited — the gauge reflects that regardless of whether the
       // exit was expected (kill/reap/dispose) or a crash.
       this.opts.onSessionHostExit?.();
+      // The kill is complete: in-flight events from the old child are done
+      // arriving. Lift the dead mark so a future prompt on this thread
+      // (abandon → change mind → re-prompt) spawns a live host whose events
+      // are not silently dropped (2nd review).
+      this.dead.delete(conversationId);
       if (handle.exiting) return;
       this.handles.delete(conversationId);
       // Best-effort: child may emit exit AFTER disposeAll closes the store

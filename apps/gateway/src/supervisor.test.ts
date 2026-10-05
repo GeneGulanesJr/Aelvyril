@@ -6,12 +6,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EventBus } from "./bus.js";
 import { Store } from "./store.js";
-import { Supervisor } from "./supervisor.js";
+import { Supervisor, type SupervisorOptions } from "./supervisor.js";
 import type { EventEnvelope } from "@aelvyril/shared";
 
 const fakePi = fileURLToPath(new URL("../fixtures/fake-pi.mjs", import.meta.url));
 
-function makeSupervisor() {
+function makeSupervisor(opts: Partial<SupervisorOptions> = {}) {
   const store = new Store(":memory:");
   const bus = new EventBus(store);
   const children: ChildProcess[] = [];
@@ -26,6 +26,7 @@ function makeSupervisor() {
       return child;
     },
     idleMs: 60_000,
+    ...opts,
   });
   return { store, bus, supervisor, children };
 }
@@ -204,5 +205,81 @@ describe("Supervisor", () => {
     await supervisor.prompt(conv.id, "hi");
     expect(spawnCalls).toHaveLength(1);
     expect(spawnCalls[0]!.cwd).toBeUndefined();
+  });
+
+  it("auto-responds cancelled to pi dialog requests so headless runs settle (#84)", async () => {
+    process.env.FAKE_UI_DIALOG = "1";
+    try {
+      const { store, bus, supervisor } = makeSupervisor();
+      s = supervisor;
+      const conv = store.createConversation({ namespace: "platform" });
+      const seen: EventEnvelope[] = [];
+      bus.subscribe(conv.id, (e) => seen.push(e));
+      await supervisor.prompt(conv.id, "hi");
+      // The ack (custom envelope) proves the gateway actually wrote the
+      // extension_ui_response back to the child.
+      await vi.waitFor(() => {
+        expect(
+          seen.some(
+            (e) =>
+              e.kind === "custom" &&
+              (e.payload as { type?: string }).type === "custom_ui_response_received",
+          ),
+        ).toBe(true);
+      });
+      const dialog = seen.find((e) => e.kind === "dialog");
+      expect(dialog?.payload).toMatchObject({
+        method: "confirm",
+        title: "Allow project agents?",
+        action: "auto_cancelled",
+      });
+      // The dialog did not hang or block the run.
+      await vi.waitFor(() => {
+        expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
+      });
+    } finally {
+      delete process.env.FAKE_UI_DIALOG;
+    }
+  });
+
+  it("dialogMode=blocked escalates blocking dialogs to the needs-you state (#84)", async () => {
+    process.env.FAKE_UI_DIALOG = "1";
+    try {
+      const { store, bus, supervisor } = makeSupervisor({ dialogMode: "blocked" });
+      s = supervisor;
+      const conv = store.createConversation({ namespace: "platform" });
+      const seen: EventEnvelope[] = [];
+      bus.subscribe(conv.id, (e) => seen.push(e));
+      await supervisor.prompt(conv.id, "hi");
+      await vi.waitFor(() => {
+        expect(store.getConversation(conv.id, "platform")?.state).toBe("blocked");
+      });
+      const dialog = seen.find((e) => e.kind === "dialog");
+      expect(dialog?.payload).toMatchObject({ method: "confirm", action: "blocked" });
+      const blockedState = seen.find(
+        (e) => e.kind === "session_state" && (e.payload as { state?: string }).state === "blocked",
+      );
+      expect(blockedState?.payload).toMatchObject({ state: "blocked", reason: "dialog" });
+    } finally {
+      delete process.env.FAKE_UI_DIALOG;
+    }
+  });
+
+  it("crossing the per-thread cost cap blocks the thread (#84)", async () => {
+    const { store, bus, supervisor } = makeSupervisor({ maxCostPerThreadUsd: 0.001 });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    const seen: EventEnvelope[] = [];
+    bus.subscribe(conv.id, (e) => seen.push(e));
+    await supervisor.prompt(conv.id, "hi");
+    // fake-pi reports cost 0.0042 > 0.001 cap → blocked/capped at harvest.
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("blocked");
+    });
+    const blockedState = seen.find(
+      (e) => e.kind === "session_state" && (e.payload as { state?: string }).state === "blocked",
+    );
+    expect(blockedState?.payload).toMatchObject({ state: "blocked", reason: "capped" });
+    expect(store.getConversation(conv.id, "platform")?.usage?.cost).toBe(0.0042);
   });
 });

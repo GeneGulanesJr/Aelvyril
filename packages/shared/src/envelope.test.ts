@@ -75,7 +75,44 @@ describe("EventEnvelope", () => {
       "diff",
       "custom",
       "usage",
+      "dialog",
     ]);
+  });
+
+  it("accepts a blocked session_state with a reason (#84)", () => {
+    const parsed = EventEnvelope.parse({
+      ...base,
+      kind: "session_state",
+      payload: { state: "blocked", reason: "capped" },
+    });
+    expect(parsed.payload).toEqual({ state: "blocked", reason: "capped" });
+    // reason is optional; plain states still parse
+    expect(
+      EventEnvelope.safeParse({ ...base, kind: "session_state", payload: { state: "idle" } }).success,
+    ).toBe(true);
+  });
+
+  it("rejects a session_state with an unknown reason (#84)", () => {
+    expect(
+      EventEnvelope.safeParse({
+        ...base,
+        kind: "session_state",
+        payload: { state: "blocked", reason: "because" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts a dialog envelope (#84)", () => {
+    const parsed = EventEnvelope.parse({
+      ...base,
+      kind: "dialog",
+      payload: { method: "confirm", title: "Allow project agents?", action: "auto_cancelled" },
+    });
+    expect(parsed.payload).toEqual({
+      method: "confirm",
+      title: "Allow project agents?",
+      action: "auto_cancelled",
+    });
   });
 
   it("accepts a custom envelope with a safe type (#85)", () => {

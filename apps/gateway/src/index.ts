@@ -66,6 +66,14 @@ const app = await buildApp({
     : undefined,
   // #85: optional bearer secret gating /metrics for direct exposure.
   metricsSecret: process.env.GATEWAY_METRICS_SECRET,
+  // #84: per-thread budget in USD (cost cap → blocked + refused prompts).
+  maxCostPerThreadUsd: process.env.GATEWAY_MAX_THREAD_COST_USD
+    ? Number(process.env.GATEWAY_MAX_THREAD_COST_USD)
+    : undefined,
+  // #84: extension_ui_request handling — "auto-responder" (default) or
+  // "blocked" (escalate blocking dialogs to the needs-you state).
+  dialogMode:
+    process.env.GATEWAY_DIALOG_MODE === "blocked" ? ("blocked" as const) : ("auto-responder" as const),
 });
 
 // Default to dual-stack ("::" accepts IPv4-mapped too) so `localhost` resolves

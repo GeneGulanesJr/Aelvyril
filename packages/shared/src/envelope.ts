@@ -23,6 +23,8 @@ export const EnvelopeKind = z.enum([
   "custom",
   // #84: per-thread cost/token accounting.
   "usage",
+  // #84: agent dialog surfaced / auto-answered.
+  "dialog",
 ]);
 export type EnvelopeKind = z.infer<typeof EnvelopeKind>;
 
@@ -55,7 +57,11 @@ const payloadSchemas = {
   }),
   user_message: z.object({ text: z.string().min(1).max(1_000_000) }),
   session_state: z.object({
-    state: z.enum(["idle", "streaming", "degraded", "restarted"]),
+    state: z.enum(["idle", "streaming", "degraded", "restarted", "blocked"]),
+    // #84: why the thread needs you. "question" is reserved for the spec
+    // interview contract path; "dialog" = a blocking agent dialog when the
+    // auto-responder is off; "capped" = the per-thread budget was hit.
+    reason: z.enum(["question", "dialog", "capped"]).optional(),
   }),
   error: z.object({
     message: z.string(),
@@ -88,6 +94,14 @@ const payloadSchemas = {
     }),
     cost: z.number().nonnegative(),
   }),
+  // #84: pi extension_ui_request surfaced to the thread — either answered
+  // automatically (cancelled) so headless runs can't hang, or escalated to
+  // the blocked state when the auto-responder is off.
+  dialog: z.object({
+    method: z.string().min(1).max(32),
+    title: z.string().max(500),
+    action: z.enum(["auto_cancelled", "blocked"]),
+  }),
 } as const;
 
 const envelopeShape = z.object({
@@ -114,5 +128,6 @@ export const EventEnvelope = z.discriminatedUnion("kind", [
   envelopeShape.extend({ kind: z.literal("diff"), payload: payloadSchemas.diff }),
   envelopeShape.extend({ kind: z.literal("custom"), payload: payloadSchemas.custom }),
   envelopeShape.extend({ kind: z.literal("usage"), payload: payloadSchemas.usage }),
+  envelopeShape.extend({ kind: z.literal("dialog"), payload: payloadSchemas.dialog }),
 ]);
 export type EventEnvelope = z.infer<typeof EventEnvelope>;

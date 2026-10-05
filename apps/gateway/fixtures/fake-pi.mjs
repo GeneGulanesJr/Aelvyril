@@ -34,7 +34,24 @@ for await (const line of rl) {
     continue;
   }
   send({ id: cmd.id, type: "response", command: cmd.type, success: true });
+  if (cmd.type === "extension_ui_response") {
+    // #84: ack that the gateway's dialog response actually arrived, so
+    // tests can assert the auto-responder end-to-end.
+    send({ type: "custom_ui_response_received", requestId: cmd.id ?? null });
+    continue;
+  }
   if (cmd.type === "prompt") {
+    // #84: opt-in blocking dialog (FAKE_UI_DIALOG=1) — the auto-responder
+    // path in the gateway must answer it for the turn to settle.
+    if (process.env.FAKE_UI_DIALOG === "1") {
+      send({
+        type: "extension_ui_request",
+        id: "ui_1",
+        method: "confirm",
+        title: "Allow project agents?",
+        message: "PiSubagent wants to run project agents.",
+      });
+    }
     // Probe: echoes the gateway-injected env back over the protocol so tests
     // can assert the per-user namespace reached the session host (D7).
     send({ type: "custom_env_echo", LAPIS_PROJECT_KEY: process.env.LAPIS_PROJECT_KEY ?? null });

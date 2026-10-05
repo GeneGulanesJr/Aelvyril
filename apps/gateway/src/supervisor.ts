@@ -17,6 +17,14 @@ export interface SupervisorOptions {
   /** Metrics hooks (spec §11 observability). Both optional. */
   onSessionHostSpawn?: () => void;
   onSessionHostExit?: () => void;
+  /** #84: per-thread budget. When the harvested cumulative cost reaches
+   *  this many USD, the thread is marked blocked/capped and the next
+   *  prompt is refused at the route. Undefined = no cap. */
+  maxCostPerThreadUsd?: number;
+  /** #84: how blocking pi extension_ui_request dialogs are handled.
+   *  "auto-responder" (default) answers them cancelled so headless runs
+   *  can't hang (spec §14.3); "blocked" escalates to the blocked state. */
+  dialogMode?: "auto-responder" | "blocked";
 }
 
 interface Handle {
@@ -188,6 +196,10 @@ export class Supervisor {
       if (handle) void this.harvestUsage(conversationId, handle);
       return;
     }
+    if (ev.type === "extension_ui_request") {
+      this.handleExtensionUiRequest(conversationId, handle, ev);
+      return;
+    }
     if (ev.type === "extension_error") {
       this.publish(conversationId, {
         kind: "error",
@@ -233,9 +245,64 @@ export class Supervisor {
       };
       this.publish(conversationId, { kind: "usage", payload: usage });
       this.opts.store.recordUsage(conversationId, usage);
+      // #84: budget enforcement. The finished turn still delivered its
+      // output; the blocked state + route guard stop the NEXT turn.
+      const cap = this.opts.maxCostPerThreadUsd;
+      if (cap !== undefined && usage.cost >= cap) {
+        this.blockThread(conversationId, "capped");
+      }
     } catch {
       // rpc closed (host exiting mid-harvest); ignore
     }
+  }
+
+  /** #84: needs-you escalation — set the blocked conversation state and
+   *  publish a session_state envelope with the reason. */
+  private blockThread(conversationId: string, reason: "question" | "dialog" | "capped"): void {
+    try {
+      this.opts.store.setConversationState(conversationId, "blocked");
+      this.publish(conversationId, { kind: "session_state", payload: { state: "blocked", reason } });
+    } catch {
+      // store closed (shutdown); ignore
+    }
+  }
+
+  /**
+   * #84 (spec §14.3): pi's extension_ui_request dialogs block the agent
+   * until answered, silently hanging any headless autonomous run. The
+   * auto-responder (default) answers every request cancelled — the agent
+   * keeps moving and the dialog is visible on the thread for observability.
+   * dialogMode "blocked" escalates blocking dialogs (select/confirm/input/
+   * editor) to the blocked state instead.
+   */
+  private handleExtensionUiRequest(
+    conversationId: string,
+    handle: Handle | undefined,
+    ev: RpcEvent,
+  ): void {
+    const method = typeof ev.method === "string" ? ev.method : "unknown";
+    const title = typeof ev.title === "string" ? ev.title : "agent dialog";
+    const id = typeof ev.id === "string" ? ev.id : "";
+    const blocking = method === "select" || method === "confirm" || method === "input" || method === "editor";
+    const escalate = blocking && this.opts.dialogMode === "blocked";
+
+    if (escalate) {
+      this.blockThread(conversationId, "dialog");
+      this.publish(conversationId, { kind: "dialog", payload: { method, title, action: "blocked" } });
+      return;
+    }
+    // Answer cancelled (never resolves a value on the agent's behalf) so the
+    // run continues. Non-blocking requests (notify/setStatus/...) get the
+    // same treatment for observability.
+    if (id && handle) {
+      void handle.rpc
+        .send({ type: "extension_ui_response", id, cancelled: true })
+        .catch(() => {});
+    }
+    this.publish(conversationId, {
+      kind: "dialog",
+      payload: { method, title, action: "auto_cancelled" },
+    });
   }
 
   private reapIdle(): void {

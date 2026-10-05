@@ -69,7 +69,12 @@ export default function ThreadPage() {
         onCreate={() => router.push("/thread/new")}
       />
       <main className="flex flex-1 flex-col overflow-hidden">
-        <Banners degraded={threadState.degraded} error={threadState.error} onDismissError={threadState.dismissError} />
+        <Banners
+          degraded={threadState.degraded}
+          blocked={threadState.blocked}
+          error={threadState.error}
+          onDismissError={threadState.dismissError}
+        />
         {activeThread && (
           <ThreadHeader
             thread={activeThread}

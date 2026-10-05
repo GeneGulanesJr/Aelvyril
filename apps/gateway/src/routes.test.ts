@@ -242,6 +242,30 @@ describe("v1 routes", () => {
     });
   });
 
+  it("refuses prompts past the per-thread cost cap with 403 (#84)", async () => {
+    app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      maxCostPerThreadUsd: 0.001, // fake-pi reports 0.0042 → capped
+    });
+    const u1 = authed(app, "good");
+    const conv = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const first = await u1.post(`/v1/threads/${conv.id}/prompt`, { message: "hi" });
+    expect(first.statusCode).toBe(202);
+    // Wait for the harvest to persist usage + the blocked state.
+    await vi.waitFor(async () => {
+      const one = await u1.get(`/v1/threads/${conv.id}`);
+      expect((one.json() as { state: string }).state).toBe("blocked");
+    });
+    const second = await u1.post(`/v1/threads/${conv.id}/prompt`, { message: "again" });
+    expect(second.statusCode).toBe(403);
+    expect(second.json().error).toBe("cost_cap_reached");
+    expect((second.json() as { cap: number }).cap).toBe(0.001);
+  });
+
   // Spec §10: per-user rate limit on /v1/threads/:id/prompt.
   // Uses a deterministic 1-token-capacity limiter with no refill — the
   // second prompt from the same user in the same test must trip it.

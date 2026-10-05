@@ -48,6 +48,9 @@ export const ConversationState = z.enum([
   "idle",
   "streaming",
   "degraded",
+  // #84: needs-you escalation (unanswered question / blocking dialog /
+  // budget cap exceeded) — surfaced as a banner beyond the degraded one.
+  "blocked",
 ]);
 type ConversationState = z.infer<typeof ConversationState>;
 

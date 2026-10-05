@@ -176,6 +176,19 @@ describe("useThread", () => {
     expect(result.current.waiting).toBe(false);
   });
 
+  it("blocked session_state sets the escalation reason; idle clears it (#84)", async () => {
+    const { result, inst } = await renderThread();
+    await act(async () => {
+      inst.onEnvelope!(env("session_state", { state: "blocked", reason: "capped" }, 0));
+    });
+    expect(result.current.blocked).toBe("capped");
+    expect(result.current.waiting).toBe(false);
+    await act(async () => {
+      inst.onEnvelope!(env("session_state", { state: "idle" }, 1));
+    });
+    expect(result.current.blocked).toBeNull();
+  });
+
   it("error envelopes set a dismissable error", async () => {
     const { result, inst } = await renderThread();
     await act(async () => {

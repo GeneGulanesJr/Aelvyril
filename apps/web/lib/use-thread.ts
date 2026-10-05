@@ -13,6 +13,8 @@ export interface ThreadState {
   error: string | null;
   /** Session host died mid-turn — next prompt respawns it (spec §10). */
   degraded: boolean;
+  /** #84: needs-you escalation reason (drives the orange blocked banner). */
+  blocked: "question" | "dialog" | "capped" | null;
   /** A prompt is in flight (drives the Stop button + steer-queued sends). */
   waiting: boolean;
   /** #84: cumulative cost/token usage for this thread (live via SSE). */
@@ -48,6 +50,7 @@ export function useThread(
     diff: [],
     error: null,
     degraded: false,
+    blocked: null,
     waiting: false,
     usage: null,
   });
@@ -162,9 +165,12 @@ function applyEnvelope(s: ThreadState, e: EventEnvelope): ThreadState {
     case "session_state":
       // Spec §10: degraded means the host died mid-turn; the next prompt
       // respawns it. streaming/idle drive the waiting flag for Stop + steer.
+      // #84: blocked is the needs-you escalation with a reason.
       return {
         ...s,
         degraded: e.payload.state === "degraded",
+        blocked:
+          e.payload.state === "blocked" ? (e.payload.reason ?? "dialog") : null,
         waiting: e.payload.state === "streaming",
       };
     default:

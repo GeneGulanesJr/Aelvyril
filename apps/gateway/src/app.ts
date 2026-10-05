@@ -60,6 +60,11 @@ export interface AppOptions {
    *  `Authorization: Bearer <secret>`. Unset keeps /metrics open (the
    *  reverse proxy is expected to gate it). */
   metricsSecret?: string;
+  /** #84: per-thread budget in USD. When a thread's cumulative cost reaches
+   *  this, further prompts are refused with 403 cost_cap_reached. */
+  maxCostPerThreadUsd?: number;
+  /** #84: pi extension_ui_request handling. Default "auto-responder". */
+  dialogMode?: "auto-responder" | "blocked";
 }
 
 export type App = FastifyInstance;
@@ -119,6 +124,8 @@ export async function buildApp(opts: AppOptions): Promise<App> {
         cwd,
       }),
     idleMs: opts.idleMs ?? 300_000,
+    maxCostPerThreadUsd: opts.maxCostPerThreadUsd,
+    dialogMode: opts.dialogMode,
     onSessionHostSpawn: () => metrics.activeSessionHosts.inc(),
     onSessionHostExit: () => metrics.activeSessionHosts.dec(),
   });
@@ -344,6 +351,20 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const { id } = req.params as { id: string };
     const conv = store.getConversation(id, namespace);
     if (!conv) return reply.code(404).send({ error: "not_found" });
+    // #84: budget enforcement — a thread at its cost cap needs explicit
+    // operator action (raise GATEWAY_MAX_THREAD_COST_USD or abandon it).
+    if (
+      opts.maxCostPerThreadUsd !== undefined &&
+      conv.usage &&
+      conv.usage.cost >= opts.maxCostPerThreadUsd
+    ) {
+      metrics.costCapRejections.inc();
+      return reply.code(403).send({
+        error: "cost_cap_reached",
+        cost: conv.usage.cost,
+        cap: opts.maxCostPerThreadUsd,
+      });
+    }
     const body = PromptBody.parse(req.body ?? {});
     // Spec §6/§10: workspace -> spawn cwd so pi finds its prior session file
     // on disk after a crash + re-prompt (session resume).

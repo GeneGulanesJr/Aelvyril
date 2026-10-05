@@ -83,7 +83,10 @@ export class RpcClient extends EventEmitter {
 
   send(command: Record<string, unknown>, timeoutMs = 10_000): Promise<RpcResponse> {
     const id = `gw_${nextId++}`;
-    const wire = JSON.stringify({ ...command, id }) + "\n";
+    // A command may carry its OWN id that must reach the child verbatim —
+    // extension_ui_response (#84) must echo the request's id, not a
+    // correlation id. Commands without an id keep the generated one.
+    const wire = JSON.stringify({ id, ...command }) + "\n";
     return new Promise<RpcResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);

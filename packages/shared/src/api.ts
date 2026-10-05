@@ -19,6 +19,8 @@ export const ROUTES = {
   threadApprove: (id: string) => `/v1/threads/${id}/approve`,
   threadAbandon: (id: string) => `/v1/threads/${id}/abandon`,
   threadRetry: (id: string) => `/v1/threads/${id}/retry`,
+  // #84: global kill switch — abandon every live/queued thread for the user.
+  threadKillAll: "/v1/threads/kill-all",
 } as const;
 
 export const CreateConversationBody = z.object({
@@ -48,6 +50,9 @@ export const ConversationState = z.enum([
   "idle",
   "streaming",
   "degraded",
+  // #84: needs-you escalation (unanswered question / blocking dialog /
+  // budget cap exceeded) — surfaced as a banner beyond the degraded one.
+  "blocked",
 ]);
 type ConversationState = z.infer<typeof ConversationState>;
 
@@ -77,16 +82,42 @@ export const SpecDraft = z.object({
 });
 export type SpecDraft = z.infer<typeof SpecDraft>;
 
-export const ThreadStatus = z.enum(["draft", "spec'ing", "running", "reviewed", "merged", "abandoned"]);
+// #83: "queued" = the prompt is durably queued, waiting for a running-host
+// slot (long-horizon execution — threads are cheap rows, hosts are the
+// scarce resource).
+export const ThreadStatus = z.enum(["draft", "spec'ing", "running", "reviewed", "merged", "abandoned", "queued"]);
 export type ThreadStatus = z.infer<typeof ThreadStatus>;
 
-/** Body for PATCH /v1/threads/:id/spec. */
+/** #84: cumulative per-thread usage (pi SessionStats subset). */
+export const Usage = z.object({
+  tokens: z.object({
+    input: z.number().int().nonnegative(),
+    output: z.number().int().nonnegative(),
+    cacheRead: z.number().int().nonnegative(),
+    cacheWrite: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+  }),
+  cost: z.number().nonnegative(),
+});
+export type Usage = z.infer<typeof Usage>;
+
+/** Body for PATCH /v1/threads/:id/spec. Security review #85: the answers
+ *  record and draft value are size-capped so the stored spec blobs (and the
+ *  merged accumulation) can't grow without bound. */
 export const PatchSpecBody = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("answer"), answers: z.record(z.string(), z.string()) }),
+  z.object({
+    kind: z.literal("answer"),
+    answers: z
+      .record(z.string().min(1).max(100), z.string().max(10_000))
+      .refine((a) => Object.keys(a).length <= 200, "at most 200 answers per patch"),
+  }),
   z.object({
     kind: z.literal("edit"),
     field: z.enum(["goal", "filesAffected", "plan", "risks"]),
-    value: z.union([z.string(), z.array(z.string())]),
+    value: z.union([
+      z.string().max(200_000),
+      z.array(z.string().max(10_000)).max(500),
+    ]),
   }),
 ]);
 export type PatchSpecBody = z.infer<typeof PatchSpecBody>;
@@ -97,6 +128,9 @@ export const Conversation = z.object({
   workspace: z.string().nullable(),
   state: ConversationState,
   createdAt: z.string().datetime({ offset: true }),
+  // #84: latest cumulative session usage (cost/token accounting). Null
+  // until the first get_session_stats harvest lands.
+  usage: Usage.nullish(),
 });
 export type Conversation = z.infer<typeof Conversation>;
 

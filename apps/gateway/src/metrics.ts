@@ -12,6 +12,9 @@ export interface Metrics {
   rateLimitedTotal: Counter;
   conversationLimitReachedTotal: Counter;
   workspaceRejectionsTotal: Counter;
+  sseStreamsRejectedTotal: Counter;
+  costCapRejections: Counter;
+  queuedPromptsTotal: Counter;
   activeSessionHosts: Gauge;
   /** Render the Prometheus text exposition format. */
   render(): string;
@@ -194,6 +197,18 @@ export function createMetrics(): Metrics {
     "aelvyril_workspace_rejections_total",
     "Total 400 responses for non-allowlisted workspaces",
   );
+  const sseStreamsRejectedTotal = makeCounter(
+    "aelvyril_sse_streams_rejected_total",
+    "Total 429 responses from the per-user SSE stream cap",
+  );
+  const costCapRejections = makeCounter(
+    "aelvyril_cost_cap_rejections_total",
+    "Total 403 responses from the per-thread budget cap",
+  );
+  const queuedPromptsTotal = makeCounter(
+    "aelvyril_queued_prompts_total",
+    "Total prompts durably queued at the running-host cap",
+  );
   const activeSessionHosts = makeGauge(
     "aelvyril_active_session_hosts",
     "Currently-spawned pi children",
@@ -209,6 +224,9 @@ export function createMetrics(): Metrics {
       renderCounter(rateLimitedTotal),
       renderCounter(conversationLimitReachedTotal),
       renderCounter(workspaceRejectionsTotal),
+      renderCounter(sseStreamsRejectedTotal),
+      renderCounter(costCapRejections),
+      renderCounter(queuedPromptsTotal),
       renderGauge(activeSessionHosts),
       "",
     ].join("\n");
@@ -223,6 +241,9 @@ export function createMetrics(): Metrics {
     rateLimitedTotal,
     conversationLimitReachedTotal,
     workspaceRejectionsTotal,
+    sseStreamsRejectedTotal,
+    costCapRejections,
+    queuedPromptsTotal,
     activeSessionHosts,
     render,
   };

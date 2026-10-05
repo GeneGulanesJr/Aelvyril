@@ -67,12 +67,35 @@ export default function ThreadPage() {
         activeId={isNew ? null : id}
         onSelect={(tid) => router.push(`/thread/${tid}`)}
         onCreate={() => router.push("/thread/new")}
+        onKillAll={() =>
+          void client
+            .killAllThreads()
+            .then(({ abandoned }) => {
+              if (abandoned > 0) {
+                setThreads((ts) =>
+                  ts.map((t) =>
+                    t.state === "streaming" || t.state === "blocked" || t.status === "queued"
+                      ? { ...t, status: "abandoned" as const, state: "idle" as const }
+                      : t,
+                  ),
+                );
+              }
+            })
+            .catch((err) => console.error("kill-all failed", err))
+        }
       />
       <main className="flex flex-1 flex-col overflow-hidden">
-        <Banners degraded={threadState.degraded} error={threadState.error} onDismissError={threadState.dismissError} />
+        <Banners
+          degraded={threadState.degraded}
+          blocked={threadState.blocked}
+          error={threadState.error}
+          onDismissError={threadState.dismissError}
+        />
         {activeThread && (
           <ThreadHeader
             thread={activeThread}
+            liveStatus={threadState.statusLive ? threadState.status : null}
+            usage={threadState.usage ?? activeThread.usage}
             onRename={(title) => void client.renameConversation(activeThread.id, { title }).then(() => {
               setThreads((ts) => ts.map((t) => (t.id === activeThread.id ? { ...t, title } : t)));
             })}

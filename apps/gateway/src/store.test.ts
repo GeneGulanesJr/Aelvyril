@@ -99,11 +99,91 @@ describe("Store", () => {
     expect(replay.map((e) => e.seq)).toEqual([1, 2]);
   });
 
+  it("honors the replay page limit", () => {
+    const store = new Store(":memory:");
+    const conv = store.createConversation({ namespace: PLATFORM });
+    for (let i = 0; i < 5; i++) {
+      store.appendEvent({ conversationId: conv.id, ts, kind: "text_delta", payload: { delta: String(i) } });
+    }
+    expect(store.getEventsSince(conv.id, -1, 2).map((e) => e.seq)).toEqual([0, 1]);
+    expect(store.getEventsSince(conv.id, 1, 2).map((e) => e.seq)).toEqual([2, 3]);
+    // No limit → the full backlog (default behavior for direct callers).
+    expect(store.getEventsSince(conv.id, -1).map((e) => e.seq)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("prunes events beyond the retention window, per conversation", () => {
+    const store = new Store(":memory:", { eventRetentionPerThread: 5 });
+    const conv = store.createConversation({ namespace: PLATFORM });
+    const other = store.createConversation({ namespace: PLATFORM });
+    for (let i = 0; i < 8; i++) {
+      store.appendEvent({ conversationId: conv.id, ts, kind: "text_delta", payload: { delta: String(i) } });
+      store.appendEvent({ conversationId: other.id, ts, kind: "text_delta", payload: { delta: String(i) } });
+    }
+    // Only the newest 5 survive in each conversation.
+    expect(store.getEventsSince(conv.id, -1).map((e) => e.seq)).toEqual([3, 4, 5, 6, 7]);
+    expect(store.getEventsSince(other.id, -1).map((e) => e.seq)).toEqual([3, 4, 5, 6, 7]);
+  });
+
   it("updates conversation state", () => {
     const store = new Store(":memory:");
     const conv = store.createConversation({ namespace: PLATFORM });
     store.setConversationState(conv.id, "streaming");
     expect(store.getConversation(conv.id, PLATFORM)?.state).toBe("streaming");
+  });
+
+  it("records and returns cumulative usage (#84)", () => {
+    const store = new Store(":memory:");
+    const conv = store.createConversation({ namespace: PLATFORM });
+    expect(store.getConversation(conv.id, PLATFORM)?.usage ?? null).toBeNull();
+    const usage = {
+      tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 },
+      cost: 0.0042,
+    };
+    store.recordUsage(conv.id, usage);
+    expect(store.getConversation(conv.id, PLATFORM)?.usage).toEqual(usage);
+    // Latest observation replaces the previous one (cumulative session stats).
+    const next = { ...usage, cost: 0.01 };
+    store.recordUsage(conv.id, next);
+    expect(store.getConversation(conv.id, PLATFORM)?.usage).toEqual(next);
+  });
+
+  it("manages the durable prompt queue FIFO per namespace (#83)", () => {
+    const store = new Store(":memory:");
+    const a = store.createConversation({ namespace: "user:a" });
+    const b = store.createConversation({ namespace: "user:b" });
+    expect(store.countQueued("user:a")).toBe(0);
+    expect(store.dequeueOldestPrompt("user:a")).toBeNull();
+
+    store.enqueuePrompt({ conversationId: a.id, namespace: "user:a", message: "a1" });
+    store.enqueuePrompt({ conversationId: a.id, namespace: "user:a", message: "a2" });
+    store.enqueuePrompt({ conversationId: b.id, namespace: "user:b", message: "b1" });
+    expect(store.countQueued("user:a")).toBe(2);
+
+    // Fairness order: the namespace with the oldest item comes first.
+    expect(store.listQueuedNamespaces()).toEqual(["user:a", "user:b"]);
+    // FIFO within a namespace; dequeue removes the row.
+    expect(store.dequeueOldestPrompt("user:a")).toEqual({ conversationId: a.id, message: "a1" });
+    expect(store.dequeueOldestPrompt("user:a")).toEqual({ conversationId: a.id, message: "a2" });
+    expect(store.dequeueOldestPrompt("user:a")).toBeNull();
+    expect(store.dequeueOldestPrompt("user:b")).toEqual({ conversationId: b.id, message: "b1" });
+  });
+
+  it("deletes queued work per namespace and sweeps stale streaming rows (#83)", () => {
+    const store = new Store(":memory:");
+    const a = store.createConversation({ namespace: "user:a" });
+    const b = store.createConversation({ namespace: "user:b" });
+    store.enqueuePrompt({ conversationId: a.id, namespace: "user:a", message: "x" });
+    store.enqueuePrompt({ conversationId: b.id, namespace: "user:b", message: "y" });
+    store.deleteQueuedForNamespace("user:a");
+    expect(store.countQueued("user:a")).toBe(0);
+    expect(store.countQueued("user:b")).toBe(1);
+
+    // Boot sweep: a host that died with the process leaves 'streaming' behind.
+    store.setConversationState(a.id, "streaming");
+    store.setConversationState(b.id, "idle");
+    store.markStaleStreamingDegraded();
+    expect(store.getConversation(a.id, "user:a")?.state).toBe("degraded");
+    expect(store.getConversation(b.id, "user:b")?.state).toBe("idle");
   });
 
   it("adds thread status + spec columns idempotently", () => {
@@ -144,5 +224,19 @@ describe("Store", () => {
     expect(store.patchSpecDraft(conv.id, "user:a", "goal", "add RBAC")).toBe(true);
     expect(store.getThreadSpec(conv.id, "user:a")?.specDraft?.goal).toBe("add RBAC");
     expect(store.getThreadSpec(conv.id, "user:b")).toBeNull();
+  });
+
+  it("refuses to grow spec blobs past the accumulated-size cap (#85)", () => {
+    const store = new Store(":memory:");
+    const conv = store.createConversation({ namespace: "user:a" });
+    const huge = "x".repeat(400_000);
+    expect(store.mergeSpecAnswers(conv.id, "user:a", { q1: huge })).toBe(true);
+    // Merging again would exceed the cap -> refused, existing blob untouched.
+    expect(store.mergeSpecAnswers(conv.id, "user:a", { q2: huge })).toBe("too_large");
+    expect(store.getThreadSpec(conv.id, "user:a")?.specAnswers).toEqual({ q1: huge });
+
+    expect(store.patchSpecDraft(conv.id, "user:a", "goal", huge)).toBe(true);
+    expect(store.patchSpecDraft(conv.id, "user:a", "plan", [huge, huge])).toBe("too_large");
+    expect(store.getThreadSpec(conv.id, "user:a")?.specDraft?.plan).toEqual([]);
   });
 });

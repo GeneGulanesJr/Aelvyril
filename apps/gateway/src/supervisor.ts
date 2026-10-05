@@ -17,6 +17,14 @@ export interface SupervisorOptions {
   /** Metrics hooks (spec §11 observability). Both optional. */
   onSessionHostSpawn?: () => void;
   onSessionHostExit?: () => void;
+  /** #84: per-thread budget. When the harvested cumulative cost reaches
+   *  this many USD, the thread is marked blocked/capped and the next
+   *  prompt is refused at the route. Undefined = no cap. */
+  maxCostPerThreadUsd?: number;
+  /** #84: how blocking pi extension_ui_request dialogs are handled.
+   *  "auto-responder" (default) answers them cancelled so headless runs
+   *  can't hang (spec §14.3); "blocked" escalates to the blocked state. */
+  dialogMode?: "auto-responder" | "blocked";
 }
 
 interface Handle {
@@ -35,6 +43,11 @@ interface Handle {
 export class Supervisor {
   private handles = new Map<string, Handle>();
   private reaper: NodeJS.Timeout;
+  /** Security review #85: conversations whose host was SIGKILLed via
+   *  killChild (delete/abandon). Protocol events already queued in the
+   *  event loop for these ids are dropped instead of published, which
+   *  would re-insert orphan event rows for deleted threads. */
+  private dead = new Set<string>();
 
   constructor(private opts: SupervisorOptions) {
     this.reaper = setInterval(() => this.reapIdle(), Math.min(opts.idleMs, 5_000));
@@ -43,6 +56,11 @@ export class Supervisor {
 
   has(conversationId: string): boolean {
     return this.handles.has(conversationId);
+  }
+
+  /** #83: total live session hosts across all users — global ceiling. */
+  runningCount(): number {
+    return this.handles.size;
   }
 
   private ensureSession(conversationId: string, extraEnv: Record<string, string>, cwd?: string): Handle {
@@ -58,9 +76,16 @@ export class Supervisor {
     const handle: Handle = { rpc, child, lastActivity: Date.now(), exiting: false };
     rpc.on("event", (ev: RpcEvent) => this.onProtocolEvent(conversationId, ev));
     rpc.on("exit", () => {
+      // The host exited — the gauge reflects that regardless of whether the
+      // exit was expected (kill/reap/dispose) or a crash.
+      this.opts.onSessionHostExit?.();
+      // The kill is complete: in-flight events from the old child are done
+      // arriving. Lift the dead mark so a future prompt on this thread
+      // (abandon → change mind → re-prompt) spawns a live host whose events
+      // are not silently dropped (2nd review).
+      this.dead.delete(conversationId);
       if (handle.exiting) return;
       this.handles.delete(conversationId);
-      this.opts.onSessionHostExit?.();
       // Best-effort: child may emit exit AFTER disposeAll closes the store
       // (test teardown race, or a real SIGTERM during shutdown). Silently
       // drop the event rather than crash the gateway — spec §10
@@ -111,6 +136,12 @@ export class Supervisor {
   killChild(conversationId: string): void {
     const handle = this.handles.get(conversationId);
     if (!handle) return;
+    // #85: mark exiting + forget the handle BEFORE the SIGKILL so the async
+    // exit path doesn't publish a spurious degraded session_state, and add
+    // to the dead set so in-flight protocol events are dropped.
+    handle.exiting = true;
+    this.handles.delete(conversationId);
+    this.dead.add(conversationId);
     handle.child.kill("SIGKILL");
   }
 
@@ -125,17 +156,20 @@ export class Supervisor {
   }
 
   private handleProtocolEvent(conversationId: string, ev: RpcEvent): void {
+    if (this.dead.has(conversationId)) return;
     const handle = this.handles.get(conversationId);
     if (handle) handle.lastActivity = Date.now();
 
-    // Probe channel: custom_* protocol events are forwarded verbatim onto the
-    // bus (kind is stored as free TEXT; the SSE wire layer does not re-validate
-    // against the zod union). Used by tests to observe child-side state such
-    // as the spawn environment.
+    // Probe channel: custom_* protocol events are forwarded onto the bus.
+    // Security review #85: they must not flow verbatim as the envelope kind
+    // (a kind with a newline desyncs SSE framing) — they are wrapped in the
+    // schema-validated "custom" kind instead. Events whose type falls
+    // outside the safe charset are dropped.
     if (ev.type.startsWith("custom_")) {
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(ev.type)) return;
       this.publish(conversationId, {
-        kind: ev.type as EventEnvelope["kind"],
-        payload: ev,
+        kind: "custom",
+        payload: { type: ev.type, data: ev },
       });
       return;
     }
@@ -169,6 +203,11 @@ export class Supervisor {
     if (ev.type === "agent_settled") {
       this.opts.store.setConversationState(conversationId, "idle");
       this.publish(conversationId, { kind: "session_state", payload: { state: "idle" } });
+      if (handle) void this.harvestUsage(conversationId, handle);
+      return;
+    }
+    if (ev.type === "extension_ui_request") {
+      this.handleExtensionUiRequest(conversationId, handle, ev);
       return;
     }
     if (ev.type === "extension_error") {
@@ -189,6 +228,91 @@ export class Supervisor {
       kind: part.kind,
       payload: part.payload,
     } as Parameters<EventBus["publish"]>[0]);
+  }
+
+  /**
+   * #84: per-thread cost/token accounting. pi's get_session_stats returns
+   * cumulative SessionStats for the session file, so the latest observation
+   * IS the thread total (a respawned host resumes the same session).
+   * Fire-and-forget: a stats failure never affects the turn itself.
+   */
+  private async harvestUsage(conversationId: string, handle: Handle): Promise<void> {
+    try {
+      const res = await handle.rpc.send({ type: "get_session_stats" });
+      if (!res.success || !res.data) return;
+      const stats = res.data as { tokens?: Record<string, unknown>; cost?: unknown };
+      if (!stats.tokens) return;
+      const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0);
+      const usage = {
+        tokens: {
+          input: num(stats.tokens.input),
+          output: num(stats.tokens.output),
+          cacheRead: num(stats.tokens.cacheRead),
+          cacheWrite: num(stats.tokens.cacheWrite),
+          total: num(stats.tokens.total),
+        },
+        cost: num(stats.cost),
+      };
+      this.publish(conversationId, { kind: "usage", payload: usage });
+      this.opts.store.recordUsage(conversationId, usage);
+      // #84: budget enforcement. The finished turn still delivered its
+      // output; the blocked state + route guard stop the NEXT turn.
+      const cap = this.opts.maxCostPerThreadUsd;
+      if (cap !== undefined && usage.cost >= cap) {
+        this.blockThread(conversationId, "capped");
+      }
+    } catch {
+      // rpc closed (host exiting mid-harvest); ignore
+    }
+  }
+
+  /** #84: needs-you escalation — set the blocked conversation state and
+   *  publish a session_state envelope with the reason. */
+  private blockThread(conversationId: string, reason: "question" | "dialog" | "capped"): void {
+    try {
+      this.opts.store.setConversationState(conversationId, "blocked");
+      this.publish(conversationId, { kind: "session_state", payload: { state: "blocked", reason } });
+    } catch {
+      // store closed (shutdown); ignore
+    }
+  }
+
+  /**
+   * #84 (spec §14.3): pi's extension_ui_request dialogs block the agent
+   * until answered, silently hanging any headless autonomous run. The
+   * auto-responder (default) answers every request cancelled — the agent
+   * keeps moving and the dialog is visible on the thread for observability.
+   * dialogMode "blocked" escalates blocking dialogs (select/confirm/input/
+   * editor) to the blocked state instead.
+   */
+  private handleExtensionUiRequest(
+    conversationId: string,
+    handle: Handle | undefined,
+    ev: RpcEvent,
+  ): void {
+    const method = typeof ev.method === "string" ? ev.method : "unknown";
+    const title = typeof ev.title === "string" ? ev.title : "agent dialog";
+    const id = typeof ev.id === "string" ? ev.id : "";
+    const blocking = method === "select" || method === "confirm" || method === "input" || method === "editor";
+    const escalate = blocking && this.opts.dialogMode === "blocked";
+
+    if (escalate) {
+      this.blockThread(conversationId, "dialog");
+      this.publish(conversationId, { kind: "dialog", payload: { method, title, action: "blocked" } });
+      return;
+    }
+    // Answer cancelled (never resolves a value on the agent's behalf) so the
+    // run continues. Non-blocking requests (notify/setStatus/...) get the
+    // same treatment for observability.
+    if (id && handle) {
+      void handle.rpc
+        .send({ type: "extension_ui_response", id, cancelled: true })
+        .catch(() => {});
+    }
+    this.publish(conversationId, {
+      kind: "dialog",
+      payload: { method, title, action: "auto_cancelled" },
+    });
   }
 
   private reapIdle(): void {

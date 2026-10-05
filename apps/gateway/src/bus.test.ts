@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { EventEnvelope } from "@aelvyril/shared";
 import { EventBus } from "./bus.js";
 import { Store } from "./store.js";
 
@@ -36,5 +37,39 @@ describe("EventBus", () => {
     bus.publish({ conversationId: conv.id, ts, kind: "text_delta", payload: { delta: "a" } });
     bus.publish({ conversationId: conv.id, ts, kind: "text_delta", payload: { delta: "b" } });
     expect(bus.replay(conv.id, 0)).toHaveLength(1);
+  });
+
+  it("rejects an invalid envelope without storing or fanning out (#85)", () => {
+    const { store, bus } = makeBus();
+    const conv = store.createConversation({ namespace: "platform" });
+    const fn = vi.fn();
+    bus.subscribe(conv.id, fn);
+    // kind not in the union
+    const badKind = {
+      conversationId: conv.id,
+      ts,
+      kind: "custom_env_echo\r\nX",
+      payload: {},
+    } as unknown as Omit<EventEnvelope, "seq">;
+    expect(bus.publish(badKind)).toBeNull();
+    // payload fails the per-kind schema
+    expect(
+      bus.publish({ conversationId: conv.id, ts, kind: "user_message", payload: { text: "" } }),
+    ).toBeNull();
+    expect(fn).not.toHaveBeenCalled();
+    expect(store.getEventsSince(conv.id, -1)).toHaveLength(0);
+  });
+
+  it("accepts the wrapped custom kind (#85)", () => {
+    const { store, bus } = makeBus();
+    const conv = store.createConversation({ namespace: "platform" });
+    const full = bus.publish({
+      conversationId: conv.id,
+      ts,
+      kind: "custom",
+      payload: { type: "custom_env_echo", data: { LAPIS_PROJECT_KEY: "user:u" } },
+    });
+    expect(full?.kind).toBe("custom");
+    expect(store.getEventsSince(conv.id, -1)).toHaveLength(1);
   });
 });

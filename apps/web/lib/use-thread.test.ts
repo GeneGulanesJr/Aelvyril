@@ -60,7 +60,14 @@ describe("useThread", () => {
 
   it("opens the event stream for a live thread", async () => {
     const { inst } = await renderThread("t1");
-    expect(inst.openStream).toHaveBeenCalledWith("t1", expect.any(Function));
+    // (id, onEnvelope, signal=undefined, onLost) — onLost surfaces terminal
+    // stream loss in the error banner (#85).
+    expect(inst.openStream).toHaveBeenCalledWith(
+      "t1",
+      expect.any(Function),
+      undefined,
+      expect.any(Function),
+    );
   });
 
   it("does not open a stream when threadId is null (new thread)", async () => {
@@ -79,6 +86,9 @@ describe("useThread", () => {
 
   it("reduces spec envelopes into state", async () => {
     const { result, inst } = await renderThread();
+    // Before a live spec_status arrives, the initial status must not claim
+    // to be live (#83: the header shows the thread-list snapshot instead).
+    expect(result.current.statusLive).toBe(false);
     await act(async () => {
       inst.onEnvelope!(env("spec_status", { status: "spec'ing" }, 0));
       inst.onEnvelope!(
@@ -103,6 +113,7 @@ describe("useThread", () => {
       inst.onEnvelope!(env("diff", { files: [{ path: "a.ts", patch: "@@" }] }, 3));
     });
     expect(result.current.status).toBe("spec'ing");
+    expect(result.current.statusLive).toBe(true);
     expect(result.current.questions).toHaveLength(1);
     expect(result.current.draft?.goal).toBe("g");
     expect(result.current.plan).toEqual(["step1"]);
@@ -169,6 +180,19 @@ describe("useThread", () => {
     expect(result.current.waiting).toBe(false);
   });
 
+  it("blocked session_state sets the escalation reason; idle clears it (#84)", async () => {
+    const { result, inst } = await renderThread();
+    await act(async () => {
+      inst.onEnvelope!(env("session_state", { state: "blocked", reason: "capped" }, 0));
+    });
+    expect(result.current.blocked).toBe("capped");
+    expect(result.current.waiting).toBe(false);
+    await act(async () => {
+      inst.onEnvelope!(env("session_state", { state: "idle" }, 1));
+    });
+    expect(result.current.blocked).toBeNull();
+  });
+
   it("error envelopes set a dismissable error", async () => {
     const { result, inst } = await renderThread();
     await act(async () => {
@@ -179,5 +203,23 @@ describe("useThread", () => {
       result.current.dismissError();
     });
     expect(result.current.error).toBeNull();
+  });
+
+  it("usage envelopes accumulate the cost/token signal (#84)", async () => {
+    const { result, inst } = await renderThread();
+    expect(result.current.usage).toBeNull();
+    await act(async () => {
+      inst.onEnvelope!(
+        env(
+          "usage",
+          { tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 }, cost: 0.0042 },
+          0,
+        ),
+      );
+    });
+    expect(result.current.usage).toEqual({
+      tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 },
+      cost: 0.0042,
+    });
   });
 });

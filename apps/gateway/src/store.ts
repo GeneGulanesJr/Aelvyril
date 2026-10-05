@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import type { Conversation, SpecDraft } from "@aelvyril/shared";
+import type { Conversation, SpecDraft, Usage } from "@aelvyril/shared";
 
 interface ConvRow {
   id: string;
@@ -9,6 +9,7 @@ interface ConvRow {
   namespace: string;
   state: string;
   created_at: string;
+  usage: string | null;
 }
 
 export interface NewEvent {
@@ -19,6 +20,17 @@ export interface NewEvent {
 }
 
 export type StoredEvent = NewEvent & { seq: number };
+
+export interface StoreOptions {
+  /** Keep at most this many events per conversation (security review #85:
+   *  the events table grew indefinitely). 0 disables pruning. */
+  eventRetentionPerThread?: number;
+}
+
+/** Security review #85: hard cap on the serialized spec_answers / spec_draft
+ *  blobs. The per-request caps live in the shared PatchSpecBody schema; this
+ *  guards the ACCUMULATED blob (mergeSpecAnswers merges across requests). */
+export const SPEC_BLOB_MAX_CHARS = 512_000;
 
 /**
  * Idempotent schema migrations: table creation + column backfills.
@@ -67,15 +79,34 @@ export function runMigrations(db: Database.Database): void {
   if (!names.has("spec_answers")) {
     db.exec("ALTER TABLE conversations ADD COLUMN spec_answers TEXT");
   }
+  // #84: cumulative cost/token usage per thread (JSON blob).
+  if (!names.has("usage")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN usage TEXT");
+  }
+  // #83: durable prompt queue — prompts enqueued when the user is at their
+  // running-host cap; the background runner starts them when a slot frees.
+  // Survives gateway restarts (execution is decoupled from any viewer).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS prompt_queue(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id TEXT NOT NULL,
+      namespace TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_prompt_queue_namespace ON prompt_queue(namespace)");
 }
 
 export class Store {
   private db: Database.Database;
   private appendTxn: (ev: NewEvent) => StoredEvent;
+  private eventRetentionPerThread: number;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, opts: StoreOptions = {}) {
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
+    this.eventRetentionPerThread = opts.eventRetentionPerThread ?? 10_000;
     runMigrations(this.db);
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_conversations_namespace ON conversations(namespace)",
@@ -94,6 +125,14 @@ export class Store {
           "INSERT INTO events(conversation_id, seq, ts, kind, payload) VALUES(?, ?, ?, ?, ?)",
         )
         .run(ev.conversationId, seq, ev.ts, ev.kind, JSON.stringify(ev.payload));
+      // Retention (#85): prune inside the same transaction so the events table
+      // stays bounded per conversation. Indexed range delete; usually matches
+      // 0 rows.
+      if (this.eventRetentionPerThread > 0) {
+        this.db
+          .prepare("DELETE FROM events WHERE conversation_id = ? AND seq <= ?")
+          .run(ev.conversationId, seq - this.eventRetentionPerThread);
+      }
       return { ...ev, seq };
     });
   }
@@ -111,7 +150,7 @@ export class Store {
       )
       .run(id, input.title ?? null, input.workspace ?? null, input.namespace, createdAt);
     // namespace is internal routing, not exposed on the public DTO.
-    return { id, title: input.title ?? null, workspace: input.workspace ?? null, state: "idle", createdAt };
+    return { id, title: input.title ?? null, workspace: input.workspace ?? null, state: "idle", createdAt, usage: null };
   }
 
   renameConversation(id: string, namespace: string, title: string): void {
@@ -140,26 +179,34 @@ export class Store {
   }
 
   /** Merge answers into the spec_answers blob. Returns false if the thread
-   *  doesn't exist under this namespace (cross-tenant writes are no-ops). */
-  mergeSpecAnswers(id: string, namespace: string, answers: Record<string, string>): boolean {
+   *  doesn't exist under this namespace (cross-tenant writes are no-ops),
+   *  or "too_large" when the merged blob would exceed the cap (#85). */
+  mergeSpecAnswers(
+    id: string,
+    namespace: string,
+    answers: Record<string, string>,
+  ): boolean | "too_large" {
     const spec = this.getThreadSpec(id, namespace);
     if (!spec) return false;
     const merged = { ...spec.specAnswers, ...answers };
+    const serialized = JSON.stringify(merged);
+    if (serialized.length > SPEC_BLOB_MAX_CHARS) return "too_large";
     this.db
       .prepare("UPDATE conversations SET spec_answers = ? WHERE id = ? AND namespace = ?")
-      .run(JSON.stringify(merged), id, namespace);
+      .run(serialized, id, namespace);
     return true;
   }
 
   /** Patch one SpecDraft field, auto-initializing an empty draft on first
    *  edit (the UI may let the user draft before the agent emits one).
-   *  Returns false if the thread doesn't exist under this namespace. */
+   *  Returns false if the thread doesn't exist under this namespace, or
+   *  "too_large" when the resulting draft would exceed the cap (#85). */
   patchSpecDraft(
     id: string,
     namespace: string,
     field: "goal" | "filesAffected" | "plan" | "risks",
     value: string | string[],
-  ): boolean {
+  ): boolean | "too_large" {
     const spec = this.getThreadSpec(id, namespace);
     if (!spec) return false;
     const draft: SpecDraft = spec.specDraft ?? {
@@ -171,9 +218,11 @@ export class Store {
       answers: {},
     };
     const patched = { ...draft, [field]: value };
+    const serialized = JSON.stringify(patched);
+    if (serialized.length > SPEC_BLOB_MAX_CHARS) return "too_large";
     this.db
       .prepare("UPDATE conversations SET spec_draft = ? WHERE id = ? AND namespace = ?")
-      .run(JSON.stringify(patched), id, namespace);
+      .run(serialized, id, namespace);
     return true;
   }
 
@@ -230,6 +279,79 @@ export class Store {
     this.db.prepare("UPDATE conversations SET state = ? WHERE id = ?").run(state, id);
   }
 
+  /** #84: persist the latest cumulative session usage. pi's SessionStats
+   *  are cumulative per session file, so "latest observed" IS the thread
+   *  total (session resume keeps counting from where it left off). */
+  recordUsage(id: string, usage: Usage): void {
+    this.db.prepare("UPDATE conversations SET usage = ? WHERE id = ?").run(JSON.stringify(usage), id);
+  }
+
+  /** #83: lifecycle status for a thread, or null if the id/namespace pair
+   *  has no row. */
+  getThreadStatus(id: string, namespace: string): string | null {
+    const row = this.db
+      .prepare("SELECT status FROM conversations WHERE id = ? AND namespace = ?")
+      .get(id, namespace) as { status: string } | undefined;
+    return row?.status ?? null;
+  }
+
+  // --- #83: durable prompt queue -------------------------------------
+
+  enqueuePrompt(input: { conversationId: string; namespace: string; message: string }): void {
+    this.db
+      .prepare(
+        "INSERT INTO prompt_queue(conversation_id, namespace, message, created_at) VALUES(?, ?, ?, ?)",
+      )
+      .run(input.conversationId, input.namespace, input.message, new Date().toISOString());
+  }
+
+  /** Namespaces with queued work, oldest item first — one namespace gets a
+   *  slot per runner pass before a busy one hogs the runner. */
+  listQueuedNamespaces(): string[] {
+    return (
+      this.db
+        .prepare("SELECT namespace FROM prompt_queue GROUP BY namespace ORDER BY MIN(id) ASC")
+        .all() as Array<{ namespace: string }>
+    ).map((r) => r.namespace);
+  }
+
+  /** Pop the oldest queued prompt for a namespace (transactional read+delete).
+   *  Returns null when the queue for that namespace is empty. */
+  dequeueOldestPrompt(namespace: string): { conversationId: string; message: string } | null {
+    const txn = this.db.transaction((): { conversationId: string; message: string } | null => {
+      const row = this.db
+        .prepare("SELECT id, conversation_id, message FROM prompt_queue WHERE namespace = ? ORDER BY id ASC LIMIT 1")
+        .get(namespace) as { id: number; conversation_id: string; message: string } | undefined;
+      if (!row) return null;
+      this.db.prepare("DELETE FROM prompt_queue WHERE id = ?").run(row.id);
+      return { conversationId: row.conversation_id, message: row.message };
+    });
+    return txn();
+  }
+
+  countQueued(namespace: string): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n FROM prompt_queue WHERE namespace = ?")
+      .get(namespace) as { n: number };
+    return row.n;
+  }
+
+  deleteQueuedForNamespace(namespace: string): void {
+    this.db.prepare("DELETE FROM prompt_queue WHERE namespace = ?").run(namespace);
+  }
+
+  /** #83 (2nd review): abandon/delete must drop the thread's own queued
+   *  prompt, or the runner dequeues it later and resurrects the thread. */
+  deleteQueuedForConversation(conversationId: string): void {
+    this.db.prepare("DELETE FROM prompt_queue WHERE conversation_id = ?").run(conversationId);
+  }
+
+  /** #83: hosts die with the gateway process; rows still marked streaming
+   *  after a restart are stale. Called once at boot. */
+  markStaleStreamingDegraded(): void {
+    this.db.prepare("UPDATE conversations SET state = 'degraded' WHERE state = 'streaming'").run();
+  }
+
   /** Spec §10: total conversations for a namespace — used for the cap check. */
   countConversations(namespace: string): number {
     const row = this.db
@@ -250,12 +372,18 @@ export class Store {
     return this.appendTxn(ev);
   }
 
-  getEventsSince(conversationId: string, sinceSeq: number): StoredEvent[] {
+  getEventsSince(conversationId: string, sinceSeq: number, limit?: number): StoredEvent[] {
+    // LIMIT bounds the replay page (#85): the SSE route reconnects the client
+    // with Last-Event-ID instead of loading the whole backlog into one array.
+    const sql =
+      "SELECT * FROM events WHERE conversation_id = ? AND seq > ? ORDER BY seq ASC" +
+      (Number.isFinite(limit) && limit !== undefined && limit > 0 ? " LIMIT ?" : "");
+    const args = Number.isFinite(limit) && limit !== undefined && limit > 0
+      ? [conversationId, sinceSeq, limit]
+      : [conversationId, sinceSeq];
     const rows = this.db
-      .prepare(
-        "SELECT * FROM events WHERE conversation_id = ? AND seq > ? ORDER BY seq ASC",
-      )
-      .all(conversationId, sinceSeq) as Array<{
+      .prepare(sql)
+      .all(...args) as Array<{
       conversation_id: string;
       seq: number;
       ts: string;
@@ -282,6 +410,7 @@ export class Store {
       workspace: r.workspace,
       state: r.state as Conversation["state"],
       createdAt: r.created_at,
+      usage: r.usage ? (JSON.parse(r.usage) as Usage) : null,
     };
   }
 }

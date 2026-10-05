@@ -1,30 +1,34 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EventBus } from "./bus.js";
 import { Store } from "./store.js";
-import { Supervisor } from "./supervisor.js";
+import { Supervisor, type SupervisorOptions } from "./supervisor.js";
 import type { EventEnvelope } from "@aelvyril/shared";
 
 const fakePi = fileURLToPath(new URL("../fixtures/fake-pi.mjs", import.meta.url));
 
-function makeSupervisor() {
+function makeSupervisor(opts: Partial<SupervisorOptions> = {}) {
   const store = new Store(":memory:");
   const bus = new EventBus(store);
+  const children: ChildProcess[] = [];
   const supervisor = new Supervisor({
     bus,
     store,
     spawnChild: (conversationId, extraEnv) => {
       void conversationId;
       void extraEnv;
-      return spawn(process.execPath, [fakePi]);
+      const child = spawn(process.execPath, [fakePi]);
+      children.push(child);
+      return child;
     },
     idleMs: 60_000,
+    ...opts,
   });
-  return { store, bus, supervisor };
+  return { store, bus, supervisor, children };
 }
 
 describe("Supervisor", () => {
@@ -74,17 +78,34 @@ describe("Supervisor", () => {
       .map((e) => (e.payload as { delta: string }).delta)
       .join("");
     expect(deltas).toBe("Hello, world!");
+    // #84: usage is harvested at settle (fake-pi's get_session_stats) and
+    // lands both on the bus and in the store.
+    await vi.waitFor(() => {
+      expect(seen.some((e) => e.kind === "usage")).toBe(true);
+    });
+    const usageEnv = seen.find((e) => e.kind === "usage")!;
+    expect(usageEnv.payload).toEqual({
+      tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 },
+      cost: 0.0042,
+    });
+    expect(store.getConversation(conv.id, "platform")?.usage).toEqual({
+      tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 },
+      cost: 0.0042,
+    });
   });
 
   it("marks degraded when the child dies, then recovers on next prompt", async () => {
-    const { store, supervisor } = makeSupervisor();
+    const { store, supervisor, children } = makeSupervisor();
     s = supervisor;
     const conv = store.createConversation({ namespace: "platform" });
     await supervisor.prompt(conv.id, "hi"); // accepted; turn settles async
     await vi.waitFor(() => {
       expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
     });
-    supervisor.killChild(conv.id); // simulate crash
+    // Simulate a crash: SIGKILL the child from the outside. (killChild is
+    // the gateway's INTENTIONAL kill — delete/abandon — and no longer
+    // publishes degraded since #85.)
+    children[0]!.kill("SIGKILL");
     await vi.waitFor(() => {
       expect(store.getConversation(conv.id, "platform")?.state).toBe("degraded");
     });
@@ -93,6 +114,33 @@ describe("Supervisor", () => {
     await vi.waitFor(() => {
       expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
     });
+  });
+
+  it("re-prompting after killChild lifts the dead mark so events flow again (2nd review)", async () => {
+    const { store, bus, supervisor } = makeSupervisor();
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    await supervisor.prompt(conv.id, "hi");
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
+    });
+    // abandon route semantics: intentional kill.
+    supervisor.killChild(conv.id);
+    // Wait for the killed host's exit to fire (dead lifted there), then
+    // re-prompt. Before the fix, the dead set permanently silenced the
+    // respawned host: no deltas, and agent_settled was dropped so the
+    // thread stayed "streaming" forever.
+    await vi.waitFor(() => {
+      expect(supervisor.has(conv.id)).toBe(false);
+    });
+    const eventsBefore = store.getEventsSince(conv.id, -1).length;
+    expect(await supervisor.prompt(conv.id, "round two")).toBe(true);
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
+    });
+    const kinds = bus.replay(conv.id, eventsBefore - 1).map((e) => e.kind);
+    expect(kinds).toContain("text_delta");
+    expect(kinds).toContain("session_state"); // idle — agent_settled not dropped
   });
 
   it("replays nothing for a fresh conversation", () => {
@@ -124,19 +172,22 @@ describe("Supervisor", () => {
 
   // Spec §6 + §10: workspace plumbs through to spawn cwd; respawn after a
   // crash reuses the same cwd so pi finds its prior session file on disk.
-  it("spawns session host with conversation.workspace as cwd, and reuses it after kill", async () => {
+  it("spawns session host with conversation.workspace as cwd, and reuses it after a crash", async () => {
     const dir = mkdtempSync(join(tmpdir(), "aelvyril-ws-"));
     tmpDirs.push(dir);
     const store = new Store(":memory:");
     const conv = store.createConversation({ workspace: dir, namespace: "platform" });
     const spawnCalls: Array<{ cwd: string | undefined; env: Record<string, string> }> = [];
+    const children: ChildProcess[] = [];
     const bus = new EventBus(store);
     const supervisor = new Supervisor({
       bus,
       store,
       spawnChild: (_cid, extraEnv, cwd) => {
         spawnCalls.push({ cwd: cwd ?? undefined, env: { ...extraEnv } });
-        return spawn(process.execPath, [fakePi], { cwd, env: { ...process.env, ...extraEnv } });
+        const child = spawn(process.execPath, [fakePi], { cwd, env: { ...process.env, ...extraEnv } });
+        children.push(child);
+        return child;
       },
       idleMs: 60_000,
     });
@@ -146,7 +197,8 @@ describe("Supervisor", () => {
     await vi.waitFor(() => {
       expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
     });
-    supervisor.killChild(conv.id);
+    // External crash (not killChild — see the degraded-on-crash test above).
+    children[0]!.kill("SIGKILL");
     await vi.waitFor(() => {
       expect(store.getConversation(conv.id, "platform")?.state).toBe("degraded");
     });
@@ -180,5 +232,92 @@ describe("Supervisor", () => {
     await supervisor.prompt(conv.id, "hi");
     expect(spawnCalls).toHaveLength(1);
     expect(spawnCalls[0]!.cwd).toBeUndefined();
+  });
+
+  it("auto-responds cancelled to pi dialog requests so headless runs settle (#84)", async () => {
+    process.env.FAKE_UI_DIALOG = "1";
+    try {
+      const { store, bus, supervisor } = makeSupervisor();
+      s = supervisor;
+      const conv = store.createConversation({ namespace: "platform" });
+      const seen: EventEnvelope[] = [];
+      bus.subscribe(conv.id, (e) => seen.push(e));
+      await supervisor.prompt(conv.id, "hi");
+      // The ack (custom envelope) proves the gateway actually wrote the
+      // extension_ui_response back to the child.
+      await vi.waitFor(() => {
+        expect(
+          seen.some(
+            (e) =>
+              e.kind === "custom" &&
+              (e.payload as { type?: string }).type === "custom_ui_response_received",
+          ),
+        ).toBe(true);
+      });
+      const dialog = seen.find((e) => e.kind === "dialog");
+      expect(dialog?.payload).toMatchObject({
+        method: "confirm",
+        title: "Allow project agents?",
+        action: "auto_cancelled",
+      });
+      // The dialog did not hang or block the run.
+      await vi.waitFor(() => {
+        expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
+      });
+    } finally {
+      delete process.env.FAKE_UI_DIALOG;
+    }
+  });
+
+  it("dialogMode=blocked escalates blocking dialogs to the needs-you state (#84)", async () => {
+    process.env.FAKE_UI_DIALOG = "1";
+    try {
+      const { store, bus, supervisor } = makeSupervisor({ dialogMode: "blocked" });
+      s = supervisor;
+      const conv = store.createConversation({ namespace: "platform" });
+      const seen: EventEnvelope[] = [];
+      bus.subscribe(conv.id, (e) => seen.push(e));
+      await supervisor.prompt(conv.id, "hi");
+      await vi.waitFor(() => {
+        expect(store.getConversation(conv.id, "platform")?.state).toBe("blocked");
+      });
+      const dialog = seen.find((e) => e.kind === "dialog");
+      expect(dialog?.payload).toMatchObject({ method: "confirm", action: "blocked" });
+      const blockedState = seen.find(
+        (e) => e.kind === "session_state" && (e.payload as { state?: string }).state === "blocked",
+      );
+      expect(blockedState?.payload).toMatchObject({ state: "blocked", reason: "dialog" });
+      // The mock now holds the turn open like real pi (no answer is coming
+      // in blocked mode), so nothing settles over the escalation. This is
+      // the exact race CI caught when the mock kept streaming: agent_settled
+      // marked the thread idle and erased the blocked state.
+      await new Promise((r) => setTimeout(r, 400));
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("blocked");
+      expect(
+        seen.some(
+          (e) => e.kind === "session_state" && (e.payload as { state?: string }).state === "idle",
+        ),
+      ).toBe(false);
+    } finally {
+      delete process.env.FAKE_UI_DIALOG;
+    }
+  });
+
+  it("crossing the per-thread cost cap blocks the thread (#84)", async () => {
+    const { store, bus, supervisor } = makeSupervisor({ maxCostPerThreadUsd: 0.001 });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    const seen: EventEnvelope[] = [];
+    bus.subscribe(conv.id, (e) => seen.push(e));
+    await supervisor.prompt(conv.id, "hi");
+    // fake-pi reports cost 0.0042 > 0.001 cap → blocked/capped at harvest.
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("blocked");
+    });
+    const blockedState = seen.find(
+      (e) => e.kind === "session_state" && (e.payload as { state?: string }).state === "blocked",
+    );
+    expect(blockedState?.payload).toMatchObject({ state: "blocked", reason: "capped" });
+    expect(store.getConversation(conv.id, "platform")?.usage?.cost).toBe(0.0042);
   });
 });

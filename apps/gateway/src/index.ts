@@ -12,7 +12,12 @@ const useFakeChild = process.env.PI_FAKE === "1";
  */
 function resolveVerifier(): TokenVerifier {
   const secretKey = process.env.CLERK_SECRET_KEY;
-  if (secretKey) return createClerkVerifier(secretKey);
+  // #85: pin the token azp to the expected origins when configured
+  // (comma-separated, e.g. "http://localhost:3000,https://app.example.com").
+  const authorizedParties = process.env.CLERK_AUTHORIZED_PARTIES?.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (secretKey) return createClerkVerifier(secretKey, authorizedParties);
   if (useFakeChild) {
     // Dev-only: any bearer token is accepted; the token IS the user id.
     return async (token) => ({ userId: token });
@@ -48,6 +53,40 @@ const app = await buildApp({
   logger: process.env.GATEWAY_LOG !== "silent",
   // SSE keepalive — operators may want to tune for proxy timeouts.
   sseHeartbeatMs: process.env.SSE_HEARTBEAT_MS ? Number(process.env.SSE_HEARTBEAT_MS) : undefined,
+  // Security review #85 caps: SSE streams per user, replay page size,
+  // event-log retention per thread.
+  maxSseStreamsPerUser: process.env.GATEWAY_MAX_SSE_STREAMS
+    ? Number(process.env.GATEWAY_MAX_SSE_STREAMS)
+    : undefined,
+  sseReplayPageSize: process.env.GATEWAY_SSE_REPLAY_PAGE
+    ? Number(process.env.GATEWAY_SSE_REPLAY_PAGE)
+    : undefined,
+  eventRetentionPerThread: process.env.GATEWAY_EVENT_RETENTION
+    ? Number(process.env.GATEWAY_EVENT_RETENTION)
+    : undefined,
+  // #85: optional bearer secret gating /metrics for direct exposure.
+  metricsSecret: process.env.GATEWAY_METRICS_SECRET,
+  // #84: per-thread budget in USD (cost cap → blocked + refused prompts).
+  maxCostPerThreadUsd: process.env.GATEWAY_MAX_THREAD_COST_USD
+    ? Number(process.env.GATEWAY_MAX_THREAD_COST_USD)
+    : undefined,
+  // #84: extension_ui_request handling — "auto-responder" (default) or
+  // "blocked" (escalate blocking dialogs to the needs-you state).
+  dialogMode:
+    process.env.GATEWAY_DIALOG_MODE === "blocked" ? ("blocked" as const) : ("auto-responder" as const),
+  // #83: long-horizon execution caps — cheap threads vs scarce hosts.
+  maxConversationsPerUser: process.env.GATEWAY_MAX_THREADS
+    ? Number(process.env.GATEWAY_MAX_THREADS)
+    : undefined,
+  maxRunningHostsPerUser: process.env.GATEWAY_MAX_RUNNING_HOSTS
+    ? Number(process.env.GATEWAY_MAX_RUNNING_HOSTS)
+    : undefined,
+  maxSessionHosts: process.env.GATEWAY_MAX_SESSION_HOSTS
+    ? Number(process.env.GATEWAY_MAX_SESSION_HOSTS)
+    : undefined,
+  queueIntervalMs: process.env.GATEWAY_QUEUE_INTERVAL_MS
+    ? Number(process.env.GATEWAY_QUEUE_INTERVAL_MS)
+    : undefined,
 });
 
 // Default to dual-stack ("::" accepts IPv4-mapped too) so `localhost` resolves

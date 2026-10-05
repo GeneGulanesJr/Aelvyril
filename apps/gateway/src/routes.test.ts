@@ -214,6 +214,139 @@ describe("v1 routes", () => {
     expect(stillThere.statusCode).toBe(200);
   });
 
+  it("DELETE kills the live session host (#85)", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    const conv = (await (await u1.post("/v1/threads", { title: "bye" })).json()) as { id: string };
+    const prompt = await u1.post(`/v1/threads/${conv.id}/prompt`, { message: "hi" });
+    expect(prompt.statusCode).toBe(202);
+    await vi.waitFor(async () => {
+      const one = await u1.get(`/v1/threads/${conv.id}`);
+      expect((one.json() as { state: string }).state).toBe("idle");
+    });
+    // Host is alive after the turn settles.
+    const before = await app.inject({ method: "GET", url: "/metrics" });
+    expect(before.body).toContain("aelvyril_active_session_hosts 1");
+    // DELETE must SIGKILL the host (exit decrements the gauge) instead of
+    // leaving an orphan publisher behind.
+    const del = await app.inject({
+      method: "DELETE",
+      url: `/v1/threads/${conv.id}`,
+      headers: { authorization: `Bearer good` },
+    });
+    expect(del.statusCode).toBe(204);
+    const a = app;
+    await vi.waitFor(async () => {
+      const after = await a.inject({ method: "GET", url: "/metrics" });
+      expect(after.body).toContain("aelvyril_active_session_hosts 0");
+    });
+  });
+
+  it("refuses prompts past the per-thread cost cap with 403 (#84)", async () => {
+    app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      maxCostPerThreadUsd: 0.001, // fake-pi reports 0.0042 → capped
+    });
+    const u1 = authed(app, "good");
+    const conv = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const first = await u1.post(`/v1/threads/${conv.id}/prompt`, { message: "hi" });
+    expect(first.statusCode).toBe(202);
+    // Wait for the harvest to persist usage + the blocked state.
+    await vi.waitFor(async () => {
+      const one = await u1.get(`/v1/threads/${conv.id}`);
+      expect((one.json() as { state: string }).state).toBe("blocked");
+    });
+    const second = await u1.post(`/v1/threads/${conv.id}/prompt`, { message: "again" });
+    expect(second.statusCode).toBe(403);
+    expect(second.json().error).toBe("cost_cap_reached");
+    expect((second.json() as { cap: number }).cap).toBe(0.001);
+  });
+
+  it("POST /v1/threads/kill-all abandons every live thread for the user (#84)", async () => {
+    // File-backed db so the test can read the status column directly (the
+    // conversation DTO predates Thread.status and doesn't expose it).
+    const dbFile = join(tmpdir(), `aelvyril-killall-${randomUUID()}.db`);
+    // Slow the fake child's deltas so a prompted turn is mid-stream (not
+    // yet settled) when the switch is pulled — no timing race.
+    process.env.FAKE_DELAY_MS = "300";
+    try {
+      app = await buildApp({
+        dbPath: dbFile,
+        childCommand: process.execPath,
+        childArgs: [fakePi],
+        idleMs: 60_000,
+        verifyToken: testVerifier,
+      });
+      const u1 = authed(app, "good");
+      const live = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+      const idle = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+      await u1.post(`/v1/threads/${live.id}/prompt`, { message: "hi" });
+      const a = app;
+      // The slowed fake turn takes ~1.3s (FAKE_DELAY_MS) — past the 1s
+      // vi.waitFor default, so give it an explicit bound.
+      await vi.waitFor(
+        async () => {
+          const one = await u1.get(`/v1/threads/${live.id}`);
+          expect((one.json() as { state: string }).state).toBe("idle");
+        },
+        { timeout: 10_000 },
+      );
+
+      const res = await a.inject({
+        method: "POST",
+        url: "/v1/threads/kill-all",
+        headers: { authorization: "Bearer good" },
+      });
+      // The thread already settled (state idle) — the kill switch only takes
+      // down threads that are live (streaming/blocked). Nothing to do here.
+      expect(res.json()).toEqual({ abandoned: 0 });
+
+      // Make it live again, then pull the switch mid-stream. The gauge wait
+      // is deterministic: the host stays alive ≥ idleMs after settling.
+      await u1.post(`/v1/threads/${live.id}/prompt`, { message: "hi again" });
+      await vi.waitFor(async () => {
+        const m = await a.inject({ method: "GET", url: "/metrics" });
+        expect(m.body).toContain("aelvyril_active_session_hosts 1");
+      });
+      const kill = await a.inject({
+        method: "POST",
+        url: "/v1/threads/kill-all",
+        headers: { authorization: "Bearer good" },
+      });
+      expect(kill.json()).toEqual({ abandoned: 1 });
+      const db = new Database(dbFile);
+      try {
+        expect(
+          (db.prepare("SELECT status, state FROM conversations WHERE id = ?").get(live.id) as { status: string; state: string }),
+        ).toEqual({ status: "abandoned", state: "idle" });
+        expect(
+          (db.prepare("SELECT status FROM conversations WHERE id = ?").get(idle.id) as { status: string }).status,
+        ).toBe("draft");
+      } finally {
+        db.close();
+      }
+      // Host killed: gauge drains to zero.
+      await vi.waitFor(async () => {
+        const m = await a.inject({ method: "GET", url: "/metrics" });
+        expect(m.body).toContain("aelvyril_active_session_hosts 0");
+      });
+      // Unauthenticated callers can't pull it.
+      const bare = await a.inject({ method: "POST", url: "/v1/threads/kill-all" });
+      expect(bare.statusCode).toBe(401);
+    } finally {
+      delete process.env.FAKE_DELAY_MS;
+      try {
+        rmSync(dbFile, { force: true });
+      } catch {
+        // Windows can briefly hold the file handle after close
+      }
+    }
+  });
+
   // Spec §10: per-user rate limit on /v1/threads/:id/prompt.
   // Uses a deterministic 1-token-capacity limiter with no refill — the
   // second prompt from the same user in the same test must trip it.
@@ -252,9 +385,18 @@ describe("v1 routes", () => {
     expect(second.json()).toEqual({ error: "rate_limited" });
   });
 
-  // Spec §10: per-user concurrent-conversation cap (v1: 3/user).
-  it("caps total conversations per user at 3 (503 + limit field on the 4th)", async () => {
-    app = await makeApp();
+  // Spec §10: per-user concurrent-conversation cap. #83 raised the DEFAULT
+  // to 30 (threads are cheap rows; hosts are the real limit) — this test
+  // pins the mechanism with an explicit low cap.
+  it("caps total conversations per user at the configured limit (503 + limit field)", async () => {
+    app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      maxConversationsPerUser: 3,
+    });
     const u1 = authed(app, "good");
     await u1.post("/v1/threads", { title: "1" });
     await u1.post("/v1/threads", { title: "2" });
@@ -266,6 +408,15 @@ describe("v1 routes", () => {
     const u2 = authed(app, "good2");
     const u2first = await u2.post("/v1/threads", { title: "u2-1" });
     expect(u2first.statusCode).toBe(201);
+  });
+
+  it("defaults the thread cap to 30 (threads are cheap, hosts are not — #83)", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    for (let i = 0; i < 4; i++) {
+      const res = await u1.post("/v1/threads", { title: `t${i}` });
+      expect(res.statusCode).toBe(201);
+    }
   });
 
   // Spec §11: every response carries X-Request-Id. The web client + reverse
@@ -280,6 +431,51 @@ describe("v1 routes", () => {
     expect(r1.headers["x-request-id"]).not.toEqual(r2.headers["x-request-id"]);
     // 8-char random base36: matches the genReqId implementation.
     expect(r1.headers["x-request-id"]).toMatch(/^[a-z0-9]{8}$/);
+  });
+
+  it("echoes a sanitized client x-request-id and refuses unsafe ones (#85)", async () => {
+    app = await makeApp();
+    const safe = await app.inject({
+      method: "GET",
+      url: "/healthz",
+      headers: { "x-request-id": "abc-123_DEF:4.5" },
+    });
+    expect(safe.headers["x-request-id"]).toBe("abc-123_DEF:4.5");
+    // Newline (log injection) and over-length ids are replaced, not echoed.
+    const injected = await app.inject({
+      method: "GET",
+      url: "/healthz",
+      headers: { "x-request-id": "evil\ninjected" },
+    });
+    expect(injected.headers["x-request-id"]).toMatch(/^[a-z0-9]{8}$/);
+    const tooLong = await app.inject({
+      method: "GET",
+      url: "/healthz",
+      headers: { "x-request-id": "a".repeat(65) },
+    });
+    expect(tooLong.headers["x-request-id"]).toMatch(/^[a-z0-9]{8}$/);
+  });
+
+  it("401s the 302 aliases without auth and 400s an unsafe :id (#85)", async () => {
+    app = await makeApp();
+    const bare = await app.inject({ method: "GET", url: "/v1/conversations" });
+    expect(bare.statusCode).toBe(401);
+    const bareId = await app.inject({
+      method: "GET",
+      url: "/v1/conversations/some-id/events",
+    });
+    expect(bareId.statusCode).toBe(401);
+    const u1 = authed(app, "good");
+    const bad = await u1.get(`/v1/conversations/${encodeURIComponent("bad id\n")}/events`);
+    expect(bad.statusCode).toBe(400);
+  });
+
+  it("redirects an authenticated alias with the id percent-encoded (#85)", async () => {
+    app = await makeApp();
+    const u1 = authed(app, "good");
+    const res = await u1.get("/v1/conversations/conv_abc-123");
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe("/v1/threads/conv_abc-123");
   });
 });
 
@@ -398,6 +594,33 @@ describe("PATCH /v1/threads/:id/spec", () => {
     expect(res.statusCode).toBe(200);
     const stored = dbGetThread(t.id);
     expect(JSON.parse(stored.spec_answers ?? "{}")).toEqual({ q1: "admin" });
+  });
+
+  it("returns 413 when the accumulated spec blob would exceed the cap (#85)", async () => {
+    const a = await makeAppWithDb();
+    app = a;
+    const u1 = authed(a, "good");
+    const t = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    // Individual values are schema-capped at 10k; the accumulated merge is
+    // what hits the 512k store cap. Two 26-key patches of max-size values
+    // cross it.
+    const big = "x".repeat(10_000);
+    const patch = (offset: number) =>
+      a.inject({
+        method: "PATCH",
+        url: `/v1/threads/${t.id}/spec`,
+        headers: { authorization: "Bearer good", "content-type": "application/json" },
+        payload: {
+          kind: "answer",
+          answers: Object.fromEntries(
+            Array.from({ length: 26 }, (_, i) => [`k${offset + i}`, big]),
+          ),
+        },
+      });
+    expect((await patch(0)).statusCode).toBe(200);
+    const over = await patch(26);
+    expect(over.statusCode).toBe(413);
+    expect(over.json().error).toBe("spec_too_large");
   });
 
   it("applies an edit patch and persists the draft field", async () => {
@@ -538,5 +761,161 @@ describe("thread lifecycle routes", () => {
       expect(res.statusCode).toBe(404);
     }
     expect(threadStatus(t.id)).toBe("spec'ing");
+  });
+});
+
+describe("durable prompt queue (#83)", () => {
+  let app: App | undefined;
+  afterEach(async () => app && (await app.close()));
+
+  function makeQueueApp(
+    dbPath: string,
+    maxRunningHostsPerUser: number,
+    queueIntervalMs: number,
+  ) {
+    return buildApp({
+      dbPath,
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      maxRunningHostsPerUser,
+      queueIntervalMs,
+    });
+  }
+
+  it("queues prompts at the running-host cap and refuses duplicates", async () => {
+    // Cap 0: every non-steer prompt queues; the long interval keeps the
+    // runner out of this test's assertions.
+    app = await makeQueueApp(":memory:", 0, 3_600_000);
+    const u1 = authed(app, "good");
+    const t1 = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const t2 = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+
+    const p1 = await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "first" });
+    expect(p1.statusCode).toBe(202);
+    expect(p1.json()).toEqual({ accepted: true, queued: true });
+    const p2 = await u1.post(`/v1/threads/${t2.id}/prompt`, { message: "second" });
+    expect(p2.json()).toEqual({ accepted: true, queued: true });
+
+    // A second non-steer prompt on an already-queued thread is a 409.
+    const dup = await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "dup" });
+    expect(dup.statusCode).toBe(409);
+    expect(dup.json()).toEqual({ error: "already_queued" });
+  });
+
+  it("survives a restart: the next process's runner drains the queue", async () => {
+    const dbFile = join(tmpdir(), `aelvyril-queue-${randomUUID()}.db`);
+    try {
+      // Phase 1: enqueue two prompts with the runner effectively stopped.
+      const app1 = await makeQueueApp(dbFile, 0, 3_600_000);
+      const u1 = authed(app1, "good");
+      const t1 = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+      const t2 = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+      await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "one" });
+      await u1.post(`/v1/threads/${t2.id}/prompt`, { message: "two" });
+      await app1.close();
+
+      // Phase 2: a fresh gateway with a free host slot and a fast runner.
+      app = await makeQueueApp(dbFile, 1, 10);
+      const u2 = authed(app, "good");
+      const a = app;
+      // Both threads were ALREADY state "idle" (nothing ran in phase 1), so
+      // poll the status column directly: the runner flips queued → running
+      // when it dequeues, and the settled turn leaves state idle. Two node
+      // spawns + turns can take seconds on a loaded machine (full-suite
+      // parallel runs) — give the waitFor a generous bound.
+      await vi.waitFor(
+        () => {
+          const db = new Database(dbFile);
+          try {
+            const rows = db
+              .prepare("SELECT id, status, state FROM conversations WHERE id IN (?, ?)")
+              .all(t1.id, t2.id) as Array<{ id: string; status: string; state: string }>;
+            for (const r of rows) {
+              expect(r.status).toBe("running");
+              expect(r.state).toBe("idle");
+            }
+          } finally {
+            db.close();
+          }
+        },
+        { timeout: 20_000 },
+      );
+      void a;
+      // Queue fully drained: a new prompt with a free host slot goes live
+      // (no `queued` in the response, no 409 from stale queue rows).
+      const again = await u2.post(`/v1/threads/${t1.id}/prompt`, { message: "three" });
+      expect(again.statusCode).toBe(202);
+      expect(again.json()).toEqual({ accepted: true });
+    } finally {
+      try {
+        rmSync(dbFile, { force: true });
+      } catch {
+        // Windows can briefly hold the file handle after close
+      }
+    }
+  });
+
+  it("kill-all drops queued work and abandons queued threads", async () => {
+    app = await makeQueueApp(":memory:", 0, 3_600_000);
+    const u1 = authed(app, "good");
+    const t1 = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "queued work" });
+    const kill = await app.inject({
+      method: "POST",
+      url: "/v1/threads/kill-all",
+      headers: { authorization: "Bearer good" },
+    });
+    expect(kill.json()).toEqual({ abandoned: 1 });
+    // The queue was dropped: the thread is no longer "queued" (no 409), and
+    // with the cap still 0 the new prompt queues fresh.
+    const reprompt = await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "again" });
+    expect(reprompt.statusCode).toBe(202);
+    expect(reprompt.json()).toEqual({ accepted: true, queued: true });
+  });
+
+  it("abandon drops the thread's queued prompt (runner must not resurrect it, 2nd review)", async () => {
+    app = await makeQueueApp(":memory:", 0, 3_600_000);
+    const u1 = authed(app, "good");
+    const t1 = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const queued = await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "queued work" });
+    expect(queued.json()).toEqual({ accepted: true, queued: true });
+    const abandon = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${t1.id}/abandon`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(abandon.statusCode).toBe(200);
+    // The queued row was dropped with the thread: a new prompt queues fresh
+    // instead of 409 already_queued, and the long runner interval guarantees
+    // the abandoned thread is never started behind our backs.
+    const reprompt = await u1.post(`/v1/threads/${t1.id}/prompt`, { message: "again" });
+    expect(reprompt.statusCode).toBe(202);
+    expect(reprompt.json()).toEqual({ accepted: true, queued: true });
+  });
+
+  it("boot sweep marks stale streaming rows degraded after a restart", async () => {
+    const dbFile = join(tmpdir(), `aelvyril-sweep-${randomUUID()}.db`);
+    try {
+      const app1 = await makeQueueApp(dbFile, 2, 3_600_000);
+      const u1 = authed(app1, "good");
+      const t1 = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+      // Simulate a host dying with the process: the row is left 'streaming'.
+      const db = new Database(dbFile);
+      db.prepare("UPDATE conversations SET state = 'streaming' WHERE id = ?").run(t1.id);
+      db.close();
+      await app1.close();
+
+      app = await makeQueueApp(dbFile, 2, 3_600_000);
+      const one = await authed(app, "good").get(`/v1/threads/${t1.id}`);
+      expect((one.json() as { state: string }).state).toBe("degraded");
+    } finally {
+      try {
+        rmSync(dbFile, { force: true });
+      } catch {
+        // Windows can briefly hold the file handle after close
+      }
+    }
   });
 });

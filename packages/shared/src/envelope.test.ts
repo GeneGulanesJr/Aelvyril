@@ -73,7 +73,96 @@ describe("EventEnvelope", () => {
       "spec_draft",
       "spec_status",
       "diff",
+      "custom",
+      "usage",
+      "dialog",
     ]);
+  });
+
+  it("accepts a blocked session_state with a reason (#84)", () => {
+    const parsed = EventEnvelope.parse({
+      ...base,
+      kind: "session_state",
+      payload: { state: "blocked", reason: "capped" },
+    });
+    expect(parsed.payload).toEqual({ state: "blocked", reason: "capped" });
+    // reason is optional; plain states still parse
+    expect(
+      EventEnvelope.safeParse({ ...base, kind: "session_state", payload: { state: "idle" } }).success,
+    ).toBe(true);
+  });
+
+  it("rejects a session_state with an unknown reason (#84)", () => {
+    expect(
+      EventEnvelope.safeParse({
+        ...base,
+        kind: "session_state",
+        payload: { state: "blocked", reason: "because" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts a dialog envelope (#84)", () => {
+    const parsed = EventEnvelope.parse({
+      ...base,
+      kind: "dialog",
+      payload: { method: "confirm", title: "Allow project agents?", action: "auto_cancelled" },
+    });
+    expect(parsed.payload).toEqual({
+      method: "confirm",
+      title: "Allow project agents?",
+      action: "auto_cancelled",
+    });
+  });
+
+  it("accepts a custom envelope with a safe type (#85)", () => {
+    const parsed = EventEnvelope.parse({
+      ...base,
+      kind: "custom",
+      payload: { type: "custom_env_echo", data: { LAPIS_PROJECT_KEY: "user:u" } },
+    });
+    expect(parsed.payload).toEqual({
+      type: "custom_env_echo",
+      data: { LAPIS_PROJECT_KEY: "user:u" },
+    });
+  });
+
+  it("rejects a custom envelope whose type breaks SSE framing (#85)", () => {
+    expect(
+      EventEnvelope.safeParse({
+        ...base,
+        kind: "custom",
+        payload: { type: "evil\nX", data: {} },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts a usage envelope (#84)", () => {
+    const parsed = EventEnvelope.parse({
+      ...base,
+      kind: "usage",
+      payload: {
+        tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 },
+        cost: 0.0042,
+      },
+    });
+    expect(parsed.payload).toEqual({
+      tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 },
+      cost: 0.0042,
+    });
+  });
+
+  it("rejects a usage envelope with negative tokens (#84)", () => {
+    expect(
+      EventEnvelope.safeParse({
+        ...base,
+        kind: "usage",
+        payload: {
+          tokens: { input: -1, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          cost: 0,
+        },
+      }).success,
+    ).toBe(false);
   });
 });
 

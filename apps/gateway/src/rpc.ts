@@ -56,6 +56,11 @@ export class RpcClient extends EventEmitter {
 
   constructor(private child: ChildProcess) {
     super();
+    // Writes race child death (dialog auto-responder, prompts at the moment
+    // of a crash): a write on the destroyed stdin would otherwise surface as
+    // an UNHANDLED 'error' event and take the gateway down. Failures that
+    // matter surface through send()'s timeout/exit rejection instead.
+    child.stdin!.on("error", () => {});
     child.stdout!.on("data", (chunk: Buffer) => {
       for (const msg of this.decoder.push(chunk)) this.handle(msg as RpcMessage);
     });
@@ -83,7 +88,16 @@ export class RpcClient extends EventEmitter {
 
   send(command: Record<string, unknown>, timeoutMs = 10_000): Promise<RpcResponse> {
     const id = `gw_${nextId++}`;
-    const wire = JSON.stringify({ ...command, id }) + "\n";
+    // A command may carry its OWN id that must reach the child verbatim —
+    // extension_ui_response (#84) must echo the request's id, not a
+    // correlation id. Those messages are extension-protocol writes, not
+    // commands: pi sends no RpcResponse for them, so resolve immediately
+    // after the write instead of parking a pending entry until timeout.
+    if (typeof command.id === "string") {
+      this.child.stdin!.write(JSON.stringify(command) + "\n");
+      return Promise.resolve({ type: "response", command: String(command.type), success: true });
+    }
+    const wire = JSON.stringify({ id, ...command }) + "\n";
     return new Promise<RpcResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);

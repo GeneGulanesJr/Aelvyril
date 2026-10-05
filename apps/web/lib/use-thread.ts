@@ -1,10 +1,14 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GatewayClient } from "./api.js";
-import type { EventEnvelope, SpecDraft, SpecQuestion, ThreadStatus } from "@aelvyril/shared";
+import type { EventEnvelope, SpecDraft, SpecQuestion, ThreadStatus, Usage } from "@aelvyril/shared";
 
 export interface ThreadState {
   status: ThreadStatus;
+  /** True once a live spec_status envelope arrived — before that, `status`
+   *  is just the hook's initial value and must not override the thread
+   *  list's snapshot (#83 live header status). */
+  statusLive: boolean;
   questions: SpecQuestion[];
   draft: SpecDraft | null;
   plan: string[];
@@ -13,8 +17,12 @@ export interface ThreadState {
   error: string | null;
   /** Session host died mid-turn — next prompt respawns it (spec §10). */
   degraded: boolean;
+  /** #84: needs-you escalation reason (drives the orange blocked banner). */
+  blocked: "question" | "dialog" | "capped" | null;
   /** A prompt is in flight (drives the Stop button + steer-queued sends). */
   waiting: boolean;
+  /** #84: cumulative cost/token usage for this thread (live via SSE). */
+  usage: Usage | null;
 }
 
 export interface UseThreadDeps {
@@ -39,6 +47,7 @@ export function useThread(
   const { getToken, gatewayUrl } = deps;
   const [state, setState] = useState<ThreadState>({
     status: "draft",
+    statusLive: false,
     questions: [],
     draft: null,
     plan: [],
@@ -46,7 +55,9 @@ export function useThread(
     diff: [],
     error: null,
     degraded: false,
+    blocked: null,
     waiting: false,
+    usage: null,
   });
   const clientRef = useRef<GatewayClient | null>(null);
 
@@ -58,8 +69,22 @@ export function useThread(
     );
     clientRef.current = client;
     // fetch-based SSE (NOT EventSource — it cannot send an Authorization
-    // header); openStream owns reconnect + Last-Event-ID.
-    const close = client.openStream(threadId, (e) => setState((s) => applyEnvelope(s, e)));
+    // header); openStream owns reconnect + Last-Event-ID. A terminal stream
+    // loss (#85: 404 or repeated failures) surfaces in the error banner
+    // instead of an invisible 1s retry loop.
+    const close = client.openStream(
+      threadId,
+      (e) => setState((s) => applyEnvelope(s, e)),
+      undefined,
+      (reason) =>
+        setState((s) => ({
+          ...s,
+          error:
+            reason === "not_found"
+              ? "This thread no longer exists."
+              : "Live updates stopped after repeated failures — reload to reconnect.",
+        })),
+    );
     return () => {
       close();
       clientRef.current = null;
@@ -128,7 +153,7 @@ export function useThread(
 function applyEnvelope(s: ThreadState, e: EventEnvelope): ThreadState {
   switch (e.kind) {
     case "spec_status":
-      return { ...s, status: e.payload.status };
+      return { ...s, status: e.payload.status, statusLive: true };
     case "spec_question":
       return { ...s, questions: e.payload.questions };
     case "spec_draft":
@@ -139,12 +164,18 @@ function applyEnvelope(s: ThreadState, e: EventEnvelope): ThreadState {
       return { ...s, diff: e.payload.files };
     case "error":
       return { ...s, error: e.payload.message };
+    case "usage":
+      // #84: cumulative cost/token accounting, harvested at turn settle.
+      return { ...s, usage: e.payload };
     case "session_state":
       // Spec §10: degraded means the host died mid-turn; the next prompt
       // respawns it. streaming/idle drive the waiting flag for Stop + steer.
+      // #84: blocked is the needs-you escalation with a reason.
       return {
         ...s,
         degraded: e.payload.state === "degraded",
+        blocked:
+          e.payload.state === "blocked" ? (e.payload.reason ?? "dialog") : null,
         waiting: e.payload.state === "streaming",
       };
     default:

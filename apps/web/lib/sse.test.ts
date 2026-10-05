@@ -70,4 +70,27 @@ describe("SseParser", () => {
       "diff",
     ]);
   });
+
+  it("skips malformed JSON and invalid envelopes instead of throwing (#85)", () => {
+    const p = new SseParser();
+    const events = feed(
+      p,
+      'id: 0\nevent: text_delta\ndata: {"seq":0,"conversationId":\n\n' + // broken JSON
+        'id: 1\nevent: nope\ndata: {"seq":1,"conversationId":"c","ts":"2026-09-22T12:00:00.000Z","kind":"nope","payload":{}}\n\n' + // unknown kind
+        'id: 2\nevent: text_delta\ndata: {"seq":2,"conversationId":"c","ts":"2026-09-22T12:00:00.000Z","kind":"text_delta","payload":{"delta":"ok"}}\n\n',
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.kind).toBe("text_delta");
+    expect(events[0]!.seq).toBe(2);
+  });
+
+  it("accepts the wrapped custom kind (#85)", () => {
+    const p = new SseParser();
+    const events = feed(
+      p,
+      'id: 0\nevent: custom\ndata: {"seq":0,"conversationId":"c","ts":"2026-09-22T12:00:00.000Z","kind":"custom","payload":{"type":"custom_env_echo","data":{"a":1}}}\n\n',
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload).toEqual({ type: "custom_env_echo", data: { a: 1 } });
+  });
 });

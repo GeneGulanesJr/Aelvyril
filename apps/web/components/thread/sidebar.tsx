@@ -5,17 +5,21 @@ import type { Thread, ThreadStatus } from "@aelvyril/shared";
 const STATUS_COLORS: Record<ThreadStatus, string> = {
   draft: "bg-[#2b3245] text-[#8b96a8]",
   "spec'ing": "bg-[#e3b341]/20 text-[#e3b341]",
+  queued: "bg-[#1f6feb]/10 text-[#8b96a8]",
   running: "bg-[#1f6feb]/20 text-[#1f6feb]",
   reviewed: "bg-[#3fb950]/20 text-[#3fb950]",
   merged: "bg-[#3fb950]/10 text-[#3fb950]/60",
   abandoned: "bg-[#f85149]/20 text-[#f85149]",
 };
 
-export function ThreadSidebar({ threads, activeId, onSelect, onCreate }: {
+export function ThreadSidebar({ threads, activeId, onSelect, onCreate, onKillAll }: {
   threads: Thread[]; activeId: string | null;
   onSelect: (id: string) => void; onCreate: () => void;
+  /** #84: global kill switch — two-step confirm like the delete button. */
+  onKillAll?: () => void;
 }) {
   const [query, setQuery] = useState("");
+  const [armed, setArmed] = useState(false);
   const q = query.trim().toLowerCase();
   // Case-insensitive substring match on title, falling back to id so
   // untitled threads stay findable.
@@ -39,6 +43,24 @@ export function ThreadSidebar({ threads, activeId, onSelect, onCreate }: {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
+      {onKillAll && (
+        armed ? (
+          <div className="mb-3 flex items-center gap-2">
+            <button
+              className="rounded border border-[#f85149]/50 bg-[#f85149]/10 px-2 py-1 text-xs text-[#f85149]"
+              data-testid="kill-all-button"
+              onClick={() => { setArmed(false); onKillAll(); }}
+            >confirm kill all?</button>
+            <button className="text-xs text-[#8b96a8]" data-testid="kill-all-cancel" onClick={() => setArmed(false)}>no</button>
+          </div>
+        ) : (
+          <button
+            className="mb-3 self-start text-xs text-[#f85149]/70 hover:text-[#f85149]"
+            data-testid="kill-all-button"
+            onClick={() => setArmed(true)}
+          >kill all</button>
+        )
+      )}
       <ul className="space-y-1">
         {visible.map((t) => (
           <li key={t.id}>

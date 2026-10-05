@@ -86,6 +86,9 @@ describe("useThread", () => {
 
   it("reduces spec envelopes into state", async () => {
     const { result, inst } = await renderThread();
+    // Before a live spec_status arrives, the initial status must not claim
+    // to be live (#83: the header shows the thread-list snapshot instead).
+    expect(result.current.statusLive).toBe(false);
     await act(async () => {
       inst.onEnvelope!(env("spec_status", { status: "spec'ing" }, 0));
       inst.onEnvelope!(
@@ -110,6 +113,7 @@ describe("useThread", () => {
       inst.onEnvelope!(env("diff", { files: [{ path: "a.ts", patch: "@@" }] }, 3));
     });
     expect(result.current.status).toBe("spec'ing");
+    expect(result.current.statusLive).toBe(true);
     expect(result.current.questions).toHaveLength(1);
     expect(result.current.draft?.goal).toBe("g");
     expect(result.current.plan).toEqual(["step1"]);

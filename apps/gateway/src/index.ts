@@ -75,11 +75,17 @@ const app = await buildApp({
   dialogMode:
     process.env.GATEWAY_DIALOG_MODE === "blocked" ? ("blocked" as const) : ("auto-responder" as const),
   // #83: long-horizon execution caps — cheap threads vs scarce hosts.
+  maxConversationsPerUser: process.env.GATEWAY_MAX_THREADS
+    ? Number(process.env.GATEWAY_MAX_THREADS)
+    : undefined,
   maxRunningHostsPerUser: process.env.GATEWAY_MAX_RUNNING_HOSTS
     ? Number(process.env.GATEWAY_MAX_RUNNING_HOSTS)
     : undefined,
   maxSessionHosts: process.env.GATEWAY_MAX_SESSION_HOSTS
     ? Number(process.env.GATEWAY_MAX_SESSION_HOSTS)
+    : undefined,
+  queueIntervalMs: process.env.GATEWAY_QUEUE_INTERVAL_MS
+    ? Number(process.env.GATEWAY_QUEUE_INTERVAL_MS)
     : undefined,
 });
 

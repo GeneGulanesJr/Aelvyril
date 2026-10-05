@@ -584,22 +584,32 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     };
 
     reply.hijack();
-    // Hijacking the reply bypasses @fastify/cors reply hooks, so the streamed
-    // response would go out with no Access-Control-Allow-Origin and the browser
-    // would drop it (200 but unreadable). Mirror the plugin's allow-list logic.
-    const origin = req.headers.origin;
-    const headers: Record<string, string> = {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-      connection: "keep-alive",
-    };
-    if (origin && opts.allowedOrigins?.includes(origin)) {
-      headers["access-control-allow-origin"] = origin;
-      headers["access-control-allow-credentials"] = "true";
-      headers["vary"] = "Origin";
+    // Handshake writes can hit an already-dead socket (client vanished
+    // between auth and hijack). Fail the slot back before any listener
+    // exists — an unguarded throw here leaks the stream slot and can
+    // surface as an unhandled socket error.
+    try {
+      // Hijacking the reply bypasses @fastify/cors reply hooks, so the streamed
+      // response would go out with no Access-Control-Allow-Origin and the browser
+      // would drop it (200 but unreadable). Mirror the plugin's allow-list logic.
+      const origin = req.headers.origin;
+      const headers: Record<string, string> = {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+      };
+      if (origin && opts.allowedOrigins?.includes(origin)) {
+        headers["access-control-allow-origin"] = origin;
+        headers["access-control-allow-credentials"] = "true";
+        headers["vary"] = "Origin";
+      }
+      reply.raw.writeHead(200, headers);
+      reply.raw.write("retry: 2000\n\n");
+    } catch {
+      releaseStream();
+      reply.raw.destroy();
+      return reply;
     }
-    reply.raw.writeHead(200, headers);
-    reply.raw.write("retry: 2000\n\n");
 
     const raw = req.headers["last-event-id"];
     const parsed = Array.isArray(raw) ? Number(raw[0]) : Number(raw);

@@ -5,6 +5,10 @@ import type { EventEnvelope, SpecDraft, SpecQuestion, ThreadStatus, Usage } from
 
 export interface ThreadState {
   status: ThreadStatus;
+  /** True once a live spec_status envelope arrived — before that, `status`
+   *  is just the hook's initial value and must not override the thread
+   *  list's snapshot (#83 live header status). */
+  statusLive: boolean;
   questions: SpecQuestion[];
   draft: SpecDraft | null;
   plan: string[];
@@ -43,6 +47,7 @@ export function useThread(
   const { getToken, gatewayUrl } = deps;
   const [state, setState] = useState<ThreadState>({
     status: "draft",
+    statusLive: false,
     questions: [],
     draft: null,
     plan: [],
@@ -148,7 +153,7 @@ export function useThread(
 function applyEnvelope(s: ThreadState, e: EventEnvelope): ThreadState {
   switch (e.kind) {
     case "spec_status":
-      return { ...s, status: e.payload.status };
+      return { ...s, status: e.payload.status, statusLive: true };
     case "spec_question":
       return { ...s, questions: e.payload.questions };
     case "spec_draft":

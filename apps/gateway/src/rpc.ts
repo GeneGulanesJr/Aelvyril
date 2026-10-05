@@ -85,7 +85,13 @@ export class RpcClient extends EventEmitter {
     const id = `gw_${nextId++}`;
     // A command may carry its OWN id that must reach the child verbatim —
     // extension_ui_response (#84) must echo the request's id, not a
-    // correlation id. Commands without an id keep the generated one.
+    // correlation id. Those messages are extension-protocol writes, not
+    // commands: pi sends no RpcResponse for them, so resolve immediately
+    // after the write instead of parking a pending entry until timeout.
+    if (typeof command.id === "string") {
+      this.child.stdin!.write(JSON.stringify(command) + "\n");
+      return Promise.resolve({ type: "response", command: String(command.type), success: true });
+    }
     const wire = JSON.stringify({ id, ...command }) + "\n";
     return new Promise<RpcResponse>((resolve, reject) => {
       const timer = setTimeout(() => {

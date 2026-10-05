@@ -287,6 +287,17 @@ describe("Supervisor", () => {
         (e) => e.kind === "session_state" && (e.payload as { state?: string }).state === "blocked",
       );
       expect(blockedState?.payload).toMatchObject({ state: "blocked", reason: "dialog" });
+      // The mock now holds the turn open like real pi (no answer is coming
+      // in blocked mode), so nothing settles over the escalation. This is
+      // the exact race CI caught when the mock kept streaming: agent_settled
+      // marked the thread idle and erased the blocked state.
+      await new Promise((r) => setTimeout(r, 400));
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("blocked");
+      expect(
+        seen.some(
+          (e) => e.kind === "session_state" && (e.payload as { state?: string }).state === "idle",
+        ),
+      ).toBe(false);
     } finally {
       delete process.env.FAKE_UI_DIALOG;
     }

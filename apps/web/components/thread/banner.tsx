@@ -1,12 +1,15 @@
 "use client";
 import type { ThreadState } from "../../lib/use-thread.js";
 
-const BLOCKED_REASONS: Record<"question" | "dialog" | "capped", string> = {
+const BLOCKED_REASONS: Record<"question" | "dialog" | "capped" | "gated", string> = {
   question: "The agent asked a question — answer it in the spec panel.",
   dialog:
     "The agent hit a blocking dialog it can't answer headlessly. Enable the dialog auto-responder or intervene in the session.",
   capped:
     "Budget cap reached for this thread. Raise GATEWAY_MAX_THREAD_COST_USD or abandon the thread.",
+  // #81: the risk classifier stopped an irreversible/external action.
+  gated:
+    "The agent tried an irreversible action (install, migration, delete, or deploy). Review it in the trace, then approve to allow exactly that action and continue.",
 };
 
 /**

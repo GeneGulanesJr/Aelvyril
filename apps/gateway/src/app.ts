@@ -16,7 +16,7 @@ import {
 import { Store } from "./store.js";
 import { EventBus } from "./bus.js";
 import { Supervisor } from "./supervisor.js";
-import type { AgentContract } from "./agent-contract.js";
+import type { VerifyOptions as SupervisorVerifyOptions } from "./supervisor.js";
 import type { TokenVerifier } from "./auth.js";
 import { createWorkspaceAllowlist, type WorkspaceAllowlist } from "./workspace-allowlist.js";
 import { createRateLimiter, type RateLimiter } from "./rate-limit.js";
@@ -82,6 +82,16 @@ export interface AppOptions {
   /** Optional update-flow override for tests. Defaults to the real
    *  applyUpdate (spawns a detached restart script — never run in tests). */
   applyUpdate?: typeof applyUpdate;
+  /** #81.2: bounded spec-question budget per interview. Default 3. */
+  specMaxRounds?: number;
+  /** #81.3: merges-without-revision at which a namespace's autonomy
+   *  escalates. Default 5; 0 disables. */
+  trustThreshold?: number;
+  /** #82: auto-verify loop. Default: enabled (auto-detect package.json
+   *  scripts in the workspace). `null` disables; fields override. */
+  verify?: SupervisorVerifyOptions | null;
+  /** #80: diff-producer override for tests. Default runs real git. */
+  computeDiff?: (cwd: string) => Promise<{ path: string; patch: string }[] | null>;
 }
 
 export type App = FastifyInstance;
@@ -153,6 +163,11 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     dialogMode: opts.dialogMode,
     onSessionHostSpawn: () => metrics.activeSessionHosts.inc(),
     onSessionHostExit: () => metrics.activeSessionHosts.dec(),
+    // #80/#81/#82: contract + autonomy + auto-verify wiring.
+    specMaxRounds: opts.specMaxRounds,
+    trustThreshold: opts.trustThreshold,
+    verify: opts.verify,
+    computeDiff: opts.computeDiff,
   });
 
   const unauthorized = (reply: FastifyReply) => reply.code(401).send({ error: "unauthorized" });
@@ -423,7 +438,9 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       const atUserCap = store.countStreaming(namespace) >= maxRunningHostsPerUser;
       const atGlobalCap = supervisor.runningCount() >= maxSessionHosts;
       if (atUserCap || atGlobalCap) {
-        store.enqueuePrompt({ conversationId: id, namespace, message: body.message });
+        // #80: specMode travels with the queued message (the runner re-sends
+        // with the same mode instead of silently defaulting to auto).
+        store.enqueuePrompt({ conversationId: id, namespace, message: body.message, specMode: body.specMode });
         store.updateThreadStatus(id, namespace, "queued");
         bus.publish({
           conversationId: id,
@@ -445,13 +462,15 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     }
 
     // Spec §6/§10: workspace -> spawn cwd so pi finds its prior session file
-    // on disk after a crash + re-prompt (session resume).
+    // on disk after a crash + re-prompt (session resume). #80 fix 2: the
+    // specMode field finally rides along instead of being dropped.
     const ok = await supervisor.prompt(
       id,
       body.message,
       body.streamingBehavior,
       { LAPIS_PROJECT_KEY: namespace },
       conv.workspace ?? undefined,
+      body.specMode,
     );
     if (!ok) {
       metrics.promptRejections.inc();
@@ -485,11 +504,9 @@ export async function buildApp(opts: AppOptions): Promise<App> {
 
   // Spec interview + lifecycle (agent spec-centric UI, Slice 4). All blob
   // and status accessors are namespaced — cross-tenant ids 404 like every
-  // other route.
-  // Active spec sessions per thread; populated when the supervisor wires an
-  // AgentContract into a spawned session. Absent entry = no live contract,
-  // lifecycle routes persist the transition and skip the forwarding.
-  const contracts = new Map<string, AgentContract>();
+  // other route. #80: the old dead `contracts` Map is gone — the supervisor
+  // owns one AgentContract per live session host, and the lifecycle routes
+  // drive it through the supervisor (working with or without a live host).
 
   app.patch<{ Params: { id: string }; Body: unknown }>(
     "/v1/threads/:id/spec",
@@ -514,6 +531,9 @@ export async function buildApp(opts: AppOptions): Promise<App> {
           return reply.code(413).send({ error: "spec_too_large" });
         }
       }
+      // #80 fix 6: persisted edits/answers are forwarded to the live agent
+      // so it re-drafts (a no-op when the session host is gone).
+      supervisor.submitSpecPatch(id, parsed.data);
       return { ok: true };
     },
   );
@@ -524,8 +544,18 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const namespace = toUserNamespace(userId);
     const { id } = req.params as { id: string };
     if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
+    const spec = store.getThreadSpec(id, namespace);
+    if (!spec?.specDraft) return reply.code(409).send({ error: "no_spec" });
     store.updateThreadStatus(id, namespace, "running");
-    contracts.get(id)?.approve();
+    bus.publish({
+      conversationId: id,
+      ts: new Date().toISOString(),
+      kind: "spec_status",
+      payload: { status: "running" },
+    });
+    // #80 fix 3: approve sends the REAL execution prompt — rebuilt from the
+    // stored spec, spawning a session host when none is live.
+    await supervisor.approveExecution(id);
     return { ok: true };
   });
 
@@ -536,9 +566,15 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const { id } = req.params as { id: string };
     if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
     store.updateThreadStatus(id, namespace, "abandoned");
-    const contract = contracts.get(id);
-    if (contract) contract.abandon();
-    else supervisor.killChild(id); // no live contract: still stop the child
+    bus.publish({
+      conversationId: id,
+      ts: new Date().toISOString(),
+      kind: "spec_status",
+      payload: { status: "abandoned" },
+    });
+    // #80: the contract publishes + the child dies — one supervisor entry
+    // point instead of the old empty-map no-op.
+    supervisor.abandonThread(id);
     // #83 (2nd review): a queued prompt for an abandoned thread must not be
     // picked up by the runner later — abandoning is terminal.
     store.deleteQueuedForConversation(id);
@@ -552,8 +588,46 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const { id } = req.params as { id: string };
     if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
     store.updateThreadStatus(id, namespace, "running");
-    contracts.get(id)?.retry();
+    // #80 fix 3: retry re-executes against the same spec.
+    const ok = await supervisor.retryExecution(id);
+    if (!ok) {
+      store.updateThreadStatus(id, namespace, "reviewed");
+      return reply.code(409).send({ error: "nothing_to_retry" });
+    }
+    store.incrementRetryCount(id, namespace);
+    bus.publish({
+      conversationId: id,
+      ts: new Date().toISOString(),
+      kind: "spec_status",
+      payload: { status: "running" },
+    });
     return { ok: true };
+  });
+
+  // #80 fix 5: the merged producer. A reviewed thread whose diff the user
+  // accepts transitions to merged; a merge WITHOUT an intervening retry is
+  // the trust-escalation signal (#81.3).
+  app.post<{ Params: { id: string } }>("/v1/threads/:id/merge", async (req, reply) => {
+    const userId = await user(req, reply);
+    if (!userId) return;
+    const namespace = toUserNamespace(userId);
+    const { id } = req.params as { id: string };
+    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
+    if (store.getThreadStatus(id, namespace) !== "reviewed") {
+      return reply.code(409).send({ error: "not_reviewable" });
+    }
+    store.updateThreadStatus(id, namespace, "merged");
+    store.setConversationState(id, "idle");
+    if (store.isMergedWithoutRevision(id, namespace)) {
+      store.recordMergedWithoutRevision(namespace);
+    }
+    bus.publish({
+      conversationId: id,
+      ts: new Date().toISOString(),
+      kind: "spec_status",
+      payload: { status: "merged" },
+    });
+    return { ok: true, merged: true };
   });
 
   // #83: global kill switch — abandon is per-thread only today; this takes
@@ -734,6 +808,8 @@ export async function buildApp(opts: AppOptions): Promise<App> {
               undefined,
               { LAPIS_PROJECT_KEY: ns },
               queued.workspace ?? undefined,
+              // #80: the queued prompt's own specMode (schema-capped enum).
+              (item.specMode as "auto" | "force" | "off") ?? "auto",
             )
             .then((ok) => {
               if (ok) {

@@ -86,4 +86,22 @@ describe("ThreadHeader", () => {
     fireEvent.click(screen.getByTestId("delete-button"));
     expect(onDelete).not.toHaveBeenCalled();
   });
+
+  // #80: the merged producer — the merge affordance appears exactly when
+  // the effective (live-wins) status is reviewed.
+  it("shows merge only for reviewed threads (#80)", () => {
+    const onMerge = vi.fn();
+    render(
+      <ThreadHeader thread={{ ...thread, status: "reviewed" }} onRename={() => {}} onAbandon={() => {}} onMerge={onMerge} />,
+    );
+    fireEvent.click(screen.getByTestId("merge-button"));
+    expect(onMerge).toHaveBeenCalled();
+  });
+
+  it("no merge button outside reviewed", () => {
+    render(
+      <ThreadHeader thread={{ ...thread, status: "running" }} liveStatus="running" onRename={() => {}} onAbandon={() => {}} onMerge={() => {}} />,
+    );
+    expect(screen.queryByTestId("merge-button")).toBeNull();
+  });
 });

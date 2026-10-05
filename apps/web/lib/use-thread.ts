@@ -17,8 +17,9 @@ export interface ThreadState {
   error: string | null;
   /** Session host died mid-turn — next prompt respawns it (spec §10). */
   degraded: boolean;
-  /** #84: needs-you escalation reason (drives the orange blocked banner). */
-  blocked: "question" | "dialog" | "capped" | null;
+  /** #84: needs-you escalation reason (drives the orange blocked banner).
+   *  #81: "gated" = the risk classifier stopped an irreversible action. */
+  blocked: "question" | "dialog" | "capped" | "gated" | null;
   /** A prompt is in flight (drives the Stop button + steer-queued sends). */
   waiting: boolean;
   /** #84: cumulative cost/token usage for this thread (live via SSE). */
@@ -41,6 +42,7 @@ export function useThread(
   approve: () => Promise<void>;
   abandon: () => Promise<void>;
   retry: () => Promise<void>;
+  merge: () => Promise<void>;
   stop: () => Promise<void>;
   dismissError: () => void;
 } {
@@ -147,7 +149,13 @@ export function useThread(
     await clientRef.current.retryThread(threadId);
   }, [threadId]);
 
-  return { ...state, ask, submitAnswers, editSpec, approve, abandon, retry, stop, dismissError };
+  // #80: accept the reviewed diff (reviewed → merged).
+  const merge = useCallback(async () => {
+    if (!clientRef.current || !threadId) return;
+    await clientRef.current.mergeThread(threadId);
+  }, [threadId]);
+
+  return { ...state, ask, submitAnswers, editSpec, approve, abandon, retry, merge, stop, dismissError };
 }
 
 function applyEnvelope(s: ThreadState, e: EventEnvelope): ThreadState {

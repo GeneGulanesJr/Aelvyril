@@ -96,6 +96,33 @@ export function runMigrations(db: Database.Database): void {
     );
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_prompt_queue_namespace ON prompt_queue(namespace)");
+  // #80/#81: per-thread execution memory — the last prompt text backs
+  // retry-without-spec; retry_count vs reviewed_revision decide whether a
+  // merge counts as merged-WITHOUT-revision (trust escalation #81.3).
+  if (!names.has("last_prompt")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN last_prompt TEXT");
+  }
+  if (!names.has("retry_count")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!names.has("reviewed_revision")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN reviewed_revision INTEGER NOT NULL DEFAULT 0");
+  }
+  // #81.3: namespace track record — merges without revision raise autonomy.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS trust(
+      namespace TEXT PRIMARY KEY,
+      merged_without_revision INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  // #83: specMode of queued prompts survives the queue (the runner re-sends
+  // with the same mode instead of silently dropping to the default).
+  const queueCols = db.prepare("PRAGMA table_info(prompt_queue)").all() as Array<{
+    name: string;
+  }>;
+  if (!queueCols.some((c) => c.name === "spec_mode")) {
+    db.exec("ALTER TABLE prompt_queue ADD COLUMN spec_mode TEXT NOT NULL DEFAULT 'auto'");
+  }
 }
 
 export class Store {
@@ -295,14 +322,127 @@ export class Store {
     return row?.status ?? null;
   }
 
-  // --- #83: durable prompt queue -------------------------------------
+  // --- Internal ById accessors -----------------------------------------
+  // Same trust level as getConversationById: the supervisor owns these ids
+  // (it spawned their hosts); they are never exposed on any /v1 route.
 
-  enqueuePrompt(input: { conversationId: string; namespace: string; message: string }): void {
+  /** Spec-interview state without a namespace check (supervisor-internal). */
+  getThreadSpecById(id: string): {
+    status: string;
+    specDraft: SpecDraft | null;
+    specAnswers: Record<string, string>;
+  } | null {
+    const row = this.db
+      .prepare("SELECT status, spec_draft, spec_answers FROM conversations WHERE id = ?")
+      .get(id) as
+      | { status: string; spec_draft: string | null; spec_answers: string | null }
+      | undefined;
+    if (!row) return null;
+    return {
+      status: row.status,
+      specDraft: row.spec_draft ? (JSON.parse(row.spec_draft) as SpecDraft) : null,
+      specAnswers: row.spec_answers ? (JSON.parse(row.spec_answers) as Record<string, string>) : {},
+    };
+  }
+
+  /** Persist the agent's draft (#80: approve must work after a restart). */
+  setSpecDraftById(id: string, draft: SpecDraft): void {
+    this.db.prepare("UPDATE conversations SET spec_draft = ? WHERE id = ?").run(JSON.stringify(draft), id);
+  }
+
+  setLastPromptById(id: string, message: string): void {
+    this.db.prepare("UPDATE conversations SET last_prompt = ? WHERE id = ?").run(message, id);
+  }
+
+  getLastPromptById(id: string): string | null {
+    const row = this.db
+      .prepare("SELECT last_prompt FROM conversations WHERE id = ?")
+      .get(id) as { last_prompt: string | null } | undefined;
+    return row?.last_prompt ?? null;
+  }
+
+  getNamespaceById(id: string): string | null {
+    const row = this.db
+      .prepare("SELECT namespace FROM conversations WHERE id = ?")
+      .get(id) as { namespace: string } | undefined;
+    return row?.namespace ?? null;
+  }
+
+  /** #80: transition into reviewed, snapshotting the revision counter so a
+   *  later merge knows whether the user retried in between (#81.3). */
+  markThreadReviewedById(id: string): boolean {
+    const txn = this.db.transaction((): boolean => {
+      const res = this.db
+        .prepare("UPDATE conversations SET status = 'reviewed', reviewed_revision = retry_count WHERE id = ?")
+        .run(id);
+      return res.changes > 0;
+    });
+    return txn();
+  }
+
+  incrementRetryCountById(id: string): void {
+    this.db
+      .prepare("UPDATE conversations SET retry_count = retry_count + 1 WHERE id = ?")
+      .run(id);
+  }
+
+  /** Namespaced variants for the routes (cross-tenant ids are no-ops). */
+  incrementRetryCount(id: string, namespace: string): void {
+    this.db
+      .prepare("UPDATE conversations SET retry_count = retry_count + 1 WHERE id = ? AND namespace = ?")
+      .run(id, namespace);
+  }
+
+  /** True when the thread reached merged WITHOUT a retry after its last
+   *  reviewed transition — the trust-escalation signal (#81.3). */
+  isMergedWithoutRevisionById(id: string): boolean {
+    const row = this.db
+      .prepare("SELECT retry_count, reviewed_revision FROM conversations WHERE id = ?")
+      .get(id) as { retry_count: number; reviewed_revision: number } | undefined;
+    if (!row) return false;
+    return row.retry_count === row.reviewed_revision;
+  }
+
+  isMergedWithoutRevision(id: string, namespace: string): boolean {
+    const row = this.db
+      .prepare("SELECT retry_count, reviewed_revision FROM conversations WHERE id = ? AND namespace = ?")
+      .get(id, namespace) as { retry_count: number; reviewed_revision: number } | undefined;
+    if (!row) return false;
+    return row.retry_count === row.reviewed_revision;
+  }
+
+  // --- #81.3: namespace trust -------------------------------------------
+
+  recordMergedWithoutRevision(namespace: string): void {
     this.db
       .prepare(
-        "INSERT INTO prompt_queue(conversation_id, namespace, message, created_at) VALUES(?, ?, ?, ?)",
+        `INSERT INTO trust(namespace, merged_without_revision) VALUES(?, 1)
+         ON CONFLICT(namespace) DO UPDATE SET merged_without_revision = merged_without_revision + 1`,
       )
-      .run(input.conversationId, input.namespace, input.message, new Date().toISOString());
+      .run(namespace);
+  }
+
+  getTrustCount(namespace: string): number {
+    const row = this.db
+      .prepare("SELECT merged_without_revision FROM trust WHERE namespace = ?")
+      .get(namespace) as { merged_without_revision: number } | undefined;
+    return row?.merged_without_revision ?? 0;
+  }
+
+  // --- #83: durable prompt queue -------------------------------------
+
+  enqueuePrompt(input: {
+    conversationId: string;
+    namespace: string;
+    message: string;
+    /** #80: specMode survives the queue — the runner re-sends it. */
+    specMode?: string;
+  }): void {
+    this.db
+      .prepare(
+        "INSERT INTO prompt_queue(conversation_id, namespace, message, spec_mode, created_at) VALUES(?, ?, ?, ?, ?)",
+      )
+      .run(input.conversationId, input.namespace, input.message, input.specMode ?? "auto", new Date().toISOString());
   }
 
   /** Namespaces with queued work, oldest item first — one namespace gets a
@@ -317,14 +457,20 @@ export class Store {
 
   /** Pop the oldest queued prompt for a namespace (transactional read+delete).
    *  Returns null when the queue for that namespace is empty. */
-  dequeueOldestPrompt(namespace: string): { conversationId: string; message: string } | null {
-    const txn = this.db.transaction((): { conversationId: string; message: string } | null => {
+  dequeueOldestPrompt(
+    namespace: string,
+  ): { conversationId: string; message: string; specMode: string } | null {
+    const txn = this.db.transaction(():
+      | { conversationId: string; message: string; specMode: string }
+      | null => {
       const row = this.db
-        .prepare("SELECT id, conversation_id, message FROM prompt_queue WHERE namespace = ? ORDER BY id ASC LIMIT 1")
-        .get(namespace) as { id: number; conversation_id: string; message: string } | undefined;
+        .prepare(
+          "SELECT id, conversation_id, message, spec_mode FROM prompt_queue WHERE namespace = ? ORDER BY id ASC LIMIT 1",
+        )
+        .get(namespace) as { id: number; conversation_id: string; message: string; spec_mode: string } | undefined;
       if (!row) return null;
       this.db.prepare("DELETE FROM prompt_queue WHERE id = ?").run(row.id);
-      return { conversationId: row.conversation_id, message: row.message };
+      return { conversationId: row.conversation_id, message: row.message, specMode: row.spec_mode };
     });
     return txn();
   }

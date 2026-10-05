@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { Thread, ThreadStatus, Usage } from "@aelvyril/shared";
 
-export function ThreadHeader({ thread, liveStatus, usage, onRename, onAbandon, onDelete }: {
+export function ThreadHeader({ thread, liveStatus, usage, onRename, onAbandon, onDelete, onMerge }: {
   thread: Thread;
   /** #83: live status from the SSE stream — wins over the stale
    *  mount-time snapshot so queued→running transitions are visible. */
@@ -12,10 +12,13 @@ export function ThreadHeader({ thread, liveStatus, usage, onRename, onAbandon, o
   onRename: (title: string) => void;
   onAbandon: () => void;
   onDelete?: () => void;
+  /** #80: accept the reviewed diff (reviewed → merged). */
+  onMerge?: () => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(thread.title ?? "");
   const [armed, setArmed] = useState(false);
+  const effectiveStatus = liveStatus ?? thread.status;
 
   return (
     <header className="flex items-center justify-between border-b border-[#2b3245] bg-[#0d1117] px-4 py-2 text-sm">
@@ -47,6 +50,13 @@ export function ThreadHeader({ thread, liveStatus, usage, onRename, onAbandon, o
         </span>
       )}
       <div className="flex gap-2">
+        {effectiveStatus === "reviewed" && onMerge && (
+          <button
+            className="text-xs font-medium text-[#3fb950] hover:underline"
+            data-testid="merge-button"
+            onClick={onMerge}
+          >merge</button>
+        )}
         {renaming ? null : (
           <button
             className="text-xs text-[#8b96a8] hover:text-[#e6edf3]"

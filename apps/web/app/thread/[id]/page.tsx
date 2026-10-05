@@ -100,6 +100,7 @@ export default function ThreadPage() {
               setThreads((ts) => ts.map((t) => (t.id === activeThread.id ? { ...t, title } : t)));
             })}
             onAbandon={() => void threadState.abandon()}
+            onMerge={() => void threadState.merge()}
             onDelete={() =>
               void client
                 .deleteThread(activeThread.id)
@@ -116,6 +117,9 @@ export default function ThreadPage() {
               questions={threadState.questions}
               draft={threadState.draft}
               status={threadState.status}
+              // #81: a gated stop parks execution — the approve control must
+              // stay reachable outside the spec'ing status.
+              forceVisible={threadState.blocked === "gated"}
               onSubmitAnswers={(a) => void threadState.submitAnswers(a)}
               onEditSpec={(f, v) => void threadState.editSpec(f, v)}
               onApprove={() => void threadState.approve()}

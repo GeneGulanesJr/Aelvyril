@@ -156,16 +156,52 @@ describe("Store", () => {
 
     store.enqueuePrompt({ conversationId: a.id, namespace: "user:a", message: "a1" });
     store.enqueuePrompt({ conversationId: a.id, namespace: "user:a", message: "a2" });
-    store.enqueuePrompt({ conversationId: b.id, namespace: "user:b", message: "b1" });
+    store.enqueuePrompt({ conversationId: b.id, namespace: "user:b", message: "b1", specMode: "force" });
     expect(store.countQueued("user:a")).toBe(2);
 
     // Fairness order: the namespace with the oldest item comes first.
     expect(store.listQueuedNamespaces()).toEqual(["user:a", "user:b"]);
-    // FIFO within a namespace; dequeue removes the row.
-    expect(store.dequeueOldestPrompt("user:a")).toEqual({ conversationId: a.id, message: "a1" });
-    expect(store.dequeueOldestPrompt("user:a")).toEqual({ conversationId: a.id, message: "a2" });
+    // FIFO within a namespace; dequeue removes the row. #80: specMode
+    // survives the queue (default auto, or the enqueued value).
+    expect(store.dequeueOldestPrompt("user:a")).toEqual({
+      conversationId: a.id,
+      message: "a1",
+      specMode: "auto",
+    });
+    expect(store.dequeueOldestPrompt("user:a")).toEqual({
+      conversationId: a.id,
+      message: "a2",
+      specMode: "auto",
+    });
     expect(store.dequeueOldestPrompt("user:a")).toBeNull();
-    expect(store.dequeueOldestPrompt("user:b")).toEqual({ conversationId: b.id, message: "b1" });
+    expect(store.dequeueOldestPrompt("user:b")).toEqual({
+      conversationId: b.id,
+      message: "b1",
+      specMode: "force",
+    });
+  });
+
+  // #80/#81: retry/merge bookkeeping + namespace trust.
+  it("tracks retry/revision bookkeeping and merge trust (#80, #81.3)", () => {
+    const store = new Store(":memory:");
+    const conv = store.createConversation({ namespace: "user:a" });
+    expect(store.isMergedWithoutRevision(conv.id, "user:a")).toBe(true); // 0 === 0
+    store.markThreadReviewedById(conv.id);
+    expect(store.getThreadStatus(conv.id, "user:a")).toBe("reviewed");
+    // A retry before the merge means the merge is NOT without revision.
+    store.incrementRetryCount(conv.id, "user:a");
+    expect(store.isMergedWithoutRevision(conv.id, "user:a")).toBe(false);
+    store.markThreadReviewedById(conv.id); // re-review snapshots the new revision
+    expect(store.isMergedWithoutRevision(conv.id, "user:a")).toBe(true);
+    // Trust accumulates per namespace.
+    expect(store.getTrustCount("user:a")).toBe(0);
+    store.recordMergedWithoutRevision("user:a");
+    store.recordMergedWithoutRevision("user:a");
+    expect(store.getTrustCount("user:a")).toBe(2);
+    expect(store.getTrustCount("user:b")).toBe(0);
+    // Last prompt backs retry-without-spec (#80 fix 3).
+    store.setLastPromptById(conv.id, "the original ask");
+    expect(store.getLastPromptById(conv.id)).toBe("the original ask");
   });
 
   it("deletes queued work per namespace and sweeps stale streaming rows (#83)", () => {

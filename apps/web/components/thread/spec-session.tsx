@@ -3,17 +3,19 @@ import { useState } from "react";
 import type { SpecDraft, SpecQuestion, ThreadStatus } from "@aelvyril/shared";
 
 export function SpecSession({
-  questions, draft, status,
+  questions, draft, status, forceVisible = false,
   onSubmitAnswers, onEditSpec, onApprove, onCancel,
 }: {
   questions: SpecQuestion[]; draft: SpecDraft | null; status: ThreadStatus;
+  /** #81: keep the approve control reachable during a gated stop. */
+  forceVisible?: boolean;
   onSubmitAnswers: (a: Record<string, string>) => void;
   onEditSpec: (field: "goal" | "filesAffected" | "plan" | "risks", value: string | string[]) => void;
   onApprove: () => void;
   onCancel: () => void;
 }) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  if (status !== "spec'ing") return null;
+  if (status !== "spec'ing" && !forceVisible) return null;
 
   return (
     <div className="border-t border-[#2b3245] bg-[#0d1117] p-3 text-sm" data-testid="spec-session">

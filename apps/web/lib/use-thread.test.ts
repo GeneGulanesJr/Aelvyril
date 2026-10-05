@@ -11,6 +11,7 @@ const instances: Array<{
   approveSpec: ReturnType<typeof vi.fn>;
   abandonThread: ReturnType<typeof vi.fn>;
   retryThread: ReturnType<typeof vi.fn>;
+  mergeThread: ReturnType<typeof vi.fn>;
   abortThread: ReturnType<typeof vi.fn>;
   deleteThread: ReturnType<typeof vi.fn>;
   onEnvelope: ((e: EventEnvelope) => void) | null;
@@ -28,6 +29,7 @@ vi.mock("./api.js", () => ({
       approveSpec: vi.fn().mockResolvedValue(undefined),
       abandonThread: vi.fn().mockResolvedValue(undefined),
       retryThread: vi.fn().mockResolvedValue(undefined),
+      mergeThread: vi.fn().mockResolvedValue(undefined),
       abortThread: vi.fn().mockResolvedValue(undefined),
       deleteThread: vi.fn().mockResolvedValue(undefined),
       onEnvelope: null as ((e: EventEnvelope) => void) | null,
@@ -128,12 +130,15 @@ describe("useThread", () => {
       await result.current.approve();
       await result.current.abandon();
       await result.current.retry();
+      await result.current.merge();
     });
     expect(inst.patchSpec).toHaveBeenNthCalledWith(1, "t1", { kind: "answer", answers: { q1: "a" } });
     expect(inst.patchSpec).toHaveBeenNthCalledWith(2, "t1", { kind: "edit", field: "goal", value: "new goal" });
     expect(inst.approveSpec).toHaveBeenCalledWith("t1");
     expect(inst.abandonThread).toHaveBeenCalledWith("t1");
     expect(inst.retryThread).toHaveBeenCalledWith("t1");
+    // #80: merge accepts the reviewed diff.
+    expect(inst.mergeThread).toHaveBeenCalledWith("t1");
   });
 
   it("ask mid-flight steers; idle session clears waiting", async () => {
@@ -191,6 +196,14 @@ describe("useThread", () => {
       inst.onEnvelope!(env("session_state", { state: "idle" }, 1));
     });
     expect(result.current.blocked).toBeNull();
+  });
+
+  it("a gated stop sets the blocked reason to gated (#81)", async () => {
+    const { result, inst } = await renderThread();
+    await act(async () => {
+      inst.onEnvelope!(env("session_state", { state: "blocked", reason: "gated" }, 0));
+    });
+    expect(result.current.blocked).toBe("gated");
   });
 
   it("error envelopes set a dismissable error", async () => {

@@ -61,7 +61,9 @@ const payloadSchemas = {
     // #84: why the thread needs you. "question" is reserved for the spec
     // interview contract path; "dialog" = a blocking agent dialog when the
     // auto-responder is off; "capped" = the per-thread budget was hit.
-    reason: z.enum(["question", "dialog", "capped"]).optional(),
+    // #81: "gated" = the risk classifier stopped a run before an
+    // irreversible/external action (installs, migrations, deletes, deploys).
+    reason: z.enum(["question", "dialog", "capped", "gated"]).optional(),
   }),
   error: z.object({
     message: z.string(),

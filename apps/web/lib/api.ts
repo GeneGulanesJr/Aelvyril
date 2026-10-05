@@ -124,6 +124,12 @@ export class GatewayClient {
     if (!res.ok) throw new Error(`retry failed: ${res.status}`);
   }
 
+  /** #80: accept the reviewed diff — reviewed → merged (terminal). */
+  async mergeThread(threadId: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}${ROUTES.threadMerge(threadId)}`, await this.authed({ method: "POST" }));
+    if (!res.ok) throw new Error(`merge failed: ${res.status}`);
+  }
+
   /** Cancel the in-flight turn (steer queue keeps the thread usable). */
   async abortThread(threadId: string): Promise<void> {
     const res = await fetch(`${this.baseUrl}${ROUTES.threadAbort(threadId)}`, await this.authed({ method: "POST" }));

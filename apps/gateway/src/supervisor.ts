@@ -1,8 +1,22 @@
 import type { ChildProcess } from "node:child_process";
-import type { EventEnvelope } from "@aelvyril/shared";
+import type { EventEnvelope, PatchSpecBody } from "@aelvyril/shared";
 import { RpcClient, type RpcEvent } from "./rpc.js";
 import type { EventBus } from "./bus.js";
 import type { Store } from "./store.js";
+import { AgentContract, buildVerifyRetryPrompt, type ContractEnvelope, type SpecMode } from "./agent-contract.js";
+import { classifyAction, type Autonomy } from "./risk.js";
+import { formatFailure, resolveVerifyCommands, runVerification, type VerifyExec } from "./verify.js";
+import { computeWorkspaceDiff, type FilePatch } from "./workspace-git.js";
+
+export interface VerifyOptions {
+  /** GATEWAY_VERIFY_COMMANDS override ("pnpm test,pnpm lint"). */
+  commandsOverride?: string;
+  timeoutMs?: number;
+  /** #82: bounded self-retry budget. Default 3. */
+  retries?: number;
+  /** Test override for the command runner. */
+  exec?: VerifyExec;
+}
 
 export interface SupervisorOptions {
   bus: EventBus;
@@ -29,6 +43,16 @@ export interface SupervisorOptions {
    *  escalation when stopping a session host. Default 2_000ms (tests
    *  shrink it). */
   killGraceMs?: number;
+  /** #81.2: bounded question budget per interview. Default 3 rounds. */
+  specMaxRounds?: number;
+  /** #81.3: merges-without-revision at which a namespace's autonomy
+   *  escalates to "established" (external actions auto-run). Default 5;
+   *  0 disables escalation. */
+  trustThreshold?: number;
+  /** #82: auto-verify loop config. Null disables verification entirely. */
+  verify?: VerifyOptions | null;
+  /** #80: diff producer override for tests. Default runs real git. */
+  computeDiff?: (cwd: string) => Promise<FilePatch[] | null>;
 }
 
 interface Handle {
@@ -36,6 +60,10 @@ interface Handle {
   child: ChildProcess;
   lastActivity: number;
   exiting: boolean;
+  /** #80: per-session contract — protocol translation + lifecycle. */
+  contract: AgentContract;
+  /** #82: verification attempts spent on the CURRENT user turn. */
+  verifyAttempts: number;
 }
 
 /**
@@ -77,7 +105,43 @@ export class Supervisor {
     const spawnCwd = cwd ?? this.opts.store.getConversationById(conversationId)?.workspace ?? undefined;
     const child = this.opts.spawnChild(conversationId, extraEnv, spawnCwd);
     const rpc = new RpcClient(child);
-    const handle: Handle = { rpc, child, lastActivity: Date.now(), exiting: false };
+    // #80: the contract is the protocol→envelope translator + lifecycle
+    // owner for THIS session. Its io closures always resolve the CURRENT
+    // handle, so replies keep working across a respawn.
+    const contract = new AgentContract(
+      {
+        threadId: conversationId,
+        reply: (message) => {
+          const h = this.handles.get(conversationId);
+          if (!h || h.exiting) return;
+          try {
+            this.opts.store.setConversationState(conversationId, "streaming");
+            this.publish(conversationId, { kind: "session_state", payload: { state: "streaming" } });
+          } catch {
+            // store closed; the rpc send below still rejects safely
+          }
+          h.lastActivity = Date.now();
+          void h.rpc.send({ type: "prompt", message }).catch(() => {});
+        },
+        publish: (e: ContractEnvelope) => {
+          try {
+            this.opts.bus.publish(e);
+          } catch {
+            // store closed (shutdown); drop
+          }
+        },
+        persistDraft: (draft) => {
+          try {
+            this.opts.store.setSpecDraftById(conversationId, draft);
+          } catch {
+            // store closed; drop
+          }
+        },
+        autonomy: () => this.autonomyFor(conversationId),
+      },
+      { specMode: "auto", maxSpecRounds: this.opts.specMaxRounds },
+    );
+    const handle: Handle = { rpc, child, lastActivity: Date.now(), exiting: false, contract, verifyAttempts: 0 };
     rpc.on("event", (ev: RpcEvent) => this.onProtocolEvent(conversationId, ev));
     rpc.on("exit", () => {
       // The host exited — the gauge reflects that regardless of whether the
@@ -124,7 +188,33 @@ export class Supervisor {
     streamingBehavior?: "steer" | "followUp",
     extraEnv?: Record<string, string>,
     cwd?: string,
+    /** #80 fix 2: specMode is no longer dropped at the route. */
+    specMode: SpecMode = "auto",
   ): Promise<boolean> {
+    const handle = await this.prepareTurn(conversationId, extraEnv, cwd);
+    // New user turn: the verify retry budget resets (#82).
+    handle.verifyAttempts = 0;
+    this.opts.store.setLastPromptById(conversationId, message);
+    handle.contract.setTurnSpecMode(specMode);
+    const command: Record<string, unknown> = {
+      type: "prompt",
+      message: handle.contract.wrapPrompt(message),
+    };
+    if (streamingBehavior) command.streamingBehavior = streamingBehavior;
+    const res = await handle.rpc.send(command);
+    return res.success;
+  }
+
+  /**
+   * Shared turn preamble: wait out a dying host, ensure the session, flip
+   * the conversation to streaming. Used by user prompts AND the lifecycle
+   * routes (approve/retry must work with no live host — #80 fix 3).
+   */
+  private async prepareTurn(
+    conversationId: string,
+    extraEnv?: Record<string, string>,
+    cwd?: string,
+  ): Promise<Handle> {
     // #77: an idle-reaped host keeps its handle until its exit fires. Wait
     // for it so this prompt is not written into a dying child's stdin and
     // does not double-spawn a second pi on the same session file while the
@@ -136,10 +226,61 @@ export class Supervisor {
     this.opts.store.setConversationState(conversationId, "streaming");
     this.publish(conversationId, { kind: "session_state", payload: { state: "streaming" } });
     handle.lastActivity = Date.now();
-    const command: Record<string, unknown> = { type: "prompt", message };
-    if (streamingBehavior) command.streamingBehavior = streamingBehavior;
-    const res = await handle.rpc.send(command);
-    return res.success;
+    return handle;
+  }
+
+  /**
+   * #80 fix 3: approve sends the REAL execution prompt, rebuilt from the
+   * persisted spec so it works even when the session host is gone (gateway
+   * restart between spec'ing and approve). Also clears any gated actions
+   * the user just reviewed.
+   */
+  async approveExecution(conversationId: string): Promise<boolean> {
+    const spec = this.opts.store.getThreadSpecById(conversationId);
+    const handle = await this.prepareTurn(conversationId, {}, undefined);
+    handle.contract.restoreDraft(spec?.specDraft ?? null);
+    handle.contract.allowPendingGated();
+    handle.contract.approveExecution();
+    return true;
+  }
+
+  /** #80 fix 3: retry re-executes against the same spec (or the original
+   *  prompt when the turn never had one). */
+  async retryExecution(conversationId: string): Promise<boolean> {
+    const spec = this.opts.store.getThreadSpecById(conversationId);
+    const handle = await this.prepareTurn(conversationId, {}, undefined);
+    handle.contract.restoreDraft(spec?.specDraft ?? null);
+    if (spec?.specDraft) {
+      handle.contract.retryExecution();
+      return true;
+    }
+    const last = this.opts.store.getLastPromptById(conversationId);
+    if (!last) return false;
+    handle.contract.beginExecution();
+    await handle.rpc.send({ type: "prompt", message: last });
+    return true;
+  }
+
+  /** #80 fix 6: spec drafts/answers reach the live agent. */
+  submitSpecPatch(conversationId: string, body: PatchSpecBody): void {
+    const handle = this.handles.get(conversationId);
+    if (!handle || handle.exiting) return;
+    handle.contract.submitSpecPatch(body);
+  }
+
+  /** Abandon publishes the terminal status via the contract, then kills. */
+  abandonThread(conversationId: string): void {
+    this.handles.get(conversationId)?.contract.abandon();
+    this.killChild(conversationId);
+  }
+
+  /** #81.3: autonomy from the namespace's merge track record. */
+  private autonomyFor(conversationId: string): Autonomy {
+    const ns = this.opts.store.getNamespaceById(conversationId);
+    if (!ns) return "standard";
+    const threshold = this.opts.trustThreshold ?? 5;
+    if (threshold <= 0) return "standard";
+    return this.opts.store.getTrustCount(ns) >= threshold ? "established" : "standard";
   }
 
   async abort(conversationId: string): Promise<boolean> {
@@ -220,6 +361,12 @@ export class Supervisor {
     // (a kind with a newline desyncs SSE framing) — they are wrapped in the
     // schema-validated "custom" kind instead. Events whose type falls
     // outside the safe charset are dropped.
+    if (ev.type === "custom_spec_question" || ev.type === "custom_spec_draft") {
+      // #80: the agent's spec-protocol signals — the contract translates
+      // them into schema-validated envelopes + lifecycle transitions.
+      handle?.contract.onProtocolEvent(ev);
+      return;
+    }
     if (ev.type.startsWith("custom_")) {
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(ev.type)) return;
       this.publish(conversationId, {
@@ -246,6 +393,30 @@ export class Supervisor {
           args: ev.args,
         },
       });
+      // #81: every live action passes the risk classifier; the verdict is
+      // the laya_verdict envelope's producer. Gated actions stop the run
+      // unless the user already approved exactly this class of action.
+      const toolName = String(ev.toolName);
+      const verdict = classifyAction(toolName, ev.args, {
+        autonomy: this.autonomyFor(conversationId),
+      });
+      this.publish(conversationId, {
+        kind: "laya_verdict",
+        payload: {
+          tool: "risk-classifier",
+          verdict: {
+            stage: "tool",
+            tool: toolName,
+            cls: verdict.cls,
+            gated: verdict.gated,
+            allowed: !verdict.gated || (handle?.contract.isActionAllowed(verdict.reason) ?? false),
+            reason: verdict.reason,
+          },
+        },
+      });
+      if (verdict.gated && !(handle?.contract.isActionAllowed(verdict.reason) ?? false)) {
+        this.escalateGate(conversationId, handle, verdict.reason);
+      }
       return;
     }
     if (ev.type === "tool_execution_end") {
@@ -256,9 +427,17 @@ export class Supervisor {
       return;
     }
     if (ev.type === "agent_settled") {
+      // #81: a gate stop owns the conversation state — the abort it issued
+      // ends the turn with a settle, and letting that settle write "idle"
+      // would erase the blocked escalation (the same race CI caught for
+      // #84 dialogs). The thread stays blocked until POST /approve.
+      if (handle?.contract.gateStopped) return;
       this.opts.store.setConversationState(conversationId, "idle");
       this.publish(conversationId, { kind: "session_state", payload: { state: "idle" } });
       if (handle) void this.harvestUsage(conversationId, handle);
+      // #80 fix 4 + #82: the settle pipeline — diff producer, verify loop,
+      // reviewed transition. Interview/gate stops stand down.
+      if (handle) void this.postTurnPipeline(conversationId, handle);
       return;
     }
     if (ev.type === "extension_ui_request") {
@@ -270,6 +449,117 @@ export class Supervisor {
         kind: "error",
         payload: { message: `extension error in ${String(ev.extensionPath)}` },
       });
+    }
+  }
+
+  /**
+   * #81: a gated action (install/migration/delete/deploy/...) fired without
+   * the user having approved it. Stop the run, mark the thread blocked with
+   * the "gated" reason, and record the action so POST /approve can allow
+   * exactly it on the next round.
+   */
+  private escalateGate(conversationId: string, handle: Handle | undefined, reason: string): void {
+    if (handle) {
+      handle.contract.gateStopped = true;
+      handle.contract.notePendingGated(reason);
+    }
+    try {
+      this.opts.store.setConversationState(conversationId, "blocked");
+      this.publish(conversationId, { kind: "session_state", payload: { state: "blocked", reason: "gated" } });
+      this.publish(conversationId, {
+        kind: "error",
+        payload: {
+          message: `Stopped before a gated action (${reason}). Review it, then approve to continue.`,
+          code: "gated_action",
+        },
+      });
+    } catch {
+      // store closed (shutdown); ignore
+    }
+    // Best-effort: stop the turn BEFORE the irreversible action completes.
+    // Real pi honors abort; if the child already ran it, the diff review is
+    // the backstop.
+    void this.abort(conversationId);
+  }
+
+  /**
+   * #80 fix 4 + #82: runs after every settle whose turn wasn't an
+   * outstanding interview or a gate stop.
+   *  - edits?  -> compute the workspace diff (gateway owns the cwd), emit
+   *               the diff envelope, transition reviewed.
+   *  - verify? -> run tests/lint/typecheck; feed failures back to the agent
+   *               with a bounded retry budget; escalate to the user only
+   *               with failure context attached.
+   */
+  private async postTurnPipeline(conversationId: string, handle: Handle): Promise<void> {
+    const contract = handle.contract;
+    if (contract.gateStopped || contract.awaitingInterview) return;
+    try {
+      const workspace = this.opts.store.getConversationById(conversationId)?.workspace ?? undefined;
+      if (!workspace) return;
+      const diff = await (this.opts.computeDiff ?? computeWorkspaceDiff)(workspace);
+      if (!diff || diff.length === 0) return;
+
+      this.publish(conversationId, { kind: "diff", payload: { files: diff } });
+
+      const verify = this.opts.verify;
+      if (verify === null) {
+        this.markReviewed(conversationId);
+        return;
+      }
+      const commands = await resolveVerifyCommands(workspace, verify?.commandsOverride);
+      if (commands.length === 0) {
+        this.markReviewed(conversationId);
+        return;
+      }
+      const retries = verify?.retries ?? 3;
+      const run = await runVerification({
+        cwd: workspace,
+        commands,
+        timeoutMs: verify?.timeoutMs,
+        exec: verify?.exec,
+      });
+      if (run.ok) {
+        this.markReviewed(conversationId);
+        return;
+      }
+      handle.verifyAttempts++;
+      const failure = formatFailure(run);
+      if (handle.verifyAttempts > retries) {
+        // Budget exhausted — escalate WITH the failure context attached (#82).
+        this.publish(conversationId, {
+          kind: "error",
+          payload: {
+            code: "verify_exhausted",
+            message: `auto-verify failed after ${retries} retries — needs your review:\n\n${failure.slice(0, 2_000)}`,
+          },
+        });
+        this.markReviewed(conversationId);
+        return;
+      }
+      // Bounded self-retry: the failure output goes back to the agent and
+      // the next settle re-enters this pipeline with a fresh diff.
+      this.publish(conversationId, {
+        kind: "error",
+        payload: {
+          code: "verify_failed",
+          message: `verification failed (attempt ${handle.verifyAttempts}/${retries}) — retrying automatically`,
+        },
+      });
+      this.opts.store.setConversationState(conversationId, "streaming");
+      this.publish(conversationId, { kind: "session_state", payload: { state: "streaming" } });
+      await handle.rpc.send({ type: "prompt", message: buildVerifyRetryPrompt(failure) });
+    } catch {
+      // diff/verify infrastructure failed — fail soft, leave the turn done
+    }
+  }
+
+  private markReviewed(conversationId: string): void {
+    try {
+      this.opts.store.markThreadReviewedById(conversationId);
+      this.publish(conversationId, { kind: "spec_status", payload: { status: "reviewed" } });
+    } catch {
+      // store closed (shutdown); ignore
     }
   }
 

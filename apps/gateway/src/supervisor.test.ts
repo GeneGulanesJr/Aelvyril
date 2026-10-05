@@ -457,4 +457,35 @@ describe("Supervisor", () => {
     // The wait held until the escalation fired, not an instant return.
     expect(Date.now() - start).toBeGreaterThanOrEqual(50);
   });
+
+  // #80 fix 2: specMode is no longer dropped — force wraps the prompt with
+  // the interview protocol, off forwards it verbatim.
+  it("prompt forwards specMode: force wraps, off passes verbatim (#80)", async () => {
+    const written: string[] = [];
+    const store = new Store(":memory:");
+    const bus = new EventBus(store);
+    const child = fakeRpcChild();
+    const rawWrite = child.stdin.write.bind(child.stdin);
+    child.stdin.write = (buf: string) => {
+      written.push(buf);
+      return rawWrite(buf);
+    };
+    const supervisor = new Supervisor({
+      bus,
+      store,
+      spawnChild: () => child as unknown as ChildProcess,
+      idleMs: 60_000,
+    });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    await supervisor.prompt(conv.id, "casual ask", undefined, {}, undefined, "off");
+    await supervisor.prompt(conv.id, "big ask", undefined, {}, undefined, "force");
+    const prompts = written
+      .map((w) => JSON.parse(w) as { type: string; message?: string })
+      .filter((m) => m.type === "prompt");
+    expect(prompts[0]!.message).toBe("casual ask");
+    expect(prompts[1]!.message).toContain("big ask");
+    expect(prompts[1]!.message).toContain("custom_spec_question");
+    expect(prompts[1]!.message).toContain("forced spec mode");
+  });
 });

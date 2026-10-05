@@ -116,6 +116,30 @@ const app = await buildApp({
   adminUserIds: process.env.GATEWAY_ADMIN_USER_IDS?.split(",")
     .map((s) => s.trim())
     .filter(Boolean),
+  // #80/#81/#82: spec/autonomy/auto-verify wiring.
+  // GATEWAY_SPEC_MAX_ROUNDS: bounded question budget per interview (default 3).
+  specMaxRounds: process.env.GATEWAY_SPEC_MAX_ROUNDS
+    ? Number(process.env.GATEWAY_SPEC_MAX_ROUNDS)
+    : undefined,
+  // GATEWAY_TRUST_THRESHOLD: merges-without-revision at which a namespace's
+  // autonomy escalates (default 5; 0 disables escalation).
+  trustThreshold: process.env.GATEWAY_TRUST_THRESHOLD
+    ? Number(process.env.GATEWAY_TRUST_THRESHOLD)
+    : undefined,
+  // GATEWAY_VERIFY=0 disables the auto-verify loop entirely; otherwise
+  // tests/lint/typecheck auto-detect from the workspace package.json.
+  verify:
+    process.env.GATEWAY_VERIFY === "0"
+      ? null
+      : {
+          commandsOverride: process.env.GATEWAY_VERIFY_COMMANDS,
+          timeoutMs: process.env.GATEWAY_VERIFY_TIMEOUT_MS
+            ? Number(process.env.GATEWAY_VERIFY_TIMEOUT_MS)
+            : undefined,
+          retries: process.env.GATEWAY_VERIFY_RETRIES
+            ? Number(process.env.GATEWAY_VERIFY_RETRIES)
+            : undefined,
+        },
 });
 
 // Default to dual-stack ("::" accepts IPv4-mapped too) so `localhost` resolves

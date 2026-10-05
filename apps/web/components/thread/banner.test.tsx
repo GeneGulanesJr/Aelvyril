@@ -46,4 +46,11 @@ describe("Banners", () => {
     render(<Banners degraded={false} blocked={null} error={null} onDismissError={() => {}} />);
     expect(screen.queryByTestId("blocked-banner")).toBeNull();
   });
+
+  it("the gated reason tells the user what stopped and how to continue (#81)", () => {
+    render(<Banners degraded={false} blocked="gated" error={null} onDismissError={() => {}} />);
+    const b = screen.getByTestId("blocked-banner");
+    expect(b.textContent).toContain("irreversible action");
+    expect(b.textContent).toContain("approve");
+  });
 });

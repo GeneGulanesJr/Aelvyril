@@ -90,10 +90,34 @@ token-bucket params in `apps/gateway/src/app.ts`) or wait 60s.
 
 ### HTTP 503 `conversation_limit_reached`
 
-Per-user concurrent-thread cap (default 3). User must delete an
-old thread (`DELETE /v1/threads/:id`) before creating new
-ones. To raise the cap, set `GATEWAY_MAX_CONVERSATIONS_PER_USER` in the
-env or override `maxConversationsPerUser` in `AppOptions`.
+Per-user thread cap (default **30** since #83 — threads are cheap rows;
+see ADR-0005). User must delete an old thread (`DELETE /v1/threads/:id`)
+before creating new ones. To change the cap, pass
+`maxConversationsPerUser` via `AppOptions` (compose wiring: edit
+`apps/gateway/src/index.ts`).
+
+### HTTP 202 `{accepted: true, queued: true}` from /prompt
+
+Not an error (#83): the user already has
+`GATEWAY_MAX_RUNNING_HOSTS` (default 2) hosts running, so the prompt was
+**durably queued** and will start automatically when a slot frees — no
+browser tab required (ADR-0005). A `409 already_queued` means the same
+thread already has a queued prompt; `POST /v1/threads/kill-all` drops a
+user's queued work.
+
+### HTTP 403 `cost_cap_reached`
+
+The thread's cumulative cost (`GATEWAY_MAX_THREAD_COST_USD`, issue #84)
+was reached; the thread is also marked `blocked` with reason `capped`
+(orange banner in the web UI). Raise the env var (restart) or abandon the
+thread. The completed turn still delivered its output — only the *next*
+prompt is refused.
+
+### HTTP 429 `too_many_streams`
+
+Per-user SSE stream cap (`GATEWAY_MAX_SSE_STREAMS`, default 10, #85).
+The web client opens one stream per thread page; more than 10 concurrent
+thread tabs for one user trip this.
 
 ### SSE stream hangs after page reload
 
@@ -106,6 +130,51 @@ client (`apps/web/lib/api.ts openStream`) does this automatically.
 emits `session_state: degraded` envelope. Next prompt respawns the child
 (workspace cwd preserved). The thread UI shows a persistent degraded banner
 (`apps/web/components/thread/banner.tsx`) while the session is degraded.
+
+### Blocked threads ("Needs you" orange banner)
+
+Issue #84 escalation state (`state: "blocked"`) with a reason:
+
+- `capped` — the per-thread budget (`GATEWAY_MAX_THREAD_COST_USD`) was hit
+  at the settle-time usage harvest.
+- `dialog` — the agent raised a blocking `extension_ui_request` dialog
+  while `GATEWAY_DIALOG_MODE=blocked`. Default mode is `auto-responder`,
+  which answers dialogs **cancelled** so headless runs keep moving (spec
+  §14.3) and only surfaces a `dialog` envelope for observability.
+- `question` — reserved for the spec-interview contract path.
+
+Set `GATEWAY_DIALOG_MODE=blocked` if you want autonomy to stop at any
+agent dialog instead of declining it.
+
+## Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GATEWAY_PORT` | 8787 | Listen port |
+| `GATEWAY_DB` | ./data/gateway.db | SQLite path |
+| `GATEWAY_IDLE_MS` | 300000 | Session-host idle reap (inactivity-based) |
+| `GATEWAY_LOG` | (on) | `silent` to disable pino logs |
+| `GATEWAY_ALLOWED_ORIGIN` | (none) | Comma-separated CORS allowlist |
+| `GATEWAY_WORKSPACE_ALLOWLIST` | (deny all) | Comma-separated absolute paths |
+| `SSE_HEARTBEAT_MS` | 15000 | SSE keepalive interval |
+| `CLERK_SECRET_KEY` | (required) | Real token verification |
+| `CLERK_AUTHORIZED_PARTIES` | (unset) | #85: comma-separated origins to pin the token `azp` claim |
+| `PI_FAKE` | (off) | `1` = dev verifier + fake child |
+| `GATEWAY_METRICS_SECRET` | (unset) | #85: when set, `/metrics` requires `Authorization: Bearer <secret>` |
+| `GATEWAY_MAX_SSE_STREAMS` | 10 | #85: per-user concurrent SSE streams |
+| `GATEWAY_SSE_REPLAY_PAGE` | 500 | #85: events per replay page (client resumes via Last-Event-ID) |
+| `GATEWAY_EVENT_RETENTION` | 10000 | #85: max events kept per thread (0 disables pruning) |
+| `GATEWAY_MAX_THREAD_COST_USD` | (unset) | #84: per-thread budget; exceeding blocks the thread |
+| `GATEWAY_DIALOG_MODE` | auto-responder | #84: `blocked` escalates agent dialogs to the needs-you state |
+| `GATEWAY_MAX_THREADS` | 30 | #83: per-user thread rows (cheap) |
+| `GATEWAY_MAX_RUNNING_HOSTS` | 2 | #83: per-user concurrent running hosts (the real cap) |
+| `GATEWAY_MAX_SESSION_HOSTS` | 100 | #83: global live-host ceiling |
+| `GATEWAY_QUEUE_INTERVAL_MS` | 2000 | #83: queue-runner tick |
+
+Note: `GATEWAY_MAX_THREADS` / `GATEWAY_MAX_RUNNING_HOSTS` /
+`GATEWAY_MAX_SESSION_HOSTS` / `GATEWAY_QUEUE_INTERVAL_MS` are read in
+`apps/gateway/src/index.ts` (compose/dev entrypoint); tests override them
+via `AppOptions`.
 
 ## Database
 
@@ -150,6 +219,9 @@ applies on next stream open (in-flight streams keep their interval).
 - `POST /v1/threads/:id/approve` — approve the draft; status → running
 - `POST /v1/threads/:id/abandon` — terminal; kills the session host
 - `POST /v1/threads/:id/retry` — re-run; status → running
+- `POST /v1/threads/kill-all` — #84 global kill switch: abandons every live
+  (streaming/blocked/queued) thread for the caller, kills their hosts, and
+  drops their queued prompts; returns `{abandoned: n}`
 
 Back-compat: `/v1/conversations*` still works — GETs 302-redirect to the canonical path; mutations are method-preserving aliases (a 302 would make fetch re-issue them as GETs, dropping method + body). Spec-mode columns (`status`, `spec_draft`, `spec_questions`, `spec_answers`) are added by the idempotent `runMigrations()` on every startup.
 
@@ -236,11 +308,14 @@ The compose.yaml wires these env vars automatically in the prod profile.
 
 ### `/metrics` (Prometheus text format)
 
-Unauthenticated. Returns counters + a histogram. Scrape from your
-Prometheus or OTel collector.
+Unauthenticated by default — set `GATEWAY_METRICS_SECRET` (#85) to require
+`Authorization: Bearer <secret>` on scrapes (e.g. when the gateway is
+exposed directly rather than behind a gating reverse proxy).
 
 ```sh
 curl -s http://127.0.0.1:8787/metrics
+# or, with the scrape secret set:
+curl -s -H 'Authorization: Bearer <secret>' http://127.0.0.1:8787/metrics
 ```
 
 Metrics exposed (spec §11):
@@ -255,6 +330,9 @@ Metrics exposed (spec §11):
 | `aelvyril_rate_limited_total` | counter | — |
 | `aelvyril_conversation_limit_reached_total` | counter | — |
 | `aelvyril_workspace_rejections_total` | counter | — |
+| `aelvyril_sse_streams_rejected_total` | counter | — |
+| `aelvyril_cost_cap_rejections_total` | counter | — |
+| `aelvyril_queued_prompts_total` | counter | — |
 | `aelvyril_active_session_hosts` | gauge | — |
 
 For TLS-protected scraping, put a `reverse_proxy gateway:8787` block in

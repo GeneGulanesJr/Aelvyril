@@ -33,10 +33,10 @@ The gateway enforces Clerk JWT bearer auth (`@clerk/backend.verifyToken`) and pe
 
 ## Stack
 
-Per spec §4/§5/§9 (see ADR 0003), the full agent platform runs as five Docker services: `web`, `gateway`, `lapis`, `sandd`, `layamcp`. See `infra/compose.yaml`, `infra/docker/`, and `infra/smoke.sh`. Two upstream patches in sibling repos complete the picture:
+Per spec §4/§5/§9 (see ADR 0003), the platform runs as **four** Docker services: `web`, `gateway`, `sandd` (prod profile), `layamcp`. See `infra/compose.yaml`, `infra/docker/`, and `infra/smoke.sh`. LaPis is **not** a service: `src/mcp/server.js` is stdio-MCP only (no HTTP server, no lockfile), so it runs in-process inside the gateway as a pi extension (`LAPIS_HOME=/data/lapis`). Two upstream patches in sibling repos complete the picture:
 
 - `LaPis/` — `LAPIS_PROJECT_KEY` env override for per-conversation namespaces (ADR 0002).
-- `LayaMCP/` — drops broken `mcp.server.fastapi`, mounts SSE on plain FastAPI, adds `/health`.
+- `DecisionMCP/` (ex-`LayaMCP`, repo renamed 2026-10-05 at v0.2.0) — decision-model MCP server; serves streamable HTTP at `/mcp` + legacy SSE at `/sse` on 8765, `GET /health`. The compose service key and `LAYAMCP_URL` keep the `layamcp` name for compatibility.
 
 The `gateway` (8787) and `web` (3000, or 3001 if 3000 is taken on the dev host) are the only host-published ports, and only on loopback (#79) — plaintext HTTP never leaves the host. In production only Caddy is public (80/443); everything else stays internal, and browsers call the gateway same-origin through Caddy's `/v1/*` route (build the web bundle with `NEXT_PUBLIC_GATEWAY_URL=` empty for that).
 

@@ -7,8 +7,14 @@
 
 FROM node:22-slim AS deps
 WORKDIR /repo
+# better-sqlite3 (gateway runtime dep) builds from source under pnpm 10's
+# onlyBuiltDependencies — node:22-slim ships no compiler toolchain.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@10.15.0 --activate
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+# tsconfig.base.json: workspace tsconfigs (and tsx) extend/read it.
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.base.json ./
 COPY apps/gateway/package.json ./apps/gateway/
 COPY packages/shared/package.json ./packages/shared/
 RUN pnpm fetch --prod=false
@@ -24,8 +30,10 @@ ENV NODE_ENV=production \
     LAPIS_HOME=/data/lapis
 # pi is published to npm; we install it into the image so the supervisor's
 # PI_COMMAND=pi can spawn it. Spec §6: pi must be on PATH in the image.
+# NOTE: the real CLI is @earendil-works/pi-coding-agent (bin: `pi`) — the
+# historical @mariozechner/pi name installs an unrelated `pi-pods` bin.
 RUN corepack enable && corepack prepare pnpm@10.15.0 --activate \
-    && npm install -g @mariozechner/pi@latest \
+    && npm install -g @earendil-works/pi-coding-agent@latest \
     && which pi && pi --version
 # The baked ~/.pi/agent directory is operator-provided: copy from build
 # context if present. Missing-by-default is fine; the gateway's PI_FAKE=1

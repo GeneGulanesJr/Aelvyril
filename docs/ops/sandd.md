@@ -1,7 +1,10 @@
 # PiSandboxed (sandd) ops runbook
 
-`sandd` is the sandbox orchestrator. Runs untrusted code in microVMs via
-libkrun. Requires `/dev/kvm` hardware passthrough (spec §9).
+`sandd` is the sandbox orchestrator. TypeScript/fastify (NOT Rust — the
+image builds with npm + tsc, see `infra/docker/Dockerfile.sandd`). Sandbox
+exec runs via the smolvm VM backend; the smolvm binary is not yet packaged,
+so boot is fine but sandbox exec is deferred (lazy spawn). Prod profile
+only — it needs `/dev/kvm` + host networking (absent on macOS).
 
 ## Hard constraints (research 2026-09-22)
 

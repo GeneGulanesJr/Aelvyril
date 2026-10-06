@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 export default {
+  // Standalone output: the Docker runtime image (infra/docker/Dockerfile.web)
+  // copies .next/standalone. Required for container deploys.
+  output: "standalone",
   transpilePackages: ["@aelvyril/shared"],
   // The repo uses Node-style ".js"-extension relative imports in TS sources
   // (lib/api.ts -> ./sse.js; @aelvyril/shared barrel -> ./envelope.js).

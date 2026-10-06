@@ -1,7 +1,15 @@
 # LaPis ops runbook
 
-LaPis is the memory layer. Gateway and `lapis` container share the same
-`memory.db` file on the `lapis-data` volume (spec §5/§8).
+> **Status (2026-10-06):** LaPis is **not** a compose service. The lapis
+> container was removed — `src/mcp/server.js` is stdio-MCP only (no HTTP
+> server, no lockfile), so a networked service could never boot. LaPis now
+> runs **in-process** inside the gateway as a pi extension
+> (`LAPIS_HOME=/data/lapis`, persisted on the `gateway-data` volume). The
+> per-user namespace mechanism below is unchanged — it applies to the
+> in-process extension the same way it did to the container.
+
+Gateway and the in-process LaPis extension share `memory.db` under
+`LAPIS_HOME` (spec §5/§8).
 
 ## Per-user namespaces
 

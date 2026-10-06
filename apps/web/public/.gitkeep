@@ -1,0 +1,2 @@
+# Static assets served by Next at /. Kept non-empty so Docker's
+# COPY apps/web/public works (infra/docker/Dockerfile.web).

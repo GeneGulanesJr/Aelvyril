@@ -6,8 +6,14 @@
 
 FROM node:22-slim AS deps
 WORKDIR /repo
+# Native builds (sharp/better-sqlite3 via the shared lockfile) need a
+# toolchain; node:22-slim ships none.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@10.15.0 --activate
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+# tsconfig.base.json: both workspace packages' tsconfigs extend it.
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.base.json ./
 COPY apps/web/package.json ./apps/web/
 COPY packages/shared/package.json ./packages/shared/
 RUN pnpm fetch --prod=false
@@ -18,27 +24,36 @@ RUN pnpm install --frozen-lockfile --offline --prod=false
 FROM deps AS build
 ENV NEXT_TELEMETRY_DISABLED=1
 # #79: NEXT_PUBLIC_* is inlined into the client bundle by `next build`.
-# compose passes the build arg; EMPTY value = same-origin /v1/* (prod
+# compose passes the build args; EMPTY value = same-origin /v1/* (prod
 # behind Caddy), unset falls back to http://localhost:8787 (compose dev).
+# The Clerk publishable key MUST be a build arg too, or the browser bundle
+# bakes `undefined` and sign-in dead-ends (the runtime env only covers SSR).
 ARG NEXT_PUBLIC_GATEWAY_URL
 ENV NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL}
+ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
 RUN pnpm --filter @aelvyril/shared build || true
 RUN pnpm --filter @aelvyril/web build
 
 FROM node:22-slim AS runtime
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
-    PORT=3000
+    PORT=3000 \
+    # Docker sets HOSTNAME=<container-id>; Next standalone binds that name,
+    # so the loopback healthcheck would hit nothing. Pin the bind address.
+    HOSTNAME=0.0.0.0
 # next-standalone copies its own .next/standalone + node_modules. The full
-# source tree isn't needed in the runtime image.
+# source tree isn't needed in the runtime image. In a pnpm monorepo the
+# standalone tree mirrors the workspace root: server.js lives at
+# apps/web/server.js (not ./server.js) inside the standalone root.
 WORKDIR /app
 RUN groupadd --gid 1001 nodejs \
     && useradd --uid 1001 --gid nodejs --shell /bin/bash --create-home nextjs
 COPY --from=build --chown=nextjs:nodejs /repo/apps/web/.next/standalone /app
-COPY --from=build --chown=nextjs:nodejs /repo/apps/web/.next/static /app/.next/static
-COPY --from=build --chown=nextjs:nodejs /repo/apps/web/public /app/public
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/.next/static /app/apps/web/.next/static
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/public /app/apps/web/public
 USER nextjs
 EXPOSE 3000
 # proxy.ts (Next 16) ships with the standalone bundle; default Next.js server
 # reads PORT from env.
-CMD ["node", "server.js"]
+CMD ["node", "apps/web/server.js"]

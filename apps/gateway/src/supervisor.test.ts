@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { EventBus } from "./bus.js";
 import { Store } from "./store.js";
 import { Supervisor, type SupervisorOptions } from "./supervisor.js";
 import type { EventEnvelope } from "@aelvyril/shared";
+import type { FilePatch } from "./workspace-git.js";
 
 const fakePi = fileURLToPath(new URL("../fixtures/fake-pi.mjs", import.meta.url));
 
@@ -293,7 +294,9 @@ describe("Supervisor", () => {
     expect(spawnCalls[1]!.env.LAPIS_PROJECT_KEY).toBe("platform");
   });
 
-  it("falls back to no cwd when the conversation has no workspace", async () => {
+  // Review P2: with no workspace the host spawns in a per-thread scratch dir
+  // under the OS temp dir — never inside the gateway's own repo tree.
+  it("falls back to a per-thread tmpdir scratch cwd when the conversation has no workspace", async () => {
     const store = new Store(":memory:");
     const conv = store.createConversation({ namespace: "platform" }); // no workspace
     const spawnCalls: Array<{ cwd: string | undefined }> = [];
@@ -302,14 +305,18 @@ describe("Supervisor", () => {
       store,
       spawnChild: (_cid, _extraEnv, cwd) => {
         spawnCalls.push({ cwd: cwd ?? undefined });
-        return spawn(process.execPath, [fakePi]);
+        return spawn(process.execPath, [fakePi], { cwd });
       },
       idleMs: 60_000,
     });
     s = supervisor;
     await supervisor.prompt(conv.id, "hi");
     expect(spawnCalls).toHaveLength(1);
-    expect(spawnCalls[0]!.cwd).toBeUndefined();
+    const cwd = spawnCalls[0]!.cwd!;
+    // Under the OS temp root, namespaced to aelvyril-sessions/<thread id>.
+    expect(cwd.startsWith(join(tmpdir(), "aelvyril-sessions"))).toBe(true);
+    expect(cwd.endsWith(conv.id)).toBe(true);
+    expect(existsSync(cwd)).toBe(true); // created before the spawn
   });
 
   it("auto-responds cancelled to pi dialog requests so headless runs settle (#84)", async () => {
@@ -487,5 +494,130 @@ describe("Supervisor", () => {
     expect(prompts[1]!.message).toContain("big ask");
     expect(prompts[1]!.message).toContain("custom_spec_question");
     expect(prompts[1]!.message).toContain("forced spec mode");
+  });
+
+  // Review P1 rework of the #85 dead-mark: the old per-conversation Set
+  // silenced a RESPAWNED host until the killed child exited. The mark is
+  // child-identity-keyed now: only the zombie's events drop, and
+  // prepareTurn awaits the zombie's exit before spawning (no double pi on
+  // one session file).
+  it("killChild drops only the OLD child's events; re-prompt delivers the respawned host immediately", async () => {
+    const { store, bus, supervisor, children } = makeFakeSupervisor({ killGraceMs: 150 });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    expect(await supervisor.prompt(conv.id, "hi")).toBe(true);
+    const oldChild = children[0]!;
+    supervisor.killChild(conv.id);
+    // The old fake ignores SIGTERM — it is still alive.
+    expect(oldChild.exitCode).toBeNull();
+    expect(oldChild.signalCode).toBeNull();
+    // Re-prompt IMMEDIATELY (abandon → change mind). The replacement must
+    // NOT spawn while the zombie lives, and its events must not be dropped.
+    const reprompt = supervisor.prompt(conv.id, "round two");
+    await new Promise((r) => setTimeout(r, 40));
+    expect(children).toHaveLength(1); // still waiting on the zombie
+    expect(await reprompt).toBe(true);
+    await vi.waitFor(() => expect(children).toHaveLength(2)); // zombie exited → respawn
+    // The NEW host's events flow: agent_settled is NOT dropped — the thread
+    // ends idle instead of hanging "streaming" forever.
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
+    });
+    const states = bus
+      .replay(conv.id, -1)
+      .filter((e) => e.kind === "session_state")
+      .map((e) => (e.payload as { state: string }).state);
+    expect(states).toContain("streaming");
+    expect(states.at(-1)).toBe("idle");
+    expect(oldChild.kills).toEqual(["SIGTERM", "SIGKILL"]);
+    // Cleanup: the respawned fake also ignores SIGTERM.
+    await supervisor.disposeAll(50);
+  });
+
+  // Review P2: the postTurnPipeline is async — a newer user turn must not
+  // inherit the stale pipeline's verify-retry or its markReviewed.
+  it("postTurnPipeline bails when a newer turn started — no stale markReviewed", async () => {
+    const gates: Array<(files: FilePatch[]) => void> = [];
+    let diffCalls = 0;
+    const { store, bus, supervisor } = makeFakeSupervisor({
+      computeDiff: async () => {
+        const i = diffCalls++;
+        return new Promise<FilePatch[]>((resolve) => {
+          gates[i] = resolve;
+        });
+      },
+      verify: {
+        commandsOverride: "pnpm test",
+        exec: async (command) => ({ command: command.join(" "), ok: true, output: "green" }),
+        retries: 3,
+      },
+    });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform", workspace: "/tmp/ws-review" });
+    await supervisor.prompt(conv.id, "turn one");
+    // Turn two starts while turn one's pipeline is parked on its diff.
+    await supervisor.prompt(conv.id, "turn two");
+    await vi.waitFor(() => expect(diffCalls).toBe(2));
+    gates[0]!([{ path: "a.ts", patch: "+x" }]);
+    gates[1]!([{ path: "a.ts", patch: "+x" }]);
+    // Both pipelines verified green, but only the FRESH one (turn two's)
+    // may mark the thread reviewed — the stale pipeline must bail.
+    await vi.waitFor(() => {
+      const reviewed = bus
+        .replay(conv.id, -1)
+        .filter((e) => e.kind === "spec_status")
+        .map((e) => (e.payload as { status?: string }).status);
+      expect(reviewed).toEqual(["reviewed"]);
+    });
+  });
+
+  // Review P3: fractional pi stats must be coerced (Math.floor) — the
+  // usage envelope's int schema used to silently drop them.
+  it("harvestUsage floors fractional token stats so the envelope survives the schema", async () => {
+    const store = new Store(":memory:");
+    const bus = new EventBus(store);
+    const child = fakeRpcChild();
+    const rawWrite = child.stdin.write.bind(child.stdin);
+    child.stdin.write = (buf: string) => {
+      const cmd = JSON.parse(buf) as { id?: string; type: string };
+      if (cmd.type === "get_session_stats") {
+        setImmediate(() => {
+          child.stdout.emit(
+            "data",
+            Buffer.from(
+              JSON.stringify({
+                id: cmd.id,
+                type: "response",
+                command: cmd.type,
+                success: true,
+                data: {
+                  tokens: { input: 100.7, output: 50.2, cacheRead: 10.5, cacheWrite: 5.9, total: 165.3 },
+                  cost: 0.00425,
+                },
+              }) + "\n",
+            ),
+          );
+        });
+      }
+      return rawWrite(buf);
+    };
+    const supervisor = new Supervisor({
+      bus,
+      store,
+      spawnChild: () => child as unknown as ChildProcess,
+      idleMs: 60_000,
+    });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    await supervisor.prompt(conv.id, "hi");
+    await vi.waitFor(() => {
+      expect(bus.replay(conv.id, -1).some((e) => e.kind === "usage")).toBe(true);
+    });
+    const usage = bus.replay(conv.id, -1).find((e) => e.kind === "usage")!.payload;
+    expect(usage).toEqual({
+      tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 },
+      cost: 0.00425, // fractional cost is legit (schema allows it)
+    });
+    expect(store.getConversation(conv.id, "platform")?.usage).toEqual(usage);
   });
 });

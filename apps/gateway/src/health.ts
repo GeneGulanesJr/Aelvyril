@@ -89,7 +89,10 @@ export async function runHealthCheck(
           return;
         }
       } else {
-        [host, portStr] = host.split(":");
+        // noUncheckedIndexedAccess: split parts are `string | undefined`.
+        const parts = host.split(":");
+        host = parts[0] ?? "";
+        portStr = parts[1] ?? "";
       }
       const port = Number(portStr);
       if (!host || !port || Number.isNaN(port)) {

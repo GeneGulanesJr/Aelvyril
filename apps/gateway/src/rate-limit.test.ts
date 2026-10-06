@@ -56,4 +56,34 @@ describe("createRateLimiter", () => {
     rl.reset("u1");
     expect(rl.consume("u1")).toBe(1);
   });
+
+  // Review P3: attacker-chosen userIds must not grow the bucket Map without
+  // bound — buckets idle for >3 refill periods are lazily evicted.
+  it("evicts buckets idle longer than ~3 refill periods (lazy, bounded memory)", () => {
+    const rl = make(2, 1); // refill period 2s → evict after 6s idle
+    for (let i = 0; i < 50; i++) rl.consume(`attacker-${i}`);
+    expect(rl.size()).toBe(50);
+    now += 7_000; // past the eviction horizon
+    // The sweep runs lazily on the next consume...
+    expect(rl.consume("fresh-user")).toBe(1);
+    expect(rl.size()).toBe(1); // only the fresh bucket survives
+  });
+
+  it("does not evict recently-active buckets", () => {
+    const rl = make(2, 1); // refill period 2s → evict after 6s idle
+    rl.consume("active");
+    now += 4_000; // idle 4s < 6s horizon (and inside one sweep period)
+    rl.consume("other");
+    expect(rl.size()).toBe(2);
+  });
+
+  // Review P3: an empty identity must not create (or credit) a shared
+  // empty-id bucket — fail closed, touch nothing.
+  it("consume no-ops safely for an empty userId", () => {
+    const rl = make(5, 1);
+    expect(rl.consume("")).toBe(-1);
+    expect(rl.size()).toBe(0);
+    // And it did not dent anyone else's capacity.
+    expect(rl.consume("real")).toBe(4);
+  });
 });

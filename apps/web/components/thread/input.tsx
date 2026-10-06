@@ -1,14 +1,28 @@
 "use client";
 import { useState } from "react";
 
-export function ThreadInput({ onAsk, disabled, waiting = false, onStop }: {
-  onAsk: (prompt: string, mode: "auto" | "force" | "off") => void;
+export function ThreadInput({ onAsk, disabled, waiting = false, onStop, submitting = false }: {
+  onAsk: (prompt: string, mode: "auto" | "force" | "off") => void | Promise<void>;
   disabled: boolean;
   /** A turn is in flight — shows Stop (spec §6: sends queue as steers). */
   waiting?: boolean;
+  /** Create/prompt round-trip in flight — disables both send buttons. */
+  submitting?: boolean;
   onStop?: () => void;
 }) {
   const [text, setText] = useState("");
+
+  const send = (mode: "auto" | "force") => {
+    const result = onAsk(text, mode);
+    // Promise-returning callers (new-thread create) clear only on success so
+    // a failed create keeps the message; fire-and-forget callers clear now.
+    if (result instanceof Promise) {
+      void result.then(() => setText("")).catch(() => {});
+    } else {
+      setText("");
+    }
+  };
+
   return (
     <div className="border-t border-[#2b3245] bg-[#0d1117] p-3">
       <textarea
@@ -24,14 +38,14 @@ export function ThreadInput({ onAsk, disabled, waiting = false, onStop }: {
         <button
           className="rounded bg-[#1f6feb] px-3 py-1 text-sm font-medium disabled:opacity-40"
           data-testid="ask-button"
-          disabled={disabled || !text.trim()}
-          onClick={() => { onAsk(text, "auto"); setText(""); }}
+          disabled={disabled || submitting || !text.trim()}
+          onClick={() => send("auto")}
         >Ask</button>
         <button
           className="rounded border border-[#2b3245] bg-[#161b27] px-3 py-1 text-sm disabled:opacity-40"
           data-testid="ask-spec-button"
-          disabled={disabled || !text.trim()}
-          onClick={() => { onAsk(text, "force"); setText(""); }}
+          disabled={disabled || submitting || !text.trim()}
+          onClick={() => send("force")}
         >Ask + spec</button>
         {waiting && onStop && (
           <button

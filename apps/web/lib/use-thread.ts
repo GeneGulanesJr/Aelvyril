@@ -32,6 +32,26 @@ export interface UseThreadDeps {
   gatewayUrl?: string;
 }
 
+/** Clean slate for a thread — also the reset target when threadId changes. */
+const initialThreadState: ThreadState = {
+  status: "draft",
+  statusLive: false,
+  questions: [],
+  draft: null,
+  plan: [],
+  trace: [],
+  diff: [],
+  error: null,
+  degraded: false,
+  blocked: null,
+  waiting: false,
+  usage: null,
+};
+
+function toErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 export function useThread(
   threadId: string | null,
   deps: UseThreadDeps = {},
@@ -47,24 +67,15 @@ export function useThread(
   dismissError: () => void;
 } {
   const { getToken, gatewayUrl } = deps;
-  const [state, setState] = useState<ThreadState>({
-    status: "draft",
-    statusLive: false,
-    questions: [],
-    draft: null,
-    plan: [],
-    trace: [],
-    diff: [],
-    error: null,
-    degraded: false,
-    blocked: null,
-    waiting: false,
-    usage: null,
-  });
+  const [state, setState] = useState<ThreadState>(initialThreadState);
   const clientRef = useRef<GatewayClient | null>(null);
 
   useEffect(() => {
     if (!threadId) return;
+    // Navigating A→B must not bleed A's trace/questions/draft/error/usage
+    // into B (and B's replay would otherwise append onto A's trace): reset
+    // to a clean slate whenever the id changes; the SSE replay re-fills it.
+    setState({ ...initialThreadState });
     const client = new GatewayClient(
       gatewayUrl ?? (process.env.NEXT_PUBLIC_GATEWAY_URL as string | undefined) ?? "http://localhost:8787",
       getToken ?? (async () => null),
@@ -101,6 +112,8 @@ export function useThread(
       setState((s) => ({ ...s, waiting: true }));
       try {
         await clientRef.current.prompt(threadId, { message, specMode, ...steer });
+      } catch (err) {
+        setState((s) => ({ ...s, error: toErrorMessage(err) }));
       } finally {
         setState((s) => ({ ...s, waiting: false }));
       }
@@ -108,11 +121,22 @@ export function useThread(
     [threadId, state.waiting],
   );
 
+  // Mutations are fire-and-forget at the call sites, so a rejection must
+  // land in the error banner instead of escaping as an unhandled rejection.
+  const run = useCallback(async (action: () => Promise<void>) => {
+    try {
+      await action();
+    } catch (err) {
+      setState((s) => ({ ...s, error: toErrorMessage(err) }));
+    }
+  }, []);
+
   const stop = useCallback(async () => {
-    if (!clientRef.current || !threadId) return;
-    await clientRef.current.abortThread(threadId);
+    const client = clientRef.current;
+    if (!client || !threadId) return;
+    await run(() => client.abortThread(threadId));
     setState((s) => ({ ...s, waiting: false }));
-  }, [threadId]);
+  }, [threadId, run]);
 
   const dismissError = useCallback(() => {
     setState((s) => ({ ...s, error: null }));
@@ -120,40 +144,46 @@ export function useThread(
 
   const submitAnswers = useCallback(
     async (answers: Record<string, string>) => {
-      if (!clientRef.current || !threadId) return;
-      await clientRef.current.patchSpec(threadId, { kind: "answer", answers });
+      const client = clientRef.current;
+      if (!client || !threadId) return;
+      await run(() => client.patchSpec(threadId, { kind: "answer", answers }));
     },
-    [threadId],
+    [threadId, run],
   );
 
   const editSpec = useCallback(
     async (field: "goal" | "filesAffected" | "plan" | "risks", value: string | string[]) => {
-      if (!clientRef.current || !threadId) return;
-      await clientRef.current.patchSpec(threadId, { kind: "edit", field, value });
+      const client = clientRef.current;
+      if (!client || !threadId) return;
+      await run(() => client.patchSpec(threadId, { kind: "edit", field, value }));
     },
-    [threadId],
+    [threadId, run],
   );
 
   const approve = useCallback(async () => {
-    if (!clientRef.current || !threadId) return;
-    await clientRef.current.approveSpec(threadId);
-  }, [threadId]);
+    const client = clientRef.current;
+    if (!client || !threadId) return;
+    await run(() => client.approveSpec(threadId));
+  }, [threadId, run]);
 
   const abandon = useCallback(async () => {
-    if (!clientRef.current || !threadId) return;
-    await clientRef.current.abandonThread(threadId);
-  }, [threadId]);
+    const client = clientRef.current;
+    if (!client || !threadId) return;
+    await run(() => client.abandonThread(threadId));
+  }, [threadId, run]);
 
   const retry = useCallback(async () => {
-    if (!clientRef.current || !threadId) return;
-    await clientRef.current.retryThread(threadId);
-  }, [threadId]);
+    const client = clientRef.current;
+    if (!client || !threadId) return;
+    await run(() => client.retryThread(threadId));
+  }, [threadId, run]);
 
   // #80: accept the reviewed diff (reviewed → merged).
   const merge = useCallback(async () => {
-    if (!clientRef.current || !threadId) return;
-    await clientRef.current.mergeThread(threadId);
-  }, [threadId]);
+    const client = clientRef.current;
+    if (!client || !threadId) return;
+    await run(() => client.mergeThread(threadId));
+  }, [threadId, run]);
 
   return { ...state, ask, submitAnswers, editSpec, approve, abandon, retry, merge, stop, dismissError };
 }
@@ -168,6 +198,20 @@ function applyEnvelope(s: ThreadState, e: EventEnvelope): ThreadState {
       return { ...s, draft: e.payload.draft, plan: e.payload.draft.plan };
     case "text_delta":
       return { ...s, trace: [...s.trace, e.payload.delta] };
+    case "tool_call": {
+      // Display-only reduction: the gated banner (#81) tells users to
+      // "review it in the trace", so tool activity must appear there.
+      const args = e.payload.args === undefined ? "" : JSON.stringify(e.payload.args);
+      return { ...s, trace: [...s.trace, `→ ${e.payload.toolName}(${args})`] };
+    }
+    case "tool_result":
+      return { ...s, trace: [...s.trace, `← ${e.payload.isError ? "error" : "ok"}`] };
+    case "dialog":
+      // #84: surfaced/auto-answered dialogs stay auditable in the trace.
+      return {
+        ...s,
+        trace: [...s.trace, `dialog: ${e.payload.title} (${e.payload.action})`],
+      };
     case "diff":
       return { ...s, diff: e.payload.files };
     case "error":

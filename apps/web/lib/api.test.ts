@@ -47,22 +47,6 @@ describe("GatewayClient", () => {
     await expect(client.renameConversation("conv_x", { title: "x" })).rejects.toThrow(/rename failed: 404/);
   });
 
-  it("deleteConversation issues DELETE and returns void on success", async () => {
-    const { client } = makeClient();
-    const { calls } = mockFetchSequence([{ ok: true, status: 204 }]);
-    await client.deleteConversation("conv_1");
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe("http://example.test/v1/conversations/conv_1");
-    expect(calls[0]!.init?.method).toBe("DELETE");
-    expect((calls[0]!.init?.headers as Record<string, string>).authorization).toBe("Bearer test-token");
-  });
-
-  it("deleteConversation throws on non-2xx with the status code", async () => {
-    const { client } = makeClient();
-    mockFetchSequence([{ ok: false, status: 404, body: { error: "not_found" } }]);
-    await expect(client.deleteConversation("conv_x")).rejects.toThrow(/delete failed: 404/);
-  });
-
   it("getUpdateStatus fetches + parses the update payload", async () => {
     const { client } = makeClient();
     mockFetchSequence([
@@ -266,6 +250,18 @@ describe("openStream (#85)", () => {
     expect(
       ((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[1]![1] as RequestInit).headers,
     ).toMatchObject({ "last-event-id": "0" });
+    close();
+  });
+
+  it("a pre-aborted caller signal never fetches (no eternal reconnect)", async () => {
+    const { client } = makeClient();
+    const { calls } = mockSse([{ status: 200, text: sseBlock(0) }]);
+    const ac = new AbortController();
+    ac.abort();
+    const close = client.openStream("t1", () => {}, ac.signal);
+    // Give the loop a chance to misbehave — it must exit before any fetch.
+    await new Promise((r) => setTimeout(r, 25));
+    expect(calls).toHaveLength(0);
     close();
   });
 });

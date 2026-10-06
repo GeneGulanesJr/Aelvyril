@@ -23,6 +23,9 @@ export const ROUTES = {
   threadMerge: (id: string) => `/v1/threads/${id}/merge`,
   // #84: global kill switch — abandon every live/queued thread for the user.
   threadKillAll: "/v1/threads/kill-all",
+  // Admin: manual self-update flow (GET status, POST apply).
+  adminUpdateStatus: "/v1/admin/update/status",
+  adminUpdate: "/v1/admin/update",
 } as const;
 
 export const CreateConversationBody = z.object({

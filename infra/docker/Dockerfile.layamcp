@@ -40,15 +40,28 @@ FROM python:3.12-slim AS runtime
 ENV DECISIONMCP_HOST=0.0.0.0 \
     DECISIONMCP_PORT=8765 \
     DECISIONMCP_PRELOAD_MODELS=true \
-    DECISIONMCP_LOG_LEVEL=INFO
+    DECISIONMCP_LOG_LEVEL=INFO \
+    # Default data_dir is inside site-packages (root-owned) — unwritable as
+    # the non-root user below. Point it at a dedicated directory instead.
+    DECISIONMCP_DATA_DIR=/data/decisionmcp
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates wget \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 1001 decision \
+    && useradd --uid 1001 --gid decision --create-home --shell /bin/bash decision
 COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=deps /usr/local/bin/decisionmcp /usr/local/bin/decisionmcp
 WORKDIR /repo
-# HF model cache survives container restarts via the volume.
-ENV HF_HOME=/root/.cache/huggingface
+# Non-root per spec §9 parity with web/gateway/sandd (review P2): the only
+# writable paths the service needs are its data dir (usage.db) and its HF
+# model cache.
+RUN chown decision:decision /repo \
+    && mkdir -p /data/decisionmcp && chown -R decision:decision /data
+# HF model cache survives container restarts via the volume (compose maps
+# hf-models here; moved off /root when the container dropped privileges).
+ENV HF_HOME=/home/decision/.cache/huggingface
+RUN mkdir -p "$HF_HOME" && chown -R decision:decision /home/decision
+USER decision
 EXPOSE 8765
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
     CMD wget -q -O - http://127.0.0.1:8765/health || exit 1

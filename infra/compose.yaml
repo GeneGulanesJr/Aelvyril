@@ -183,8 +183,11 @@ services:
       SMOLVM_BIN: /usr/local/bin/smolvm
       SMOLVM_IMAGES_DIR: /images
     # Sandd binds hardcoded 127.0.0.1 (src/server/main.ts) — no SANDD_HOST
-    # upstream yet — so it must share the host network namespace. The
-    # gateway reaches it at 127.0.0.1:7391 on the same host.
+    # upstream yet — so it must share the host network namespace. NOTE: from
+    # the BRIDGED gateway container, 127.0.0.1:7391 is NOT reachable — that
+    # loopback belongs to sandd's host netns. Wiring sandbox-exec needs the
+    # upstream SANDD_HOST fix (or a bridge proxy); until then no SANDD_URL is
+    # passed, so /healthz silently skips the sandd probe.
     network_mode: host
     profiles: [prod]
 
@@ -202,7 +205,7 @@ services:
     expose:
       - "8765"
     volumes:
-      - hf-models:/root/.cache/huggingface
+      - hf-models:/home/decision/.cache/huggingface
     healthcheck:
       # Models load at module import; if /health answered, they're resident.
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8765/health"]
@@ -223,8 +226,12 @@ volumes:
   sandbox-images:
   hf-models:
   sandd-token:
-    # Pre-seeded by operator: `docker run --rm -v sandd-token:/out alpine \
-    #   sh -c "echo TOKEN > /out/token && chmod 0600 /out/token"`
+    # Pre-seeded by operator. NOTE the project prefix: compose creates
+    # <project>_<name> = aelvyril_sandd-token, so seed THAT volume — a bare
+    # `-v sandd-token:/out` creates a different, never-mounted volume:
+    #   docker run --rm -v aelvyril_sandd-token:/out alpine \
+    #     sh -c "echo TOKEN > /out/token && chmod 0600 /out/token"
+    # (Upstream does not read /token yet; seeding is future-proofing.)
     external: false
   caddy-data:
   caddy-config:

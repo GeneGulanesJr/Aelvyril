@@ -1,0 +1,21 @@
+# Build contexts for web+gateway are the repo root (compose `context: ..`).
+# Keep them small and secret-free: nothing below is COPYed into any image,
+# but everything here would otherwise ship to the daemon on every build
+# (including .git history and infra/.env dev keys) and bloat transfer time.
+.git
+.gitignore
+.dockerignore
+**/node_modules
+**/.next
+**/dist
+**/*.tsbuildinfo
+data/
+docs/
+repo-media/
+infra/.env
+infra/workspaces/
+infra/data/
+apps/web/.env*
+apps/gateway/.env*
+*.log
+.DS_Store

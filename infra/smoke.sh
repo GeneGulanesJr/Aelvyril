@@ -24,6 +24,16 @@ if [[ "${NEXT_PUBLIC_AUTH_DISABLED:-}" != "1" && "${PI_FAKE:-}" != "1" ]]; then
   exit 2
 fi
 
+# Compose binds GATEWAY_HOST="::" inside the container; the fake verifier
+# refuses non-loopback binds unless explicitly acknowledged (index.ts guard).
+# Without this third var the gateway crash-loops and smoke dies on a generic
+# "never became healthy" — fail fast with the actionable message instead.
+if [[ "${PI_FAKE:-}" == "1" && -z "${CLERK_SECRET_KEY:-}" && "${PI_FAKE_ALLOW_NON_LOOPBACK:-}" != "1" ]]; then
+  echo "smoke: PI_FAKE=1 without Clerk keys requires PI_FAKE_ALLOW_NON_LOOPBACK=1 in infra/.env" \
+       "(compose binds GATEWAY_HOST=:: inside the container)" >&2
+  exit 2
+fi
+
 cleanup() {
   local rc=$?
   if [[ "${SMOKE_TEARDOWN:-0}" == "1" ]]; then

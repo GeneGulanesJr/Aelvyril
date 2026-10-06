@@ -1,8 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
-import { useAuth } from "@clerk/nextjs";
 import { useParams, useRouter } from "next/navigation";
 import type { Thread } from "@aelvyril/shared";
+import { useAppAuth } from "../../../components/auth-gate.js";
 import { GatewayClient } from "../../../lib/api.js";
 import { useThread } from "../../../lib/use-thread.js";
 import { ThreadSidebar } from "../../../components/thread/sidebar.js";
@@ -24,7 +24,7 @@ function SignInPrompt() {
 }
 
 export default function ThreadPage() {
-  const { getToken, userId } = useAuth();
+  const { getToken, userId } = useAppAuth();
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
   const [client, setClient] = useState<GatewayClient | null>(null);

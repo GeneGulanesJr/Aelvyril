@@ -4,12 +4,17 @@ import ThreadPage from "./page.js";
 
 // Stable getToken identity — the page's useEffect depends on it; a new
 // function per render would loop the effect forever (OOM in tests).
-const stableGetToken = async () => "tok";
-
-vi.mock("@clerk/nextjs", () => ({
-  useAuth: () => ({ getToken: stableGetToken, userId: "u1", isSignedIn: true, isLoaded: true }),
-  UserButton: () => null,
-}));
+// The page consumes useAppAuth() (AuthGate context), so mock that module
+// rather than Clerk: AuthGate becomes a passthrough with a signed-in dev
+// identity. Factory-local mockGetToken keeps the identity stable across
+// tests (vi.mock factories are hoisted above top-level lets).
+vi.mock("../../../components/auth-gate.js", () => {
+  const mockGetToken = async () => "tok";
+  return {
+    AuthGate: (props: { children?: React.ReactNode }) => props.children ?? null,
+    useAppAuth: () => ({ getToken: mockGetToken, userId: "u1" }),
+  };
+});
 
 const push = vi.fn();
 vi.mock("next/navigation", () => ({

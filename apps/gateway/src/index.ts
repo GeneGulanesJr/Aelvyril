@@ -12,12 +12,30 @@ const fakeVerifier = !process.env.CLERK_SECRET_KEY && useFakeChild;
 // #78: the fake verifier accepts ANY bearer token and derives the identity
 // from the token itself — full cross-tenant access for anyone who can
 // reach the socket. That is tolerable on loopback only: refuse to boot it
-// pointed at a non-loopback interface.
-if (fakeVerifier && configuredHost !== undefined && !isLoopbackHost(configuredHost)) {
+// pointed at a non-loopback interface — UNLESS the operator explicitly
+// acknowledges the container case (PI_FAKE_ALLOW_NON_LOOPBACK=1): inside a
+// container the process-level bind says nothing about exposure; Docker's
+// port mapping is loopback-only (#79), so a non-loopback in-container bind
+// is how the dev stack stays reachable from peer containers.
+if (
+  fakeVerifier &&
+  configuredHost !== undefined &&
+  !isLoopbackHost(configuredHost) &&
+  process.env.PI_FAKE_ALLOW_NON_LOOPBACK !== "1"
+) {
   throw new Error(
     `PI_FAKE=1 enables a dev verifier that accepts any bearer token; ` +
       `refusing to bind non-loopback GATEWAY_HOST=${configuredHost}. ` +
-      `Set GATEWAY_HOST=127.0.0.1 for dev, or configure CLERK_SECRET_KEY for real auth.`,
+      `Set GATEWAY_HOST=127.0.0.1 for dev, configure CLERK_SECRET_KEY for real auth, ` +
+      `or set PI_FAKE_ALLOW_NON_LOOPBACK=1 when running inside a container whose ` +
+      `published ports are loopback-only (Docker).`,
+  );
+}
+
+if (fakeVerifier && configuredHost !== undefined && !isLoopbackHost(configuredHost)) {
+  console.warn(
+    "[PI_FAKE] non-loopback GATEWAY_HOST with the dev verifier — allowed by " +
+      "PI_FAKE_ALLOW_NON_LOOPBACK=1; exposure is the operator's responsibility.",
   );
 }
 

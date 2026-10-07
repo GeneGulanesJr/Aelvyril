@@ -1,42 +1,77 @@
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ThreadPage from "./page.js";
 
 // Stable getToken identity — the page's useEffect depends on it; a new
 // function per render would loop the effect forever (OOM in tests).
-const stableGetToken = async () => "tok";
-
-vi.mock("@clerk/nextjs", () => ({
-  useAuth: () => ({ getToken: stableGetToken, userId: "u1", isSignedIn: true, isLoaded: true }),
-  UserButton: () => null,
+// The page consumes useAppAuth() (AuthGate context), so mock that module
+// rather than Clerk: AuthGate becomes a passthrough with a signed-in dev
+// identity.
+vi.mock("../../../components/auth-gate.js", () => ({
+  AuthGate: (props: { children?: React.ReactNode }) => props.children ?? null,
+  useAppAuth: () => ({ getToken: h.mockGetToken, userId: "u1" }),
 }));
 
-const push = vi.fn();
+// Hoisted shared state: mutable navigation params (to exercise both the
+// /thread/:id and /thread/new renders) and a single GatewayClient instance
+// mock so tests can assert call counts on its methods.
+const h = vi.hoisted(() => {
+  const mockGetToken = async () => "tok";
+  const push = vi.fn();
+  const nav = { params: { id: "t1" } };
+  const client = {
+    listThreads: vi.fn(),
+    createThread: vi.fn(),
+    prompt: vi.fn(),
+    deleteThread: vi.fn(),
+    renameConversation: vi.fn(),
+    killAllThreads: vi.fn(),
+  };
+  // Mutable slice of the useThread mock — tests flip error to null so the
+  // page-level actionError path (new-thread create failures) is reachable.
+  const hook = { error: null as string | null };
+  return { mockGetToken, push, nav, client, hook };
+});
+
 vi.mock("next/navigation", () => ({
-  useParams: () => ({ id: "t1" }),
-  useRouter: () => ({ push }),
+  useParams: () => h.nav.params,
+  useRouter: () => ({ push: h.push }),
 }));
 
 vi.mock("../../../lib/api.js", () => ({
-  GatewayClient: vi.fn().mockImplementation(() => ({
-    listThreads: vi.fn().mockResolvedValue([
-      { id: "t1", title: "add RBAC", workspace: null, state: "idle", createdAt: "2026-09-23T00:00:00.000Z", status: "draft", specDraft: null, specQuestions: [], specAnswers: {} },
-    ]),
-    createThread: vi.fn(),
-    deleteThread: vi.fn().mockResolvedValue(undefined),
-  })),
+  GatewayClient: vi.fn().mockImplementation(() => h.client),
 }));
 
 vi.mock("../../../lib/use-thread.js", () => ({
   useThread: () => ({
-    status: "draft", questions: [], draft: null, plan: ["step1"], trace: [], diff: [], error: "boom",
-    degraded: true, waiting: false,
+    status: "draft", statusLive: false, questions: [], draft: null, plan: ["step1"], trace: [], diff: [],
+    error: h.hook.error, degraded: true, blocked: null, waiting: false, usage: null,
     ask: vi.fn(), submitAnswers: vi.fn(), editSpec: vi.fn(), approve: vi.fn(), abandon: vi.fn(), retry: vi.fn(),
     stop: vi.fn(), dismissError: vi.fn(),
   }),
 }));
 
+function threadRow(id: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id, title: null, workspace: null, state: "idle", createdAt: "2026-09-23T00:00:00.000Z",
+    status: "draft", specDraft: null, specQuestions: [], specAnswers: {}, usage: null,
+    ...overrides,
+  };
+}
+
 describe("ThreadPage", () => {
+  beforeEach(() => {
+    h.nav.params.id = "t1";
+    h.hook.error = null;
+    h.push.mockClear();
+    h.client.listThreads.mockReset().mockResolvedValue([threadRow("t1", { title: "add RBAC" })]);
+    h.client.createThread.mockReset().mockResolvedValue(threadRow("t-new"));
+    h.client.prompt.mockReset().mockResolvedValue(undefined);
+    h.client.deleteThread.mockReset().mockResolvedValue(undefined);
+    h.client.renameConversation.mockReset().mockResolvedValue(threadRow("t1"));
+    h.client.killAllThreads.mockReset().mockResolvedValue({ abandoned: 0 });
+  });
+
   afterEach(() => cleanup());
 
   it("renders sidebar + header + input + tabs", async () => {
@@ -48,6 +83,7 @@ describe("ThreadPage", () => {
   });
 
   it("renders degraded + error banners with dismiss", async () => {
+    h.hook.error = "boom";
     render(<ThreadPage />);
     await screen.findByTestId("new-thread");
     expect(screen.getByTestId("degraded-banner")).toBeTruthy();
@@ -66,13 +102,63 @@ describe("ThreadPage", () => {
     await screen.findByTestId("new-thread");
     fireEvent.click(screen.getByTestId("delete-button"));
     fireEvent.click(screen.getByTestId("delete-button"));
-    await waitFor(() => expect(push).toHaveBeenCalledWith("/thread/new"));
+    await waitFor(() => expect(h.push).toHaveBeenCalledWith("/thread/new"));
   });
 
   it("sidebar selection routes to the thread", async () => {
     render(<ThreadPage />);
     await screen.findByTestId("new-thread");
     screen.getByTestId("new-thread").click();
-    expect(push).toHaveBeenCalledWith("/thread/new");
+    expect(h.push).toHaveBeenCalledWith("/thread/new");
+  });
+
+  it("new-thread create is guarded against double-submit; upserts + routes on success", async () => {
+    h.nav.params.id = "new";
+    // Hang the create so both clicks land while the first is in flight.
+    let resolveCreate!: (t: unknown) => void;
+    h.client.createThread.mockImplementationOnce(
+      () => new Promise((r) => { resolveCreate = r; }),
+    );
+    render(<ThreadPage />);
+    const input = await screen.findByTestId("thread-input");
+    fireEvent.change(input, { target: { value: "hello world" } });
+    fireEvent.click(screen.getByTestId("ask-button"));
+    fireEvent.click(screen.getByTestId("ask-button"));
+    resolveCreate(threadRow("t-new"));
+    await waitFor(() => expect(h.push).toHaveBeenCalledWith("/thread/t-new"));
+    expect(h.client.createThread).toHaveBeenCalledTimes(1);
+    expect(h.client.prompt).toHaveBeenCalledTimes(1);
+    expect(h.client.prompt).toHaveBeenCalledWith("t-new", { message: "hello world", specMode: "auto" });
+    // The new thread joined the sidebar list before routing.
+    expect(await screen.findByTestId("thread-t-new")).toBeTruthy();
+  });
+
+  it("a failed new-thread create surfaces the error banner and keeps the input", async () => {
+    h.nav.params.id = "new";
+    h.client.createThread.mockRejectedValueOnce(new Error("create thread failed: 500"));
+    render(<ThreadPage />);
+    const input = await screen.findByTestId("thread-input");
+    fireEvent.change(input, { target: { value: "precious message" } });
+    fireEvent.click(screen.getByTestId("ask-button"));
+    const banner = await screen.findByTestId("error-banner");
+    expect(banner.textContent).toContain("create thread failed: 500");
+    expect((screen.getByTestId("thread-input") as HTMLTextAreaElement).value).toBe("precious message");
+    expect(h.push).not.toHaveBeenCalled();
+  });
+
+  it("kill-all refetches the thread list from the server (#84 source of truth)", async () => {
+    render(<ThreadPage />);
+    await screen.findByTestId("new-thread");
+    h.client.killAllThreads.mockResolvedValueOnce({ abandoned: 2 });
+    h.client.listThreads.mockClear();
+    h.client.listThreads.mockResolvedValueOnce([threadRow("t1", { status: "abandoned", state: "idle" })]);
+    fireEvent.click(screen.getByTestId("kill-all-button")); // arm
+    fireEvent.click(screen.getByTestId("kill-all-button")); // confirm
+    await waitFor(() => expect(h.client.killAllThreads).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(h.client.listThreads).toHaveBeenCalledTimes(1));
+    // The refetched snapshot wins — no client-side status flipping.
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-t1").textContent).toContain("abandoned"),
+    );
   });
 });

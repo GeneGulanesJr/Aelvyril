@@ -117,14 +117,16 @@ describe("auth", () => {
     await app.close();
   });
 
-  it("keeps /metrics open when no scrape secret is configured (#85)", async () => {
+  // Review P3: /metrics is fail-closed now — with no secret and no explicit
+  // metricsPublic opt-in, it answers 401 instead of being open by default.
+  it("closes /metrics by default: 401 unless metricsPublic is explicitly true", async () => {
     const app = await buildApp({
       dbPath: ":memory:",
       childCommand: process.execPath,
       childArgs: [fakePi],
       verifyToken: okVerifier,
     });
-    expect((await app.inject({ method: "GET", url: "/metrics" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/metrics" })).statusCode).toBe(401);
     await app.close();
   });
 });

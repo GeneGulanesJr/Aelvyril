@@ -1,15 +1,21 @@
 # Spec §4/§5/§9: Aelvyril stack topology.
 #
-# Five services on one network (aelvyril-net). Only caddy publishes public
+# Four services on one network (aelvyril-net). Only caddy publishes public
 # ports (80/443). web (3000) + gateway (8787) are published LOOPBACK-ONLY
 # for the dev profile + smoke script (#79) — plaintext HTTP never leaves
 # the host; browsers reach web + gateway through Caddy TLS in prod.
+# LaPis is NOT a service: src/mcp/server.js is stdio-MCP only (no HTTP,
+# no lockfile) — it runs in-process inside the gateway as a pi extension
+# (LAPIS_HOME=/data/lapis on the gateway-data volume).
 # Two profiles:
 #   dev   — bind-mounts apps/* for hot reload; uses local builds
 #   prod  — uses prebuilt images; no source mounts
 #
 # Sibling-checkout layout (per spec §5): clone Aelvyril alongside
-# ../LaPis, ../PiSandboxed, ../LayaMCP. Prebuilt images replace these later.
+# ../LaPis, ../PiSandboxed, ../DecisionMCP (ex-LayaMCP, renamed 2026-10-05).
+# Build contexts are relative to THIS FILE's directory (infra/), so each
+# sibling context climbs two levels: ../../<Repo>. Prebuilt images replace
+# these later.
 
 name: aelvyril
 
@@ -54,6 +60,12 @@ services:
       # Note `-${...}` (not `:-`): an explicitly empty value must survive.
       args:
         NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL-http://localhost:8787}
+        # The publishable key is inlined into the client bundle at BUILD
+        # time — the runtime env below only affects SSR. Without this arg
+        # the browser bundle bakes `undefined` and Clerk sign-in dead-ends.
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY-}
+        # Build-time auth switch: 1 = no Clerk sign-in, fixed dev identity.
+        NEXT_PUBLIC_AUTH_DISABLED: ${NEXT_PUBLIC_AUTH_DISABLED-}
     restart: unless-stopped
     # #79: loopback-only. The compose comment used to promise "web only
     # reachable via Caddy TLS" while publishing plaintext HTTP on every
@@ -64,10 +76,13 @@ services:
     ports:
       - "${WEB_BIND_HOST:-127.0.0.1}:3000:3000"
     environment:
-      # Runtime value only (SSR); the client bundle took the build arg.
+      # Runtime value only (SSR); the client bundle took the build args.
+      # Clerk keys are OPTIONAL in local dev: NEXT_PUBLIC_AUTH_DISABLED=1
+      # swaps sign-in for a fixed dev identity (see apps/web/lib/auth.ts).
       NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL-http://localhost:8787}
-      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:?required}
-      CLERK_SECRET_KEY: ${WEB_CLERK_SECRET_KEY:?required}
+      NEXT_PUBLIC_AUTH_DISABLED: ${NEXT_PUBLIC_AUTH_DISABLED-}
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+      CLERK_SECRET_KEY: ${WEB_CLERK_SECRET_KEY:-}
     depends_on:
       gateway:
         condition: service_healthy
@@ -101,9 +116,23 @@ services:
       GATEWAY_HOST: "::"
       GATEWAY_DB: /data/gateway.db
       GATEWAY_IDLE_MS: "300000"
-      GATEWAY_ALLOWED_ORIGIN: ${GATEWAY_ALLOWED_ORIGIN:-http://localhost:3000}
+      GATEWAY_ALLOWED_ORIGIN: ${GATEWAY_ALLOWED_ORIGIN:-http://localhost:3000,http://127.0.0.1:3000}
       GATEWAY_WORKSPACE_ALLOWLIST: ${GATEWAY_WORKSPACE_ALLOWLIST:-}
-      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:?required}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      # Local dev (see infra/.env): PI_FAKE=1 swaps both the auth verifier
+      # (any bearer; token becomes the userId) and the pi child (fake-pi).
+      # The #78 guard refuses non-loopback binds unless the container ack is
+      # set — inside Docker the published ports are loopback-only (#79), so
+      # the in-container :: bind never leaves the host.
+      PI_FAKE: ${PI_FAKE:-}
+      PI_FAKE_ALLOW_NON_LOOPBACK: ${PI_FAKE_ALLOW_NON_LOOPBACK:-}
+      # In-process LaPis extension storage (LaPis is NOT a compose service —
+      # it is stdio-MCP only and runs inside the gateway's pi runtime).
+      LAPIS_HOME: /data/lapis
+      # Decision engine (DecisionMCP, service key kept as "layamcp" for
+      # compat) — used by the gateway health probe and the baked pi bundle's
+      # decisionmcp MCP server config.
+      LAYAMCP_URL: http://layamcp:8765
       # Spec §14: always pass --provider/--model explicitly
       PI_PROVIDER: ${PI_PROVIDER:-google}
       PI_MODEL: ${PI_MODEL:-gemini-2.0-flash}
@@ -111,53 +140,36 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      LAPIS_HOME: /data/lapis
     volumes:
       - gateway-data:/data
       - pi-sessions:/sessions
       - ${WORKSPACES_HOST_PATH:-./workspaces}:/workspaces:ro
+    # NOTE: no depends_on sandd — sandd is prod-profile only (needs /dev/kvm,
+    # absent on most dev hosts incl. macOS) and compose errors when a
+    # depends_on target isn't enabled by the active profile. The gateway
+    # treats sandd as optional (its /healthz skips probes for unset *_URL).
     depends_on:
-      lapis:
-        condition: service_healthy
       layamcp:
         condition: service_healthy
-      sandd:
-        condition: service_started  # sandd health is TCP-only
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8787/healthz"]
+      # node:22-slim ships no wget/curl — probe with node itself.
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8787/healthz', r => process.exit(r.statusCode && r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 15s
     profiles: [dev, prod]
 
-  lapis:
-    # Spec §5: built from sibling checkout. Prebuilt image will replace this.
-    build:
-      context: ../LaPis
-      dockerfile: infra/docker/Dockerfile.lapis
-    restart: unless-stopped
-    expose:
-      - "8788"
-    environment:
-      LAPIS_HOME: /data/lapis
-    volumes:
-      - lapis-data:/data/lapis
-    healthcheck:
-      # LaPis exposes no /health today; TCP-open only.
-      test: ["CMD", "node", "-e", "require('net').connect(8788,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
-      interval: 15s
-      timeout: 3s
-      retries: 5
-      start_period: 30s
-    profiles: [dev, prod]
-
   sandd:
-    # Spec §9: /dev/kvm passthrough required; bind host hardcoded loopback
-    # until upstream adds SANDD_HOST. Token via pre-seeded file mount.
+    # Spec §9: TypeScript/fastify daemon (NOT Rust — the 2026-09-22 research
+    # predated the TS rewrite; see ../PiSandboxed/infra/docker/Dockerfile.sandd).
+    # /dev/kvm device + host networking require a Linux host; on macOS the
+    # kvm device doesn't exist, so sandd is prod-profile only.
     build:
-      context: ../PiSandboxed
+      context: ..
       dockerfile: infra/docker/Dockerfile.sandd
+      additional_contexts:
+        - sandd_src=../../PiSandboxed
     restart: unless-stopped
     devices:
       - /dev/kvm:/dev/kvm
@@ -170,24 +182,30 @@ services:
       SANDD_PORT: "7391"
       SMOLVM_BIN: /usr/local/bin/smolvm
       SMOLVM_IMAGES_DIR: /images
-    # Sandd binds hardcoded 127.0.0.1 per research 2026-09-22. The gateway
-    # reaches it via the host network in dev. In prod, use a SANDD_HOST
-    # upstream patch (Phase 4 deferred).
+    # Sandd binds hardcoded 127.0.0.1 (src/server/main.ts) — no SANDD_HOST
+    # upstream yet — so it must share the host network namespace. NOTE: from
+    # the BRIDGED gateway container, 127.0.0.1:7391 is NOT reachable — that
+    # loopback belongs to sandd's host netns. Wiring sandbox-exec needs the
+    # upstream SANDD_HOST fix (or a bridge proxy); until then no SANDD_URL is
+    # passed, so /healthz silently skips the sandd probe.
     network_mode: host
     profiles: [prod]
-    # dev profile uses docker-compose.override.yml to bind :7391 to host
 
   layamcp:
     # Spec §9: CPU-only torch, ~4GB RAM, port 8765, /health endpoint.
-    # The /health fix was upstream Phase 4 work (commit e08ced4).
+    # Sibling repo renamed LayaMCP -> DecisionMCP (2026-10-05, v0.2.0);
+    # service key + LAYAMCP_URL stay "layamcp" for compat. /health fix was
+    # upstream Phase 4 work (commit e08ced4).
     build:
-      context: ../LayaMCP
+      context: ..
       dockerfile: infra/docker/Dockerfile.layamcp
+      additional_contexts:
+        - decisionmcp_src=../../DecisionMCP
     restart: unless-stopped
     expose:
       - "8765"
     volumes:
-      - hf-models:/root/.cache/huggingface
+      - hf-models:/home/decision/.cache/huggingface
     healthcheck:
       # Models load at module import; if /health answered, they're resident.
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8765/health"]
@@ -204,13 +222,16 @@ networks:
 
 volumes:
   gateway-data:
-  lapis-data:
   pi-sessions:
   sandbox-images:
   hf-models:
   sandd-token:
-    # Pre-seeded by operator: `docker run --rm -v sandd-token:/out alpine \
-    #   sh -c "echo TOKEN > /out/token && chmod 0600 /out/token"`
+    # Pre-seeded by operator. NOTE the project prefix: compose creates
+    # <project>_<name> = aelvyril_sandd-token, so seed THAT volume — a bare
+    # `-v sandd-token:/out` creates a different, never-mounted volume:
+    #   docker run --rm -v aelvyril_sandd-token:/out alpine \
+    #     sh -c "echo TOKEN > /out/token && chmod 0600 /out/token"
+    # (Upstream does not read /token yet; seeding is future-proofing.)
     external: false
   caddy-data:
   caddy-config:

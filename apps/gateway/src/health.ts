@@ -74,7 +74,26 @@ export async function runHealthCheck(
   const backing: HealthCheckResult["backing"] = {};
   await Promise.all(
     Object.entries(targets).map(async ([name, hp]) => {
-      const [host, portStr] = hp.split(":");
+      // Accept both "host:port" and "http(s)://host[:port]" — env vars like
+      // LAYAMCP_URL are URLs (they feed non-health consumers too), while the
+      // original probe format was bare host:port.
+      let host = hp.trim();
+      let portStr = "";
+      if (/^https?:\/\//i.test(host)) {
+        try {
+          const u = new URL(host);
+          host = u.hostname;
+          portStr = u.port || (u.protocol === "https:" ? "443" : "80");
+        } catch {
+          backing[name] = { ok: false, latencyMs: 0, error: `bad target ${hp}` };
+          return;
+        }
+      } else {
+        // noUncheckedIndexedAccess: split parts are `string | undefined`.
+        const parts = host.split(":");
+        host = parts[0] ?? "";
+        portStr = parts[1] ?? "";
+      }
       const port = Number(portStr);
       if (!host || !port || Number.isNaN(port)) {
         backing[name] = { ok: false, latencyMs: 0, error: `bad target ${hp}` };

@@ -4,21 +4,35 @@
 # Usage:  ./infra/smoke.sh          (boots dev profile, runs smoke, leaves stack up)
 #         ./infra/smoke.sh --down   (also tears down compose after smoke)
 #
-# Requires: docker + docker compose plugin, jq, curl. Real Clerk dev keys
-# must be in the env (NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY + CLERK_SECRET_KEY).
+# Requires: docker + docker compose plugin, jq, curl. Local dev mode uses
+# infra/.env (Clerk disabled + PI_FAKE) — no real keys needed.
 
 set -euo pipefail
 
 COMPOSE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$COMPOSE_DIR/../"  # repo root so docker compose finds infra/compose.yaml
+cd "$COMPOSE_DIR"  # repo root so docker compose finds infra/compose.yaml
 
-required=(NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY CLERK_SECRET_KEY)
-for v in "${required[@]}"; do
-  if [[ -z "${!v:-}" ]]; then
-    echo "smoke: $v is required in env (real Clerk dev key)" >&2
-    exit 2
-  fi
-done
+# Canonical env location is infra/.env (compose auto-loads it from the
+# project dir); source it here so the mode flags below are visible.
+if [[ -f "$COMPOSE_DIR/infra/.env" ]]; then
+  set -a; source "$COMPOSE_DIR/infra/.env"; set +a
+fi
+
+if [[ "${NEXT_PUBLIC_AUTH_DISABLED:-}" != "1" && "${PI_FAKE:-}" != "1" ]]; then
+  echo "smoke: set NEXT_PUBLIC_AUTH_DISABLED=1 + PI_FAKE=1 in infra/.env (local dev)," \
+       "or provide real Clerk keys in the env" >&2
+  exit 2
+fi
+
+# Compose binds GATEWAY_HOST="::" inside the container; the fake verifier
+# refuses non-loopback binds unless explicitly acknowledged (index.ts guard).
+# Without this third var the gateway crash-loops and smoke dies on a generic
+# "never became healthy" — fail fast with the actionable message instead.
+if [[ "${PI_FAKE:-}" == "1" && -z "${CLERK_SECRET_KEY:-}" && "${PI_FAKE_ALLOW_NON_LOOPBACK:-}" != "1" ]]; then
+  echo "smoke: PI_FAKE=1 without Clerk keys requires PI_FAKE_ALLOW_NON_LOOPBACK=1 in infra/.env" \
+       "(compose binds GATEWAY_HOST=:: inside the container)" >&2
+  exit 2
+fi
 
 cleanup() {
   local rc=$?
@@ -44,15 +58,9 @@ curl -sf http://127.0.0.1:8787/healthz >/dev/null || {
   echo "smoke: gateway never became healthy"; exit 3
 }
 
-echo "smoke: waiting for layamcp /health..."
-for i in {1..60}; do
-  # Layamcp is internal-only (no published port). Probe via a one-off
-  # container that shares the network.
-  if docker run --rm --network aelvyril-net alpine wget -q -O - http://layamcp:8765/health >/dev/null 2>&1; then
-    break
-  fi
-  sleep 2
-done
+# layamcp health is enforced transitively: the gateway depends_on
+# layamcp: service_healthy, so gateway /healthz below implies the decision
+# engine loaded its models.
 
 echo "smoke: waiting for web..."
 for i in {1..30}; do
@@ -69,7 +77,7 @@ curl -sf http://127.0.0.1:3000/ >/dev/null || {
 # routing works through the gateway. Full conversation round-trip (sign in
 # → POST /v1/conversations → prompt → SSE) is covered by the live
 # browser smoke in Phase 2 close-out + the e2e Playwright tests (Phase 5).
-echo "smoke: stack up — gateway /healthz, layamcp /health, web /"
+echo "smoke: stack up — gateway /healthz (incl. layamcp), web /"
 
 if [[ "${1:-}" == "--down" ]]; then SMOKE_TEARDOWN=1; fi
 echo "smoke: PASS"

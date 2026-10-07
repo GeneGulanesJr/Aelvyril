@@ -1,38 +1,68 @@
-# Spec §9: LayaMCP decision engine, CPU-only torch, port 8765, /health endpoint.
-# Build context: ../LayaMCP (sibling checkout).
+# Spec §9: DecisionMCP decision engine (sibling repo, ex-LayaMCP), CPU-only
+# torch, port 8765, /health endpoint. Sibling source arrives via the
+# named build context `decisionmcp_src` (see compose.yaml) — the Dockerfile
+# itself lives in Aelvyril's infra/docker/.
 #
-# Phase 4 upstream patch lives in LayaMCP: dropped mcp.server.fastapi
-# import (broken on every released mcp SDK today), mounted SSE transport on
-# plain FastAPI, pinned mcp<2, added GET /health. Without that, layamcp
-# would not start at all.
+# Serves streamable HTTP at /mcp (what MCP-spec clients speak) and legacy
+# SSE at /sse; GET /health = liveness (models-resident).
+#
+# History: the Phase 4 upstream patch dropped mcp.server.fastapi (broken on
+# every released mcp SDK), mounted MCP transports on plain FastAPI, pinned
+# mcp<2, added GET /health. The 0.2.0 engine-agnostic rename (2026-10-05)
+# moved laya_mcp -> decision_mcp, console script layamcp -> decisionmcp,
+# env prefix LAYAMCP_* -> DECISIONMCP_* (old names are silently ignored).
 
 FROM python:3.12-slim AS deps
 WORKDIR /repo
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential gcc \
     && rm -rf /var/lib/apt/lists/*
-COPY pyproject.toml .
-# CPU-only torch keeps the image under 4GB per spec §9.
+# README.md is required at metadata time: pyproject declares
+# readme = "README.md" and hatchling validates it during pip's
+# prepare_metadata_for_build_wheel. The package source must also be present
+# BEFORE `pip install .[laya]` — otherwise the built wheel contains entry
+# points but no actual `decision_mcp` module.
+COPY --from=decisionmcp_src pyproject.toml README.md ./
+# CPU-only torch keeps the image under 4GB per spec §9. (Installed before
+# the source COPY so source edits don't bust this big layer.)
 RUN pip install --no-cache-dir \
     torch --index-url https://download.pytorch.org/whl/cpu
-RUN pip install --no-cache-dir .
-COPY laya_mcp ./laya_mcp
+# [laya]: the decision engine is an optional extra since v0.2.0 — serving
+# needs it (DecisionBridge imports LayaEngine; no engine = ModelLoadError).
+COPY --from=decisionmcp_src decision_mcp ./decision_mcp
+RUN pip install --no-cache-dir ".[laya]"
 
 FROM python:3.12-slim AS runtime
-ENV LAYAMCP_HOST=127.0.0.1 \
-    LAYAMCP_PORT=8765 \
-    # Pre-warm model cache so the healthcheck (models-resident) is honest.
-    LAYAMCP_PRELOAD_MODELS=auto
+# Bind 0.0.0.0 inside the container: the compose healthcheck probes
+# loopback, and peer containers reach the service via the aelvyril-net DNS
+# name (`layamcp`) — loopback-only would refuse both peers' probes. The
+# compose network is the trust boundary (no published host port).
+ENV DECISIONMCP_HOST=0.0.0.0 \
+    DECISIONMCP_PORT=8765 \
+    DECISIONMCP_PRELOAD_MODELS=true \
+    DECISIONMCP_LOG_LEVEL=INFO \
+    # Default data_dir is inside site-packages (root-owned) — unwritable as
+    # the non-root user below. Point it at a dedicated directory instead.
+    DECISIONMCP_DATA_DIR=/data/decisionmcp
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates wget \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 1001 decision \
+    && useradd --uid 1001 --gid decision --create-home --shell /bin/bash decision
 COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=deps /usr/local/bin/layamcp /usr/local/bin/layamcp
-COPY laya_mcp /repo/laya_mcp
+COPY --from=deps /usr/local/bin/decisionmcp /usr/local/bin/decisionmcp
 WORKDIR /repo
-# HF model cache survives container restarts via the volume.
-ENV HF_HOME=/root/.cache/huggingface
+# Non-root per spec §9 parity with web/gateway/sandd (review P2): the only
+# writable paths the service needs are its data dir (usage.db) and its HF
+# model cache.
+RUN chown decision:decision /repo \
+    && mkdir -p /data/decisionmcp && chown -R decision:decision /data
+# HF model cache survives container restarts via the volume (compose maps
+# hf-models here; moved off /root when the container dropped privileges).
+ENV HF_HOME=/home/decision/.cache/huggingface
+RUN mkdir -p "$HF_HOME" && chown -R decision:decision /home/decision
+USER decision
 EXPOSE 8765
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
     CMD wget -q -O - http://127.0.0.1:8765/health || exit 1
-CMD ["layamcp"]
+CMD ["decisionmcp"]

@@ -4,6 +4,7 @@ import Fastify, {
   type FastifyRequest,
 } from "fastify";
 import { spawn } from "node:child_process";
+import { createHash, timingSafeEqual } from "node:crypto";
 import {
   CreateConversationBody,
   EventEnvelope as EventEnvelopeSchema,
@@ -65,10 +66,20 @@ export interface AppOptions {
   sseReplayPageSize?: number;
   /** Max events retained per conversation. Default 10_000 (0 disables). */
   eventRetentionPerThread?: number;
-  /** Optional scrape secret for /metrics (#85). When set, requests must send
-   *  `Authorization: Bearer <secret>`. Unset keeps /metrics open (the
-   *  reverse proxy is expected to gate it). */
+  /** Optional scrape secret for /metrics. Review P3: /metrics is now
+   *  fail-closed — without a secret it answers 401 unless metricsPublic is
+   *  explicitly true. When set, requests must send
+   *  `Authorization: Bearer <secret>` (compared constant-time). */
   metricsSecret?: string;
+  /** Review P3: serve /metrics with NO secret only when explicitly true
+   *  (GATEWAY_METRICS_PUBLIC=1). Default false — fail-closed. */
+  metricsPublic?: boolean;
+  /** Review P1: extra process.env keys children may inherit beyond the
+   *  built-in allowlist (tests use this for the fake-pi fixture knobs).
+   *  CLERK_* and GATEWAY_* keys are always blocked. */
+  childEnvAllowlist?: string[];
+  /** Review P3: per-user prompt rate limit in requests/minute. Default 20. */
+  rateLimitPerMin?: number;
   /** #84: per-thread budget in USD. When a thread's cumulative cost reaches
    *  this, further prompts are refused with 403 cost_cap_reached. */
   maxCostPerThreadUsd?: number;
@@ -95,6 +106,63 @@ export interface AppOptions {
 }
 
 export type App = FastifyInstance;
+
+/**
+ * Review P1: the exact process.env keys a session-host child may inherit.
+ * Children used to get `{ ...process.env }`, leaking operator secrets
+ * (CLERK_*, GATEWAY_*) into every pi process. Only baseline OS vars, LLM
+ * provider config, and the per-thread namespace key pass through.
+ */
+const CHILD_ENV_ALLOWLIST: readonly string[] = [
+  "PATH",
+  "HOME",
+  "LANG",
+  "LC_ALL",
+  "TMPDIR",
+  "TERM",
+  // LLM provider config for real pi sessions.
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "GOOGLE_API_KEY",
+  "GOOGLE_GENERATIVE_AI_API_KEY",
+  "GEMINI_API_KEY",
+  "ANTHROPIC_BASE_URL",
+  "OPENAI_BASE_URL",
+  // D7: per-thread namespace key plumbed to the session host.
+  "LAPIS_PROJECT_KEY",
+];
+
+/** Keys that must never reach a child, even via the opt-in extra allowlist. */
+const CHILD_ENV_NEVER = /^(CLERK_|GATEWAY_)/;
+
+/**
+ * Computes the child spawn env: the base allowlist ∪ the caller's opt-in
+ * extra keys ∪ extraEnv (gateway-controlled, e.g. LAPIS_PROJECT_KEY).
+ * Exported for the allowlist unit test.
+ */
+export function computeChildEnv(
+  extraEnv: Record<string, string>,
+  extraAllowlist: readonly string[] = [],
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of [...CHILD_ENV_ALLOWLIST, ...extraAllowlist]) {
+    if (CHILD_ENV_NEVER.test(key)) continue;
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return { ...env, ...extraEnv };
+}
+
+/**
+ * Review P3: constant-time bearer comparison for /metrics. Both sides are
+ * hashed to fixed-length buffers so timingSafeEqual never throws on length
+ * mismatches (and the hash hides the secret's length).
+ */
+function bearerSecretMatches(presented: string, secret: string): boolean {
+  const a = createHash("sha256").update(presented).digest();
+  const b = createHash("sha256").update(secret).digest();
+  return timingSafeEqual(a, b);
+}
 
 export async function buildApp(opts: AppOptions): Promise<App> {
   // Spec §10: 1MB max message. Fastify defaults to 1MB anyway, but we set it
@@ -134,10 +202,11 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   // Spec §10: default-deny workspace allowlist. Override via opts in tests.
   const workspaceAllowlist = opts.workspaceAllowlist ?? createWorkspaceAllowlist(process.env.GATEWAY_WORKSPACE_ALLOWLIST);
   // Spec §10: per-user rate limit on /v1/conversations/:id/prompt.
-  // 20 requests/min = capacity 20, refill 20/60 tokens/sec.
+  // rateLimitPerMin requests/min/user = capacity n, refill n/60 tokens/sec.
+  const rateLimitPerMin = opts.rateLimitPerMin ?? 20;
   const rateLimiter = opts.rateLimiter ?? createRateLimiter({
-    capacity: 20,
-    refillPerSecond: 20 / 60,
+    capacity: rateLimitPerMin,
+    refillPerSecond: rateLimitPerMin / 60,
   });
   // #83: the running-host cap is the real resource limit; the thread count
   // is not (rows are cheap). Defaults per the long-horizon execution issue.
@@ -155,7 +224,9 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     store,
     spawnChild: (_conversationId, extraEnv, cwd) =>
       spawn(opts.childCommand, opts.childArgs, {
-        env: { ...process.env, ...extraEnv },
+        // Review P1: explicit allowlist — never `{ ...process.env }`, which
+        // leaked CLERK_*/GATEWAY_* operator secrets into every child.
+        env: computeChildEnv(extraEnv, opts.childEnvAllowlist),
         cwd,
       }),
     idleMs: opts.idleMs ?? 300_000,
@@ -262,15 +333,17 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     return reply.code(allOk ? 200 : 503).send(result);
   });
 
-  // Prometheus text format. Unauthenticated by design when no scrape secret
-  // is configured (Prometheus scrapes internally; an external scraper should
-  // go through the reverse proxy which gates /metrics on its own network
-  // policy). #85: GATEWAY_METRICS_SECRET adds bearer-token gating for
-  // deployments that expose the gateway directly.
+  // Prometheus text format. Review P3: fail-closed. /metrics is served
+  // without a secret only when metricsPublic is explicitly true (the
+  // operator opted in via GATEWAY_METRICS_PUBLIC=1); otherwise a valid
+  // bearer secret is REQUIRED — a deployment that never configured one
+  // must not silently expose counters. Comparison is constant-time.
   app.get("/metrics", async (req, reply) => {
-    if (opts.metricsSecret) {
+    if (opts.metricsPublic !== true) {
+      const secret = opts.metricsSecret;
       const header = req.headers.authorization;
-      if (header !== `Bearer ${opts.metricsSecret}`) {
+      const presented = header?.startsWith("Bearer ") ? header.slice(7) : "";
+      if (!secret || !bearerSecretMatches(presented, secret)) {
         return reply.code(401).send({ error: "unauthorized" });
       }
     }
@@ -433,11 +506,15 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     // Auto-title from the first prompt — the picker shows words, not uuids.
     if (conv.title === null) store.renameConversation(id, namespace, body.message.slice(0, 80));
 
-    // #83: long-horizon execution. Steers target a live run and pass
-    // through; a fresh prompt when the user is at their running-host cap
-    // (or the global ceiling is hit) is durably queued instead — execution
-    // is decoupled from any viewer.
-    if (!body.streamingBehavior) {
+    // #83: long-horizon execution. Review fixes 3+4: the cap/queue gate
+    // applies whenever the prompt would need a NEW host (no live host for
+    // the target thread). When the target thread HAS a live host, the
+    // prompt passes through to it — a steer/followUp as today, and a plain
+    // prompt too (steer semantics below): it never queues behind the user's
+    // own running-host cap, and a streamingBehavior prompt with NO live
+    // host is capped + queued instead of spawning an untracked host.
+    const live = supervisor.has(id);
+    if (!live) {
       if (store.getThreadStatus(id, namespace) === "queued") {
         return reply.code(409).send({ error: "already_queued" });
       }
@@ -470,14 +547,34 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     // Spec §6/§10: workspace -> spawn cwd so pi finds its prior session file
     // on disk after a crash + re-prompt (session resume). #80 fix 2: the
     // specMode field finally rides along instead of being dropped.
-    const ok = await supervisor.prompt(
-      id,
-      body.message,
-      body.streamingBehavior,
-      { LAPIS_PROJECT_KEY: namespace },
-      conv.workspace ?? undefined,
-      body.specMode,
-    );
+    // Review fix 4: a plain prompt hitting a BUSY live host carries steer
+    // semantics — pi's shared schema rejects a bare prompt mid-turn.
+    const streamingBehavior =
+      body.streamingBehavior ?? (live && conv.state === "streaming" ? "steer" : undefined);
+    let ok: boolean;
+    try {
+      ok = await supervisor.prompt(
+        id,
+        body.message,
+        streamingBehavior,
+        { LAPIS_PROJECT_KEY: namespace },
+        conv.workspace ?? undefined,
+        body.specMode,
+      );
+    } catch {
+      // Review fix 6: an RPC failure (dead host, timeout) used to bubble to
+      // the 500 handler and leave the thread stuck 'running' until the idle
+      // reaper. Fail visibly instead.
+      metrics.promptRejections.inc();
+      store.setConversationState(id, "degraded");
+      bus.publish({
+        conversationId: id,
+        ts: new Date().toISOString(),
+        kind: "session_state",
+        payload: { state: "degraded" },
+      });
+      return reply.code(502).send({ error: "agent_rejected" });
+    }
     if (!ok) {
       metrics.promptRejections.inc();
       return reply.code(502).send({ error: "agent_rejected" });
@@ -561,7 +658,15 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     });
     // #80 fix 3: approve sends the REAL execution prompt — rebuilt from the
     // stored spec, spawning a session host when none is live.
-    await supervisor.approveExecution(id);
+    // Review fix 6: an RPC failure must not leave the thread stuck 'running'.
+    try {
+      await supervisor.approveExecution(id);
+    } catch {
+      metrics.promptRejections.inc();
+      store.setConversationState(id, "degraded");
+      store.updateThreadStatus(id, namespace, "reviewed");
+      return reply.code(502).send({ error: "agent_rejected" });
+    }
     return { ok: true };
   });
 
@@ -595,7 +700,16 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
     store.updateThreadStatus(id, namespace, "running");
     // #80 fix 3: retry re-executes against the same spec.
-    const ok = await supervisor.retryExecution(id);
+    // Review fix 6: an RPC failure must not leave the thread stuck 'running'.
+    let ok: boolean;
+    try {
+      ok = await supervisor.retryExecution(id);
+    } catch {
+      metrics.promptRejections.inc();
+      store.setConversationState(id, "degraded");
+      store.updateThreadStatus(id, namespace, "reviewed");
+      return reply.code(502).send({ error: "agent_rejected" });
+    }
     if (!ok) {
       store.updateThreadStatus(id, namespace, "reviewed");
       return reply.code(409).send({ error: "nothing_to_retry" });
@@ -811,7 +925,14 @@ export async function buildApp(opts: AppOptions): Promise<App> {
             .prompt(
               item.conversationId,
               item.message,
-              undefined,
+              // Review fix 4: if the target thread's host went live between
+              // enqueue and dequeue (a restart's stale queue row, approve/
+              // retry reviving the thread), the prompt must carry steer
+              // semantics — pi's shared schema rejects a bare prompt on a
+              // busy agent, which used to flip the thread degraded/reviewed.
+              supervisor.has(item.conversationId) && queued.state === "streaming"
+                ? "steer"
+                : undefined,
               { LAPIS_PROJECT_KEY: ns },
               queued.workspace ?? undefined,
               // #80: the queued prompt's own specMode (schema-capped enum).

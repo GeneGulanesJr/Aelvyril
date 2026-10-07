@@ -235,4 +235,80 @@ describe("useThread", () => {
       cost: 0.0042,
     });
   });
+
+  it("reduces tool_call/tool_result/dialog envelopes into display-only trace lines", async () => {
+    const { result, inst } = await renderThread();
+    await act(async () => {
+      inst.onEnvelope!(env("text_delta", { delta: "thinking…" }, 0));
+      inst.onEnvelope!(env("tool_call", { toolCallId: "c1", toolName: "bash", args: { cmd: "ls" } }, 1));
+      inst.onEnvelope!(env("tool_result", { toolCallId: "c1", isError: false }, 2));
+      inst.onEnvelope!(env("tool_call", { toolCallId: "c2", toolName: "read", args: undefined }, 3));
+      inst.onEnvelope!(env("tool_result", { toolCallId: "c2", isError: true }, 4));
+      inst.onEnvelope!(
+        env("dialog", { method: "extension_ui_request", title: "allow install?", action: "auto_cancelled" }, 5),
+      );
+    });
+    expect(result.current.trace).toEqual([
+      "thinking…",
+      "→ bash({\"cmd\":\"ls\"})",
+      "← ok",
+      "→ read()",
+      "← error",
+      "dialog: allow install? (auto_cancelled)",
+    ]);
+  });
+
+  it("resets state when threadId changes — no bleed from A into B", async () => {
+    const getToken = vi.fn().mockResolvedValue("tok");
+    const { result, rerender } = renderHook(
+      (tid: string | null) => useThread(tid, { getToken }),
+      { initialProps: "t1" as string | null },
+    );
+    await act(async () => {});
+    const instA = instances[instances.length - 1]!;
+    await act(async () => {
+      instA.onEnvelope!(env("text_delta", { delta: "from A" }, 0));
+      instA.onEnvelope!(env("error", { message: "A broke" }, 1));
+      instA.onEnvelope!(env("spec_status", { status: "spec'ing" }, 2));
+    });
+    expect(result.current.trace).toEqual(["from A"]);
+    expect(result.current.error).toBe("A broke");
+    expect(result.current.statusLive).toBe(true);
+
+    rerender("t2");
+    await act(async () => {});
+    // Fresh slate for B — A's trace/error/live-status are gone.
+    expect(result.current.trace).toEqual([]);
+    expect(result.current.error).toBeNull();
+    expect(result.current.status).toBe("draft");
+    expect(result.current.statusLive).toBe(false);
+    expect(result.current.waiting).toBe(false);
+    // B gets its own stream; its replay fills only B's state.
+    const instB = instances[instances.length - 1]!;
+    expect(instB).not.toBe(instA);
+    expect(instB.openStream).toHaveBeenCalledWith("t2", expect.any(Function), undefined, expect.any(Function));
+    await act(async () => {
+      instB.onEnvelope!(env("text_delta", { delta: "from B" }, 0));
+    });
+    expect(result.current.trace).toEqual(["from B"]);
+  });
+
+  it("mutation failures land in the error banner instead of rejecting", async () => {
+    const { result, inst } = await renderThread();
+    inst.prompt.mockRejectedValueOnce(new Error("prompt failed: 500"));
+    inst.approveSpec.mockRejectedValueOnce(new Error("approve failed: 403"));
+    await act(async () => {
+      await result.current.ask("hi", "auto");
+    });
+    expect(result.current.error).toBe("prompt failed: 500");
+    expect(result.current.waiting).toBe(false);
+    await act(async () => {
+      await result.current.approve();
+    });
+    expect(result.current.error).toBe("approve failed: 403");
+    await act(async () => {
+      result.current.dismissError();
+    });
+    expect(result.current.error).toBeNull();
+  });
 });

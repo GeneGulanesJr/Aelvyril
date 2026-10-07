@@ -1,17 +1,20 @@
-# LayaMCP ops runbook
+# DecisionMCP ops runbook (service key: `layamcp`)
 
-`layamcp` is the decision engine. Exposes 11 classify tools over MCP.
-CPU-only torch (per spec §9 — ~4GB RAM).
+`layamcp` is the decision engine — the sibling repo **DecisionMCP** (ex-
+LayaMCP, renamed 2026-10-05 at v0.2.0). Exposes **13 decision tools** over
+MCP: streamable HTTP at `/mcp` (primary) and legacy SSE at `/sse`. CPU-only
+torch (per spec §9 — ~4GB RAM). The compose service key and the gateway's
+`LAYAMCP_URL` env keep the `layamcp` name for compatibility.
 
 ## Cold model load
 
-Models load at module import (not lazily). The Docker healthcheck has
-`start_period: 120s` to cover this. If the healthcheck fails during
-boot:
+Models load at process start (`DECISIONMCP_PRELOAD_MODELS=true`, the
+default). The Docker healthcheck has `start_period: 120s` to cover this.
+If the healthcheck fails during boot:
 
 ```sh
 docker compose -f infra/compose.yaml logs layamcp
-# Look for "loading model" / "loaded model" or download errors
+# Look for "Starting DecisionMCP" / "loaded model" or download errors
 ```
 
 The HF model cache is in `/root/.cache/huggingface` (volume
@@ -20,14 +23,13 @@ bandwidth-heavy. Pre-warm:
 
 ```sh
 docker compose -f infra/compose.yaml exec layamcp python -c \
-  "import laya_mcp.bridge; laya_mcp.bridge.LayaBridge(preload=['auto']).warmup()"
+  "from decision_mcp.bridge import DecisionBridge; DecisionBridge(preload=True)"
 ```
 
 ## /health endpoint
 
-Phase 4 patch (commit `e08ced4`) added `GET /health` returning
-`{status: "ok", tools: N}`. TCP-port-open ≈ models-resident (models
-loaded at module import).
+`GET /health` returns `{status: "ok", tools: N}`. TCP-port-open ≈
+models-resident (models loaded at startup).
 
 If `/health` returns non-200:
 
@@ -37,28 +39,27 @@ docker compose -f infra/compose.yaml exec layamcp curl -sv http://127.0.0.1:8765
 
 Common causes:
 - Models still loading (wait longer; check logs)
-- Port not bound (`LAYAMCP_PORT` env)
+- Port not bound (`DECISIONMCP_PORT` env)
 - Process crashed (check exit logs)
 
-## Phase 4 patch context
+## v0.2.0 rename context
 
-Before the patch, `mcp.server.fastapi.create_fastapi_app` was imported
-— that API was removed in `mcp` 1.x and crashes on import. The patch
-mounts `mcp.server.sse.SseServerTransport` on plain FastAPI. If you see
-`ImportError: cannot import name 'create_fastapi_app'`, the patch
-wasn't deployed — rebuild with the latest LayaMCP commit.
-
-`pyproject.toml` pins `mcp[server]<2` to keep the SSE-on-FastAPI mounting
-stable.
+The sibling repo renamed `laya_mcp` → `decision_mcp`, the console script
+`layamcp` → `decisionmcp`, tools `laya_*` → `decision_*`, and env prefix
+`LAYAMCP_*` → `DECISIONMCP_*` (old names are silently ignored). The engine
+is now pluggable (`DecisionEngine` protocol; Laya is the default). See the
+sibling's `docs/MIGRATION.md`.
 
 ## Env vars
 
 | Var | Default | Meaning |
 |---|---|---|
-| `LAYAMCP_HOST` | `127.0.0.1` | Bind host (loopback only — exposed via Docker network, not published port) |
-| `LAYAMCP_PORT` | `8765` | Bind port |
-| `LAYAMCP_PRELOAD_MODELS` | `auto` | Preload model IDs at import |
-| `LOG_LEVEL` | `INFO` | Log verbosity |
+| `DECISIONMCP_HOST` | `127.0.0.1` (`0.0.0.0` in the Aelvyril image) | Bind host — container binds all interfaces so peers on `aelvyril-net` can reach it; no host port is published |
+| `DECISIONMCP_PORT` | `8765` | Bind port |
+| `DECISIONMCP_PRELOAD_MODELS` | `true` | Load model weights at startup (bool; `false` defers to first call) |
+| `DECISIONMCP_LOG_LEVEL` | `INFO` | Log verbosity |
+| `DECISIONMCP_USAGE_ENABLED` | `true` | SQLite usage/session log (training data) |
+| `DECISIONMCP_ALLOW_UPDATES` | `false` | Opt-in for `decision_update apply` (runs pip; keep off — no auth) |
 
 ## Scaling notes
 

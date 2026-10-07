@@ -1,0 +1,13 @@
+# infra/compose.hardened.yaml — Spec §11 / #79 prod override: drop ALL host
+# port mappings. Edge traffic terminates at Caddy (prod profile) on the
+# compose network; local inspection uses `docker compose exec` / `run`.
+#
+#   docker compose -f infra/compose.yaml -f infra/compose.hardened.yaml \
+#     --profile prod up -d
+#
+# Without Caddy up, web and gateway are unreachable from the host by design.
+services:
+  web:
+    ports: !override []
+  gateway:
+    ports: !override []

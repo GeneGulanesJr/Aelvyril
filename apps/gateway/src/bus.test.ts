@@ -60,6 +60,25 @@ describe("EventBus", () => {
     expect(store.getEventsSince(conv.id, -1)).toHaveLength(0);
   });
 
+  // Review P3: a rejected envelope used to vanish silently — now it warns
+  // and bumps a counter so producer bugs are visible.
+  it("warns and counts rejected envelopes (review P3)", () => {
+    const { store, bus } = makeBus();
+    const conv = store.createConversation({ namespace: "platform" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const before = bus.rejectedEnvelopes();
+      expect(
+        bus.publish({ conversationId: conv.id, ts, kind: "user_message", payload: { text: "" } }),
+      ).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]![0])).toContain("[bus] rejected invalid envelope");
+      expect(bus.rejectedEnvelopes()).toBe(before + 1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("accepts the wrapped custom kind (#85)", () => {
     const { store, bus } = makeBus();
     const conv = store.createConversation({ namespace: "platform" });

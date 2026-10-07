@@ -1,30 +1,52 @@
-# Spec §9: PiSandboxed sandbox orchestrator. Requires /dev/kvm passthrough
-# (libkrun backend) and a pre-seeded auth token file (research 2026-09-22:
-# auth is file-only, ~/.pisandboxed/token at 0600; bind host hardcoded 127.0.0.1).
+# Spec §9: PiSandboxed sandbox daemon (sandd). TypeScript/fastify — NOT Rust.
+# The original Phase 4 Dockerfile assumed cargo; PiSandboxed is a TypeScript
+# project (type=module, engines node>=26, tsc build → dist/server/main.js,
+# better-sqlite3 native build needs python3/make/g++). This mirrors the
+# working sibling Dockerfile (PiSandboxed 2726ba1), adapted to Aelvyril's
+# centralized named-context layout (sandd_src, see compose.yaml).
 #
-# Build context: ../PiSandboxed (sibling checkout).
+# Known constraints (see docs/ops/sandd.md + sibling infra/README.md):
+# - sandd binds 127.0.0.1 hardcoded (src/server/main.ts) → compose runs it
+#   with network_mode: host; no SANDD_HOST env exists upstream yet.
+# - the auth token self-mints at ~/.pisandboxed/token if absent; the
+#   pre-seeded /token volume is not read yet (kept for future wiring).
+# - smolvm binary is NOT packaged here. SMOLVM_BIN points at a path that
+#   does not exist in this image; boot is unaffected (lazy spawn), sandbox
+#   exec is deferred until the smolvm artifact ships.
 
-FROM rust:1-slim-bookworm AS build
+FROM node:26-slim AS build
 WORKDIR /repo
+# better-sqlite3 → node-gyp → python3/make/g++. npm (not pnpm): upstream has
+# no lockfile and npm runs native install scripts without pnpm 10's
+# build-script approval gate.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev \
+    python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
-COPY . .
-RUN cargo build --release --bin sandd
+COPY --from=sandd_src package.json tsconfig.json ./
+RUN npm install --include=dev
+COPY --from=sandd_src src ./src
+COPY --from=sandd_src bin ./bin
+RUN npm run build
 
-FROM debian:bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libkrun2 libkrunfw2-tools qemu-utils ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-ENV SANDD_PORT=7391 \
+FROM node:26-slim AS runtime
+ENV NODE_ENV=production \
+    SANDD_PORT=7391 \
+    SMOLVM_BIN=/usr/local/bin/smolvm \
     SMOLVM_IMAGES_DIR=/images
-COPY --from=build /repo/target/release/sandd /usr/local/bin/sandd
-RUN mkdir -p /images /token \
-    && chmod 0700 /token
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 1001 nodejs \
+    && useradd --uid 1001 --gid nodejs --create-home sandd
+WORKDIR /repo
+COPY --from=build --chown=sandd:sandd /repo/node_modules ./node_modules
+COPY --from=build --chown=sandd:sandd /repo/dist ./dist
+COPY --from=build --chown=sandd:sandd /repo/package.json ./package.json
 # Operator must pre-seed: docker run --rm -v sandd-token:/out alpine \
 #   sh -c "echo TOKEN > /out/token && chmod 0600 /out/token"
+RUN mkdir -p /images /token \
+    && chmod 0700 /token
+USER sandd
 VOLUME ["/images", "/token"]
 EXPOSE 7391
-# Sandd binds 127.0.0.1 hardcoded; use network_mode: host in compose so the
-# gateway (also on the host network in prod) can reach it.
-CMD ["sandd"]
+CMD ["node", "dist/server/main.js"]

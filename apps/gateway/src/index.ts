@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { buildApp } from "./app.js";
+import { readNonNegativeInt, readPositiveInt, readPositiveNumber } from "./env.js";
 import { createClerkVerifier, isLoopbackHost, type TokenVerifier } from "./auth.js";
 
 const port = Number(process.env.GATEWAY_PORT ?? 8787);
@@ -9,15 +10,76 @@ const configuredHost = process.env.GATEWAY_HOST;
 // PI_FAKE=1 (with a secret, PI_FAKE only swaps the pi child for the fixture).
 const fakeVerifier = !process.env.CLERK_SECRET_KEY && useFakeChild;
 
+// Review P3: strict parsing for every numeric cap. Bad values throw here at
+// boot — the gateway refuses to run with silently-disabled caps.
+const idleMs = readPositiveInt("GATEWAY_IDLE_MS");
+const sseHeartbeatMs = readPositiveInt("SSE_HEARTBEAT_MS");
+const maxSseStreamsPerUser = readPositiveInt("GATEWAY_MAX_SSE_STREAMS");
+const sseReplayPageSize = readPositiveInt("GATEWAY_SSE_REPLAY_PAGE");
+const eventRetentionPerThread = readNonNegativeInt("GATEWAY_EVENT_RETENTION"); // 0 disables
+const maxCostPerThreadUsd = readPositiveNumber("GATEWAY_MAX_THREAD_COST_USD");
+const maxConversationsPerUser = readPositiveInt("GATEWAY_MAX_THREADS");
+const maxRunningHostsPerUser = readPositiveInt("GATEWAY_MAX_RUNNING_HOSTS");
+const maxSessionHosts = readPositiveInt("GATEWAY_MAX_SESSION_HOSTS");
+const queueIntervalMs = readPositiveInt("GATEWAY_QUEUE_INTERVAL_MS");
+const rateLimitPerMin = readPositiveInt("GATEWAY_RATE_LIMIT_PER_MIN");
+const specMaxRounds = readPositiveInt("GATEWAY_SPEC_MAX_ROUNDS");
+const trustThreshold = readNonNegativeInt("GATEWAY_TRUST_THRESHOLD"); // 0 disables
+const verifyTimeoutMs = readPositiveInt("GATEWAY_VERIFY_TIMEOUT_MS");
+const verifyRetries = readNonNegativeInt("GATEWAY_VERIFY_RETRIES");
+
+// Review P3: the effective caps are logged once at startup so operators can
+// verify what the process is actually enforcing (env vs defaults).
+console.log(
+  "[gateway] effective caps:",
+  JSON.stringify({
+    idleMs: idleMs ?? 300_000,
+    sseHeartbeatMs: sseHeartbeatMs ?? 15_000,
+    maxSseStreamsPerUser: maxSseStreamsPerUser ?? 10,
+    sseReplayPageSize: sseReplayPageSize ?? 500,
+    eventRetentionPerThread: eventRetentionPerThread ?? 10_000,
+    maxCostPerThreadUsd: maxCostPerThreadUsd ?? null,
+    maxConversationsPerUser: maxConversationsPerUser ?? 30,
+    maxRunningHostsPerUser: maxRunningHostsPerUser ?? 2,
+    maxSessionHosts: maxSessionHosts ?? 100,
+    queueIntervalMs: queueIntervalMs ?? 2_000,
+    rateLimitPerMin: rateLimitPerMin ?? 20,
+    specMaxRounds: specMaxRounds ?? 3,
+    trustThreshold: trustThreshold ?? 5,
+    verifyTimeoutMs: verifyTimeoutMs ?? null,
+    verifyRetries: verifyRetries ?? null,
+    metricsPublic: process.env.GATEWAY_METRICS_PUBLIC === "1",
+    metricsSecretConfigured: Boolean(process.env.GATEWAY_METRICS_SECRET),
+  }),
+);
+
 // #78: the fake verifier accepts ANY bearer token and derives the identity
 // from the token itself — full cross-tenant access for anyone who can
 // reach the socket. That is tolerable on loopback only: refuse to boot it
-// pointed at a non-loopback interface.
-if (fakeVerifier && configuredHost !== undefined && !isLoopbackHost(configuredHost)) {
+// pointed at a non-loopback interface — UNLESS the operator explicitly
+// acknowledges the container case (PI_FAKE_ALLOW_NON_LOOPBACK=1): inside a
+// container the process-level bind says nothing about exposure; Docker's
+// port mapping is loopback-only (#79), so a non-loopback in-container bind
+// is how the dev stack stays reachable from peer containers.
+if (
+  fakeVerifier &&
+  configuredHost !== undefined &&
+  !isLoopbackHost(configuredHost) &&
+  process.env.PI_FAKE_ALLOW_NON_LOOPBACK !== "1"
+) {
   throw new Error(
     `PI_FAKE=1 enables a dev verifier that accepts any bearer token; ` +
       `refusing to bind non-loopback GATEWAY_HOST=${configuredHost}. ` +
-      `Set GATEWAY_HOST=127.0.0.1 for dev, or configure CLERK_SECRET_KEY for real auth.`,
+      `Set GATEWAY_HOST=127.0.0.1 for dev, configure CLERK_SECRET_KEY for real auth, ` +
+      `or set PI_FAKE_ALLOW_NON_LOOPBACK=1 when running inside a container whose ` +
+      `published ports are loopback-only (Docker).`,
+  );
+}
+
+if (fakeVerifier && configuredHost !== undefined && !isLoopbackHost(configuredHost)) {
+  console.warn(
+    "[PI_FAKE] non-loopback GATEWAY_HOST with the dev verifier — allowed by " +
+      "PI_FAKE_ALLOW_NON_LOOPBACK=1; exposure is the operator's responsibility.",
   );
 }
 
@@ -70,62 +132,59 @@ const app = await buildApp({
           ...(process.env.PI_PROVIDER ? ["--provider", process.env.PI_PROVIDER] : []),
           ...(process.env.PI_MODEL ? ["--model", process.env.PI_MODEL] : []),
         ],
-  idleMs: Number(process.env.GATEWAY_IDLE_MS ?? 300_000),
+  // Review P1: children no longer inherit the full process.env. In the dev
+  // fixture mode the fake-pi knobs are explicitly allowlisted (gateway-
+  // controlled keys — operator secrets stay blocked).
+  childEnvAllowlist: useFakeChild
+    ? [
+        "FAKE_SPEC_QUESTIONS",
+        "FAKE_PLAN_JSON",
+        "FAKE_GATED_TOOL",
+        "FAKE_EDIT_FILE",
+        "FAKE_DELAY_MS",
+        "FAKE_UI_DIALOG",
+      ]
+    : undefined,
+  idleMs,
   verifyToken: resolveVerifier(),
   allowedOrigins: process.env.GATEWAY_ALLOWED_ORIGIN?.split(",").map((o) => o.trim()),
   // Spec §11: structured JSON logs in prod (Fastify pino). Default on;
   // opt out with GATEWAY_LOG=silent for dev when stdout noise is annoying.
   logger: process.env.GATEWAY_LOG !== "silent",
   // SSE keepalive — operators may want to tune for proxy timeouts.
-  sseHeartbeatMs: process.env.SSE_HEARTBEAT_MS ? Number(process.env.SSE_HEARTBEAT_MS) : undefined,
+  sseHeartbeatMs,
   // Security review #85 caps: SSE streams per user, replay page size,
   // event-log retention per thread.
-  maxSseStreamsPerUser: process.env.GATEWAY_MAX_SSE_STREAMS
-    ? Number(process.env.GATEWAY_MAX_SSE_STREAMS)
-    : undefined,
-  sseReplayPageSize: process.env.GATEWAY_SSE_REPLAY_PAGE
-    ? Number(process.env.GATEWAY_SSE_REPLAY_PAGE)
-    : undefined,
-  eventRetentionPerThread: process.env.GATEWAY_EVENT_RETENTION
-    ? Number(process.env.GATEWAY_EVENT_RETENTION)
-    : undefined,
-  // #85: optional bearer secret gating /metrics for direct exposure.
+  maxSseStreamsPerUser,
+  sseReplayPageSize,
+  eventRetentionPerThread,
+  // #85: optional bearer secret gating /metrics. Review P3: /metrics is
+  // fail-closed — served without a secret only when GATEWAY_METRICS_PUBLIC=1.
   metricsSecret: process.env.GATEWAY_METRICS_SECRET,
+  metricsPublic: process.env.GATEWAY_METRICS_PUBLIC === "1",
   // #84: per-thread budget in USD (cost cap → blocked + refused prompts).
-  maxCostPerThreadUsd: process.env.GATEWAY_MAX_THREAD_COST_USD
-    ? Number(process.env.GATEWAY_MAX_THREAD_COST_USD)
-    : undefined,
+  maxCostPerThreadUsd,
   // #84: extension_ui_request handling — "auto-responder" (default) or
   // "blocked" (escalate blocking dialogs to the needs-you state).
   dialogMode:
     process.env.GATEWAY_DIALOG_MODE === "blocked" ? ("blocked" as const) : ("auto-responder" as const),
   // #83: long-horizon execution caps — cheap threads vs scarce hosts.
-  maxConversationsPerUser: process.env.GATEWAY_MAX_THREADS
-    ? Number(process.env.GATEWAY_MAX_THREADS)
-    : undefined,
-  maxRunningHostsPerUser: process.env.GATEWAY_MAX_RUNNING_HOSTS
-    ? Number(process.env.GATEWAY_MAX_RUNNING_HOSTS)
-    : undefined,
-  maxSessionHosts: process.env.GATEWAY_MAX_SESSION_HOSTS
-    ? Number(process.env.GATEWAY_MAX_SESSION_HOSTS)
-    : undefined,
-  queueIntervalMs: process.env.GATEWAY_QUEUE_INTERVAL_MS
-    ? Number(process.env.GATEWAY_QUEUE_INTERVAL_MS)
-    : undefined,
+  maxConversationsPerUser,
+  maxRunningHostsPerUser,
+  maxSessionHosts,
+  queueIntervalMs,
+  // Review P3: per-user prompt rate limit (requests/minute).
+  rateLimitPerMin,
   // #76: who may call /v1/admin/* (update status/apply). Empty/unset = deny all.
   adminUserIds: process.env.GATEWAY_ADMIN_USER_IDS?.split(",")
     .map((s) => s.trim())
     .filter(Boolean),
   // #80/#81/#82: spec/autonomy/auto-verify wiring.
   // GATEWAY_SPEC_MAX_ROUNDS: bounded question budget per interview (default 3).
-  specMaxRounds: process.env.GATEWAY_SPEC_MAX_ROUNDS
-    ? Number(process.env.GATEWAY_SPEC_MAX_ROUNDS)
-    : undefined,
+  specMaxRounds,
   // GATEWAY_TRUST_THRESHOLD: merges-without-revision at which a namespace's
   // autonomy escalates (default 5; 0 disables escalation).
-  trustThreshold: process.env.GATEWAY_TRUST_THRESHOLD
-    ? Number(process.env.GATEWAY_TRUST_THRESHOLD)
-    : undefined,
+  trustThreshold,
   // GATEWAY_VERIFY=0 disables the auto-verify loop entirely; otherwise
   // tests/lint/typecheck auto-detect from the workspace package.json.
   verify:
@@ -133,12 +192,8 @@ const app = await buildApp({
       ? null
       : {
           commandsOverride: process.env.GATEWAY_VERIFY_COMMANDS,
-          timeoutMs: process.env.GATEWAY_VERIFY_TIMEOUT_MS
-            ? Number(process.env.GATEWAY_VERIFY_TIMEOUT_MS)
-            : undefined,
-          retries: process.env.GATEWAY_VERIFY_RETRIES
-            ? Number(process.env.GATEWAY_VERIFY_RETRIES)
-            : undefined,
+          timeoutMs: verifyTimeoutMs,
+          retries: verifyRetries,
         },
 });
 
@@ -156,6 +211,14 @@ try {
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
-    void app.close().then(() => process.exit(0));
+    // Review P3: graceful shutdown cannot hang past the container grace —
+    // app.close() failures are swallowed and a hard-exit backstop fires at
+    // 8s even if a handle refuses to close.
+    const backstop = setTimeout(() => process.exit(0), 8_000);
+    backstop.unref();
+    app
+      .close()
+      .catch(() => {})
+      .then(() => process.exit(0));
   });
 }

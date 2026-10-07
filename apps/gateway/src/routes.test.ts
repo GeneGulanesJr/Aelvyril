@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { rmSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { buildApp, type App } from "./app.js";
 import type { TokenVerifier } from "./auth.js";
@@ -25,6 +25,9 @@ function makeApp() {
     childArgs: [fakePi],
     idleMs: 60_000,
     verifyToken: testVerifier,
+    // /metrics is fail-closed by default (review P3); these CRUD/gauge tests
+    // scrape it unauthenticated.
+    metricsPublic: true,
     // Permit any non-relative path for the existing CRUD tests. The
     // allowlist enforcement paths get their own tests below with the
     // production default-deny behavior.
@@ -281,6 +284,10 @@ describe("v1 routes", () => {
         childArgs: [fakePi],
         idleMs: 60_000,
         verifyToken: testVerifier,
+        metricsPublic: true,
+        // FAKE_DELAY_MS must be explicitly allowlisted: children no longer
+        // inherit the full process.env (review P1).
+        childEnvAllowlist: ["FAKE_DELAY_MS"],
       });
       const u1 = authed(app, "good");
       const live = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
@@ -360,6 +367,7 @@ describe("v1 routes", () => {
         return consumed.filter((u) => u === uid).length === 1 ? 0 : -1;
       },
       reset: () => {},
+      size: () => consumed.length,
     };
     app = await buildApp({
       dbPath: ":memory:",
@@ -1163,6 +1171,16 @@ describe("wired core loop (#80 #81 #82)", () => {
       childArgs: [fakePi],
       idleMs: 60_000,
       verifyToken: testVerifier,
+      // Children no longer inherit the full process.env (review P1) — the
+      // fixture knobs are explicitly allowlisted for these tests.
+      childEnvAllowlist: [
+        "FAKE_SPEC_QUESTIONS",
+        "FAKE_PLAN_JSON",
+        "FAKE_GATED_TOOL",
+        "FAKE_EDIT_FILE",
+        "FAKE_DELAY_MS",
+        "FAKE_UI_DIALOG",
+      ],
       workspaceAllowlist: {
         isAllowed: () => true,
         resolve: (w) => w ?? null,
@@ -1440,5 +1458,265 @@ describe("wired core loop (#80 #81 #82)", () => {
     const kinds = eventKinds(dbPath!, tOff.id);
     expect(kinds).not.toContain("spec_question");
     expect(kinds).not.toContain("spec_status");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review fixes 3+4+6: cap enforcement on the steer path, runner steer
+// semantics for live targets, and 502 + degraded on supervisor RPC failures.
+// ---------------------------------------------------------------------------
+
+/**
+ * A STRICT fake agent: rejects a bare prompt (no streamingBehavior) while a
+ * turn is mid-flight — exactly pi's shared-schema behavior that used to flip
+ * live threads degraded/reviewed when the queue runner re-sent without
+ * steer. Turn length is driven by the message ("long …" → 400ms) so the
+ * runner-vs-turn interleavings are deterministic. Accepts steer mid-turn
+ * (the turn runs after the current one) and reports each executed turn via
+ * a custom envelope.
+ */
+async function writeStrictFixture(): Promise<string> {
+  const dir = mkdtempSync(join(tmpdir(), "aelvyril-strict-"));
+  const file = join(dir, "strict-pi.mjs");
+  writeFileSync(
+    file,
+    `import readline from "node:readline";
+import { setTimeout as sleep } from "node:timers/promises";
+const rl = readline.createInterface({ input: process.stdin });
+const lines = [];
+rl.on("line", (l) => lines.push(l));
+async function readLine() { while (lines.length === 0) await sleep(2); return lines.shift(); }
+const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+let busy = false;
+const pending = [];
+async function turn(message) {
+  await sleep(message.startsWith("long") ? 400 : 80);
+  send({ type: "custom_turn_ran", value: message });
+  send({ type: "agent_settled" });
+}
+async function drain() { while (pending.length) await turn(pending.shift()); busy = false; }
+async function main() {
+  for (;;) {
+    const line = await readLine();
+    if (!line.trim()) continue;
+    const cmd = JSON.parse(line);
+    if (cmd.type === "prompt") {
+      if (busy && !cmd.streamingBehavior) {
+        send({ id: cmd.id, type: "response", command: "prompt", success: false, error: "busy_without_streaming_behavior" });
+        continue;
+      }
+      send({ id: cmd.id, type: "response", command: "prompt", success: true });
+      if (busy) { pending.push(String(cmd.message ?? "")); continue; }
+      busy = true;
+      turn(String(cmd.message ?? "")).then(drain);
+      continue;
+    }
+    send({ id: cmd.id, type: "response", command: String(cmd.type), success: true });
+  }
+}
+main();
+`,
+  );
+  return file;
+}
+
+describe("steer-path caps + rpc failure handling (review fixes 3, 4, 6)", () => {
+  let app: App | undefined;
+  let dbPath: string | undefined;
+  let fixtureDirs: string[] = [];
+
+  afterEach(async () => {
+    if (app) await app.close();
+    if (dbPath) {
+      try {
+        rmSync(dbPath, { force: true });
+      } catch {
+        // Windows file-handle lag
+      }
+    }
+    for (const d of fixtureDirs) {
+      try {
+        rmSync(d, { recursive: true, force: true });
+      } catch {
+        // best-effort
+      }
+    }
+    app = undefined;
+    dbPath = undefined;
+    fixtureDirs = [];
+  });
+
+  // Review fix 3: a streamingBehavior prompt with NO live host used to
+  // bypass the running-host caps entirely (spawning an untracked host).
+  it("queues a steer with no live host when the user is at cap (no bypass)", async () => {
+    app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      maxRunningHostsPerUser: 0,
+      queueIntervalMs: 3_600_000, // runner off — the queue must hold it
+    });
+    const u1 = authed(app, "good");
+    const t = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const res = await u1.post(`/v1/threads/${t.id}/prompt`, {
+      message: "steer into the void",
+      streamingBehavior: "steer",
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ accepted: true, queued: true });
+  });
+
+  // Review fix 4 (route half): at-cap queueing must pass through when the
+  // TARGET thread itself is live.
+  it("passes a plain prompt to a live target through with steer semantics instead of queueing", async () => {
+    const fixture = await writeStrictFixture();
+    fixtureDirs.push(dirname(fixture));
+    dbPath = join(tmpdir(), `aelvyril-steer-live-${randomUUID()}.db`);
+    app = await buildApp({
+      dbPath,
+      childCommand: process.execPath,
+      childArgs: [fixture],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      maxRunningHostsPerUser: 1, // the live target consumes the whole budget
+      queueIntervalMs: 3_600_000, // runner off — pass-through must not need it
+    });
+    const u1 = authed(app, "good");
+    const t = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    expect((await u1.post(`/v1/threads/${t.id}/prompt`, { message: "long running turn" })).statusCode).toBe(202);
+    // The target is live and the user is at cap: the old code queued this;
+    // the new code steers the live host.
+    const second = await u1.post(`/v1/threads/${t.id}/prompt`, { message: "me too" });
+    expect(second.statusCode).toBe(202);
+    expect(second.json()).toEqual({ accepted: true }); // not queued
+    // The strict fixture ACCEPTED the steer (a bare prompt mid-turn would
+    // have been rejected → 502) and ran the steered turn after the first.
+    // Values are prefix-matched: the contract wraps prompts with the spec
+    // protocol preamble, so the fixture echoes the wrapped text.
+    await vi.waitFor(
+      () => {
+        expect(
+          eventPayloads(dbPath!, t.id, "custom").some(
+            (p) =>
+              (p as { type?: string; data?: { value?: string } }).type === "custom_turn_ran" &&
+              String((p as { type?: string; data?: { value?: string } }).data?.value).startsWith("me too"),
+          ),
+        ).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
+    await vi.waitFor(async () => {
+      const one = await u1.get(`/v1/threads/${t.id}`);
+      expect((one.json() as { state: string }).state).toBe("idle");
+    });
+  }, 20_000);
+
+  // Review fix 4 (runner half): a dequeued prompt for a live, BUSY thread
+  // must carry steer semantics — a bare prompt gets schema-rejected, which
+  // used to flip the thread degraded/reviewed.
+  it("runner sends steer to a thread that went live between enqueue and dequeue", async () => {
+    const fixture = await writeStrictFixture();
+    fixtureDirs.push(dirname(fixture));
+    dbPath = join(tmpdir(), `aelvyril-runner-steer-${randomUUID()}.db`);
+    app = await buildApp({
+      dbPath,
+      childCommand: process.execPath,
+      childArgs: [fixture],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      maxRunningHostsPerUser: 2,
+      queueIntervalMs: 10,
+    });
+    const u1 = authed(app, "good");
+    const a = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const b = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    // A runs short, B runs long — when A settles the runner wakes, finds a
+    // free slot, and dequeues the row below while B is still mid-turn.
+    expect((await u1.post(`/v1/threads/${a.id}/prompt`, { message: "short" })).statusCode).toBe(202);
+    expect((await u1.post(`/v1/threads/${b.id}/prompt`, { message: "long turn" })).statusCode).toBe(202);
+    // Simulate the stale queue row for B (a restart survivor). Inserted
+    // directly — the route can no longer enqueue for a live thread.
+    const db = new Database(dbPath);
+    let namespace: string;
+    try {
+      namespace = (
+        db.prepare("SELECT namespace FROM conversations WHERE id = ?").get(b.id) as { namespace: string }
+      ).namespace;
+      db.prepare(
+        "INSERT INTO prompt_queue(conversation_id, namespace, message, spec_mode, created_at) VALUES(?, ?, ?, 'off', ?)",
+      ).run(b.id, namespace, "follow-up work", new Date().toISOString());
+    } finally {
+      db.close();
+    }
+    // A settles (~80ms) → the runner dequeues B's row while B is busy
+    // (~400ms). Steer semantics must get it ACCEPTED. (Prefix match: the
+    // contract wraps the prompt, so the fixture echoes the wrapped text.)
+    await vi.waitFor(
+      () => {
+        expect(
+          eventPayloads(dbPath!, b.id, "custom").some(
+            (p) =>
+              (p as { type?: string; data?: { value?: string } }).type === "custom_turn_ran" &&
+              String((p as { type?: string; data?: { value?: string } }).data?.value).startsWith("follow-up work"),
+          ),
+        ).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
+    // …and the rejection path must NOT have fired.
+    const errors = eventPayloads(dbPath!, b.id, "error") as Array<{ message?: string }>;
+    expect(errors.some((e) => String(e.message ?? "").includes("rejected by the agent"))).toBe(false);
+    await vi.waitFor(async () => {
+      const one = await u1.get(`/v1/threads/${b.id}`);
+      expect((one.json() as { state: string }).state).toBe("idle");
+    });
+  }, 20_000);
+
+  // Review fix 6: supervisor RPC failures must 502 agent_rejected, bump
+  // promptRejections, and leave a non-running state instead of a stuck
+  // 'running' row until the idle reaper.
+  it("502s agent_rejected + degrades the thread when the host dies mid-send (prompt)", async () => {
+    app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: ["-e", "process.exit(1)"], // host dies instantly
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      metricsPublic: true,
+    });
+    const u1 = authed(app, "good");
+    const t = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const res = await u1.post(`/v1/threads/${t.id}/prompt`, { message: "hi" });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: "agent_rejected" });
+    const one = await u1.get(`/v1/threads/${t.id}`);
+    expect((one.json() as { state: string }).state).toBe("degraded");
+    const m = await app.inject({ method: "GET", url: "/metrics" });
+    expect(m.body).toMatch(/aelvyril_prompt_rejections_total\s+1/);
+  });
+
+  it("502s agent_rejected + reverts status when the host dies mid-send (retry)", async () => {
+    app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: ["-e", "process.exit(1)"],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      metricsPublic: true,
+    });
+    const u1 = authed(app, "good");
+    const t = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    // A failed prompt still persisted lastPrompt — retry has something to
+    // re-send, then dies at the RPC layer.
+    expect((await u1.post(`/v1/threads/${t.id}/prompt`, { message: "hi" })).statusCode).toBe(502);
+    const retry = await u1.post(`/v1/threads/${t.id}/retry`);
+    expect(retry.statusCode).toBe(502);
+    expect(retry.json()).toEqual({ error: "agent_rejected" });
+    const one = await u1.get(`/v1/threads/${t.id}`);
+    expect((one.json() as { state: string }).state).toBe("degraded");
+    const m = await app.inject({ method: "GET", url: "/metrics" });
+    expect(m.body).toMatch(/aelvyril_prompt_rejections_total\s+2/);
   });
 });

@@ -27,24 +27,12 @@ export class GatewayClient {
       headers: {
         ...(init.headers ?? {}),
         authorization: `Bearer ${token}`,
-        "content-type": "application/json",
+        // Fastify rejects a body-less POST with a json content-type
+        // (FST_ERR_CTP_EMPTY_JSON_BODY, 400) — kill-all / abandon send no
+        // body, so only attach the header when there is one.
+        ...(init.body !== undefined ? { "content-type": "application/json" } : {}),
       },
     };
-  }
-
-  async listConversations(): Promise<Conversation[]> {
-    const res = await fetch(`${this.baseUrl}${ROUTES.conversations}`, await this.authed());
-    if (!res.ok) throw new Error(`list failed: ${res.status}`);
-    return ((await res.json()) as { conversations: Conversation[] }).conversations;
-  }
-
-  async createConversation(body: CreateConversationBody = {}): Promise<Conversation> {
-    const res = await fetch(
-      `${this.baseUrl}${ROUTES.conversations}`,
-      await this.authed({ method: "POST", body: JSON.stringify(body) }),
-    );
-    if (!res.ok) throw new Error(`create failed: ${res.status}`);
-    return (await res.json()) as Conversation;
   }
 
   async prompt(id: string, body: PromptBodyInput): Promise<void> {
@@ -55,14 +43,6 @@ export class GatewayClient {
     if (!res.ok) throw new Error(`prompt failed: ${res.status}`);
   }
 
-  async abort(id: string): Promise<void> {
-    const res = await fetch(
-      `${this.baseUrl}${ROUTES.conversationAbort(id)}`,
-      await this.authed({ method: "POST" }),
-    );
-    if (!res.ok) throw new Error(`abort failed: ${res.status}`);
-  }
-
   async renameConversation(id: string, body: RenameConversationBody): Promise<Conversation> {
     const res = await fetch(
       `${this.baseUrl}${ROUTES.conversationRename(id)}`,
@@ -70,14 +50,6 @@ export class GatewayClient {
     );
     if (!res.ok) throw new Error(`rename failed: ${res.status}`);
     return (await res.json()) as Conversation;
-  }
-
-  async deleteConversation(id: string): Promise<void> {
-    const res = await fetch(
-      `${this.baseUrl}${ROUTES.conversationRename(id)}`,
-      await this.authed({ method: "DELETE" }),
-    );
-    if (!res.ok) throw new Error(`delete failed: ${res.status}`);
   }
 
   // --- Threads (spec-centric UI surface) ---
@@ -143,14 +115,14 @@ export class GatewayClient {
   }
 
   async getUpdateStatus(): Promise<UpdateStatus> {
-    const res = await fetch(`${this.baseUrl}/v1/admin/update/status`, await this.authed());
+    const res = await fetch(`${this.baseUrl}${ROUTES.adminUpdateStatus}`, await this.authed());
     if (!res.ok) throw new Error(`update status failed: ${res.status}`);
     return (await res.json()) as UpdateStatus;
   }
 
   async applyUpdate(): Promise<{ started: boolean; message: string }> {
     const res = await fetch(
-      `${this.baseUrl}/v1/admin/update`,
+      `${this.baseUrl}${ROUTES.adminUpdate}`,
       await this.authed({ method: "POST" }),
     );
     if (!res.ok) throw new Error(`update apply failed: ${res.status}`);
@@ -175,7 +147,20 @@ export class GatewayClient {
     onLost?: (reason: "not_found" | "gave_up") => void,
   ): () => void {
     const controller = new AbortController();
-    if (signal) signal.addEventListener("abort", () => controller.abort(), { once: true });
+    // Bridge the caller's signal onto the inner controller. Guard against a
+    // signal that is ALREADY aborted (a listener would never fire and the
+    // stream would reconnect forever) and detach the bridge when the inner
+    // controller aborts so close() doesn't leak the listener.
+    const bridgeAbort = () => controller.abort();
+    if (signal) {
+      if (signal.aborted) controller.abort();
+      else {
+        signal.addEventListener("abort", bridgeAbort, { once: true });
+        controller.signal.addEventListener("abort", () => signal.removeEventListener("abort", bridgeAbort), {
+          once: true,
+        });
+      }
+    }
     const MAX_FAILURES = 8;
     const MAX_AUTH_FAILURES = 3;
     void (async () => {

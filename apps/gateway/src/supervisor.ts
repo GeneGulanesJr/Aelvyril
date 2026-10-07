@@ -1,3 +1,6 @@
+import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import type { EventEnvelope, PatchSpecBody } from "@aelvyril/shared";
 import { RpcClient, type RpcEvent } from "./rpc.js";
@@ -7,6 +10,24 @@ import { AgentContract, buildVerifyRetryPrompt, type ContractEnvelope, type Spec
 import { classifyAction, type Autonomy } from "./risk.js";
 import { formatFailure, resolveVerifyCommands, runVerification, type VerifyExec } from "./verify.js";
 import { computeWorkspaceDiff, type FilePatch } from "./workspace-git.js";
+
+/**
+ * Review P2: with no workspace configured, session hosts must never spawn
+ * inside the gateway's own repo tree (the old process.cwd() fallback). Each
+ * thread gets a scratch dir under the OS temp dir instead. The id is
+ * sanitized so a hostile id can't traverse out of the scratch root.
+ */
+function defaultScratchCwd(conversationId: string): string {
+  const safeId = conversationId.replace(/[^A-Za-z0-9_-]/g, "_") || "anonymous";
+  const dir = join(tmpdir(), "aelvyril-sessions", safeId);
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    // Unwritable temp dir: spawn with an undefined cwd (node falls back to
+    // process.cwd()) rather than failing the prompt — spec §10 fail-soft.
+  }
+  return dir;
+}
 
 export interface VerifyOptions {
   /** GATEWAY_VERIFY_COMMANDS override ("pnpm test,pnpm lint"). */
@@ -56,6 +77,10 @@ export interface SupervisorOptions {
 }
 
 interface Handle {
+  /** Identity of the thread this handle serves (event routing is
+   *  handle-keyed so a zombie's events can be told apart from a live
+   *  host's — review P1 rework). */
+  conversationId: string;
   rpc: RpcClient;
   child: ChildProcess;
   lastActivity: number;
@@ -64,6 +89,14 @@ interface Handle {
   contract: AgentContract;
   /** #82: verification attempts spent on the CURRENT user turn. */
   verifyAttempts: number;
+  /** Review P2: bumped on every prompt()/prepareTurn so the async
+   *  postTurnPipeline can detect a newer user turn and stand down. */
+  turnGeneration: number;
+  /** Review P1 rework: set when THIS child is killed via killChild —
+   *  resolves (bounded) at the child's exit. Protocol events arriving
+   *  from a handle with this set are dropped; a respawned host is a
+   *  different handle and is never silenced. */
+  zombie?: Promise<void>;
 }
 
 /**
@@ -75,11 +108,14 @@ interface Handle {
 export class Supervisor {
   private handles = new Map<string, Handle>();
   private reaper: NodeJS.Timeout;
-  /** Security review #85: conversations whose host was SIGKILLed via
-   *  killChild (delete/abandon). Protocol events already queued in the
-   *  event loop for these ids are dropped instead of published, which
-   *  would re-insert orphan event rows for deleted threads. */
-  private dead = new Set<string>();
+  /** Security review #85, reworked (review P1): children killed via
+   *  killChild ("zombies"), per conversation. The old `dead` set was
+   *  keyed by conversationId, so a RESPAWNED host's events were dropped
+   *  until the OLD child exited (up to killGraceMs or forever). Zombies
+   *  are now tracked by child identity (the resolving exit promise on
+   *  the handle): handleProtocolEvent drops only zombie events, and
+   *  prepareTurn awaits these before spawning a replacement. */
+  private zombies = new Map<string, Promise<void>[]>();
 
   constructor(private opts: SupervisorOptions) {
     this.reaper = setInterval(() => this.reapIdle(), Math.min(opts.idleMs, 5_000));
@@ -102,7 +138,12 @@ export class Supervisor {
     // on disk after a crash + re-prompt. Caller-provided cwd wins (for tests
     // + future overrides); otherwise the supervisor reads workspace from the
     // store itself — the route doesn't need to plumb it through.
-    const spawnCwd = cwd ?? this.opts.store.getConversationById(conversationId)?.workspace ?? undefined;
+    // Review P2: with no workspace configured the child used to inherit the
+    // gateway's own repo tree via process.cwd() — a session host must never
+    // run (and write!) inside the gateway. Fall back to a per-thread scratch
+    // dir under the OS temp dir instead.
+    const configured = cwd ?? this.opts.store.getConversationById(conversationId)?.workspace ?? undefined;
+    const spawnCwd = configured ?? defaultScratchCwd(conversationId);
     const child = this.opts.spawnChild(conversationId, extraEnv, spawnCwd);
     const rpc = new RpcClient(child);
     // #80: the contract is the protocol→envelope translator + lifecycle
@@ -141,17 +182,26 @@ export class Supervisor {
       },
       { specMode: "auto", maxSpecRounds: this.opts.specMaxRounds },
     );
-    const handle: Handle = { rpc, child, lastActivity: Date.now(), exiting: false, contract, verifyAttempts: 0 };
-    rpc.on("event", (ev: RpcEvent) => this.onProtocolEvent(conversationId, ev));
+    const handle: Handle = {
+      conversationId,
+      rpc,
+      child,
+      lastActivity: Date.now(),
+      exiting: false,
+      contract,
+      verifyAttempts: 0,
+      turnGeneration: 0,
+    };
+    // Event routing is bound to THIS handle: a zombie's in-flight events
+    // carry the zombie handle, a live host's carry the live one (review P1).
+    rpc.on("event", (ev: RpcEvent) => this.onProtocolEvent(handle, ev));
     rpc.on("exit", () => {
       // The host exited — the gauge reflects that regardless of whether the
       // exit was expected (kill/reap/dispose) or a crash.
       this.opts.onSessionHostExit?.();
-      // The kill is complete: in-flight events from the old child are done
-      // arriving. Lift the dead mark so a future prompt on this thread
-      // (abandon → change mind → re-prompt) spawns a live host whose events
-      // are not silently dropped (2nd review).
-      this.dead.delete(conversationId);
+      // Review P1 rework: the dead-mark is child-scoped (handle.zombie), so
+      // nothing conversation-level needs lifting here — a respawned host is
+      // a different handle whose events were never silenced.
       // #77: only the CURRENT handle's exit mutates map/state. A stale
       // child's late exit event must not delete a respawned host's handle
       // or publish a spurious degraded state for a live session.
@@ -215,6 +265,13 @@ export class Supervisor {
     extraEnv?: Record<string, string>,
     cwd?: string,
   ): Promise<Handle> {
+    // Review P1: a killChild'ed host is awaited too — the same invariant as
+    // the reap path below (never two pi processes on one session file), and
+    // a replacement must not spawn while the zombie could still write.
+    // Bounded by exitOf (kill grace + margin), so a stuck child cannot hang
+    // the prompt forever.
+    const pendingZombies = this.zombies.get(conversationId);
+    if (pendingZombies?.length) await Promise.all(pendingZombies);
     // #77: an idle-reaped host keeps its handle until its exit fires. Wait
     // for it so this prompt is not written into a dying child's stdin and
     // does not double-spawn a second pi on the same session file while the
@@ -223,6 +280,8 @@ export class Supervisor {
     if (existing?.exiting) await this.exitOf(existing);
     // extraEnv + cwd only apply at spawn time; a reused session keeps its env.
     const handle = this.ensureSession(conversationId, extraEnv ?? {}, cwd);
+    // Review P2: a new turn invalidates any in-flight postTurnPipeline.
+    handle.turnGeneration++;
     this.opts.store.setConversationState(conversationId, "streaming");
     this.publish(conversationId, { kind: "session_state", payload: { state: "streaming" } });
     handle.lastActivity = Date.now();
@@ -332,18 +391,32 @@ export class Supervisor {
   killChild(conversationId: string): void {
     const handle = this.handles.get(conversationId);
     if (!handle) return;
-    // #85: mark exiting + forget the handle BEFORE the kill so the async
-    // exit path doesn't publish a spurious degraded session_state, and add
-    // to the dead set so in-flight protocol events are dropped.
+    // #85, reworked (review P1): mark exiting + forget the handle BEFORE the
+    // kill so the async exit path doesn't publish a spurious degraded
+    // session_state. The dead-mark is keyed by CHILD IDENTITY (handle.zombie),
+    // not the conversation: only the old child's in-flight events are
+    // dropped, and prepareTurn awaits the zombie's exit before spawning a
+    // replacement (abandon → re-prompt delivers the new host immediately).
     handle.exiting = true;
     this.handles.delete(conversationId);
-    this.dead.add(conversationId);
+    const zombie = this.exitOf(handle);
+    handle.zombie = zombie;
+    const pending = this.zombies.get(conversationId) ?? [];
+    pending.push(zombie);
+    this.zombies.set(conversationId, pending);
+    void zombie.then(() => {
+      const list = this.zombies.get(conversationId);
+      if (!list) return;
+      const next = list.filter((p) => p !== zombie);
+      if (next.length === 0) this.zombies.delete(conversationId);
+      else this.zombies.set(conversationId, next);
+    });
     this.sigtermWithEscalation(handle);
   }
 
-  private onProtocolEvent(conversationId: string, ev: RpcEvent): void {
+  private onProtocolEvent(handle: Handle, ev: RpcEvent): void {
     try {
-      this.handleProtocolEvent(conversationId, ev);
+      this.handleProtocolEvent(handle, ev);
     } catch {
       // Store / bus may be closed during disposeAll (test teardown race) or
       // a real SIGTERM during shutdown. Spec §10: backing service failures
@@ -351,10 +424,13 @@ export class Supervisor {
     }
   }
 
-  private handleProtocolEvent(conversationId: string, ev: RpcEvent): void {
-    if (this.dead.has(conversationId)) return;
-    const handle = this.handles.get(conversationId);
-    if (handle) handle.lastActivity = Date.now();
+  private handleProtocolEvent(handle: Handle, ev: RpcEvent): void {
+    // Review P1 rework: drop events only from a killed OLD child (identity-
+    // keyed). A respawned host's events must never be silenced.
+    if (handle.zombie) return;
+    const conversationId = handle.conversationId;
+    const live = this.handles.get(conversationId);
+    if (live) live.lastActivity = Date.now();
 
     // Probe channel: custom_* protocol events are forwarded onto the bus.
     // Security review #85: they must not flow verbatim as the envelope kind
@@ -494,6 +570,13 @@ export class Supervisor {
   private async postTurnPipeline(conversationId: string, handle: Handle): Promise<void> {
     const contract = handle.contract;
     if (contract.gateStopped || contract.awaitingInterview) return;
+    // Review P2: the pipeline is async (diff producer, verify runner) — a
+    // newer user turn may start on this host while it runs. `generation`
+    // captures OUR turn; every mutation past an await re-checks so a stale
+    // pipeline can neither inject a verify-retry into the new turn nor mark
+    // a live thread reviewed underneath it.
+    const generation = handle.turnGeneration;
+    const stale = (): boolean => handle.turnGeneration !== generation;
     try {
       const workspace = this.opts.store.getConversationById(conversationId)?.workspace ?? undefined;
       if (!workspace) return;
@@ -504,12 +587,12 @@ export class Supervisor {
 
       const verify = this.opts.verify;
       if (verify === null) {
-        this.markReviewed(conversationId);
+        if (!stale()) this.markReviewed(conversationId);
         return;
       }
       const commands = await resolveVerifyCommands(workspace, verify?.commandsOverride);
       if (commands.length === 0) {
-        this.markReviewed(conversationId);
+        if (!stale()) this.markReviewed(conversationId);
         return;
       }
       const retries = verify?.retries ?? 3;
@@ -520,9 +603,11 @@ export class Supervisor {
         exec: verify?.exec,
       });
       if (run.ok) {
-        this.markReviewed(conversationId);
+        if (!stale()) this.markReviewed(conversationId);
         return;
       }
+      // The attempt belongs to OUR turn — never burn the newer turn's budget.
+      if (stale()) return;
       handle.verifyAttempts++;
       const failure = formatFailure(run);
       if (handle.verifyAttempts > retries) {
@@ -534,9 +619,12 @@ export class Supervisor {
             message: `auto-verify failed after ${retries} retries — needs your review:\n\n${failure.slice(0, 2_000)}`,
           },
         });
-        this.markReviewed(conversationId);
+        if (!stale()) this.markReviewed(conversationId);
         return;
       }
+      // A newer turn owns the host now — injecting the verify-retry would
+      // corrupt it (review P2).
+      if (stale()) return;
       // Bounded self-retry: the failure output goes back to the agent and
       // the next settle re-enters this pipeline with a fresh diff.
       this.publish(conversationId, {
@@ -587,14 +675,17 @@ export class Supervisor {
       if (!res.success || !res.data) return;
       const stats = res.data as { tokens?: Record<string, unknown>; cost?: unknown };
       if (!stats.tokens) return;
+      // Review P3: tokens are ints in the shared Usage schema — fractional
+      // pi stats must be coerced (not dropped by the envelope's zod probe).
       const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0);
+      const int = (v: unknown): number => Math.floor(num(v));
       const usage = {
         tokens: {
-          input: num(stats.tokens.input),
-          output: num(stats.tokens.output),
-          cacheRead: num(stats.tokens.cacheRead),
-          cacheWrite: num(stats.tokens.cacheWrite),
-          total: num(stats.tokens.total),
+          input: int(stats.tokens.input),
+          output: int(stats.tokens.output),
+          cacheRead: int(stats.tokens.cacheRead),
+          cacheWrite: int(stats.tokens.cacheWrite),
+          total: int(stats.tokens.total),
         },
         cost: num(stats.cost),
       };

@@ -56,7 +56,8 @@ export default function ThreadPage() {
         try {
           setThreads(await c.listThreads());
         } catch (err) {
-          console.error("listThreads failed", err);
+          // Same user-facing slot as every other action failure.
+          if (!cancelled) setActionError(toErrorMessage(err));
         }
       }
     })();
@@ -64,7 +65,12 @@ export default function ThreadPage() {
   }, [signedIn, getToken]);
 
   const isNew = id === "new";
-  const threadState = useThread(isNew ? null : id, { getToken });
+  const threadState = useThread(isNew ? null : id, {
+    getToken,
+    // #83 sidebar: live spec_status envelopes update the ACTIVE entry of the
+    // list so its pill matches the header's live pill between refetches.
+    onStatus: (status) => setThreads((ts) => ts.map((t) => (t.id === id ? { ...t, status } : t))),
+  });
 
   if (!signedIn) return <SignInPrompt />;
   if (!client) return <div className="p-4 text-[#8b96a8]">loading…</div>;
@@ -86,7 +92,7 @@ export default function ThreadPage() {
             await client.killAllThreads();
             setThreads(await client.listThreads());
           } catch (err) {
-            console.error("kill-all failed", err);
+            setActionError(toErrorMessage(err));
           }
         }}
       />
@@ -123,7 +129,7 @@ export default function ThreadPage() {
                 .deleteThread(activeThread.id)
                 .then(() => setThreads((ts) => ts.filter((t) => t.id !== activeThread.id)))
                 .then(() => router.push("/thread/new"))
-                .catch((err) => console.error("delete failed", err))
+                .catch((err) => setActionError(toErrorMessage(err)))
             }
           />
         )}
@@ -144,8 +150,11 @@ export default function ThreadPage() {
               onApprove={() => void threadState.approve()}
               onCancel={() => router.push("/thread/new")}
             />
+            {/* key={id}: a typed prompt must not survive a thread switch
+                (same anti-leak as SpecSession above). */}
             <ThreadInput
-              onAsk={(prompt, mode) => void threadState.ask(prompt, mode)}
+              key={id}
+              onAsk={(prompt, mode) => threadState.ask(prompt, mode)}
               disabled={false}
               waiting={threadState.waiting}
               onStop={() => void threadState.stop()}

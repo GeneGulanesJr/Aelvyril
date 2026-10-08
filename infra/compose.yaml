@@ -108,7 +108,7 @@ services:
     # http://localhost:8787 directly. In prod the browser path is Caddy
     # (same-origin /v1/*) — this binding never leaves the host. Never
     # point GATEWAY_BIND_HOST at a public interface: /metrics is
-    # unauthenticated unless GATEWAY_METRICS_SECRET is set.
+    # fail-closed (401) unless GATEWAY_METRICS_SECRET is set.
     ports:
       - "${GATEWAY_BIND_HOST:-127.0.0.1}:8787:8787"
     environment:
@@ -140,17 +140,52 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      # Operator passthrough (the gateway service has no env_file): these
+      # interpolate from the shell / infra/.env. Without them, admin routes
+      # 403 for everyone and /metrics cannot be gated in compose deploys.
+      # Empty string = unset for the gateway (strict env parsing in env.ts
+      # treats "" as absent). Every name is read in apps/gateway/src.
+      GATEWAY_ADMIN_USER_IDS: ${GATEWAY_ADMIN_USER_IDS:-}
+      GATEWAY_METRICS_SECRET: ${GATEWAY_METRICS_SECRET:-}
+      GATEWAY_METRICS_PUBLIC: ${GATEWAY_METRICS_PUBLIC:-}
+      CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES:-}
+      GATEWAY_MAX_THREADS: ${GATEWAY_MAX_THREADS:-}
+      GATEWAY_MAX_RUNNING_HOSTS: ${GATEWAY_MAX_RUNNING_HOSTS:-}
+      GATEWAY_MAX_SESSION_HOSTS: ${GATEWAY_MAX_SESSION_HOSTS:-}
+      GATEWAY_MAX_SSE_STREAMS: ${GATEWAY_MAX_SSE_STREAMS:-}
+      GATEWAY_SSE_REPLAY_PAGE: ${GATEWAY_SSE_REPLAY_PAGE:-}
+      GATEWAY_EVENT_RETENTION: ${GATEWAY_EVENT_RETENTION:-}
+      GATEWAY_MAX_THREAD_COST_USD: ${GATEWAY_MAX_THREAD_COST_USD:-}
+      GATEWAY_QUEUE_INTERVAL_MS: ${GATEWAY_QUEUE_INTERVAL_MS:-}
+      GATEWAY_DIALOG_MODE: ${GATEWAY_DIALOG_MODE:-}
+      GATEWAY_SPEC_HEURISTIC: ${GATEWAY_SPEC_HEURISTIC:-}
+      GATEWAY_VERIFY: ${GATEWAY_VERIFY:-}
+      GATEWAY_RATE_LIMIT_PER_MIN: ${GATEWAY_RATE_LIMIT_PER_MIN:-}
+      GATEWAY_SPEC_MAX_ROUNDS: ${GATEWAY_SPEC_MAX_ROUNDS:-}
+      GATEWAY_TRUST_THRESHOLD: ${GATEWAY_TRUST_THRESHOLD:-}
+      GATEWAY_VERIFY_TIMEOUT_MS: ${GATEWAY_VERIFY_TIMEOUT_MS:-}
+      GATEWAY_VERIFY_RETRIES: ${GATEWAY_VERIFY_RETRIES:-}
+      GATEWAY_VERIFY_COMMANDS: ${GATEWAY_VERIFY_COMMANDS:-}
+      SSE_HEARTBEAT_MS: ${SSE_HEARTBEAT_MS:-}
     volumes:
       - gateway-data:/data
       - pi-sessions:/sessions
-      - ${WORKSPACES_HOST_PATH:-./workspaces}:/workspaces:ro
+      # Writable on purpose: the pi coding agent edits workspace files +
+      # session state, and auto-verify runs test scripts that write
+      # artifacts. GATEWAY_WORKSPACE_ALLOWLIST is the trust boundary, not
+      # the mount mode.
+      - ${WORKSPACES_HOST_PATH:-./workspaces}:/workspaces
     # NOTE: no depends_on sandd — sandd is prod-profile only (needs /dev/kvm,
     # absent on most dev hosts incl. macOS) and compose errors when a
     # depends_on target isn't enabled by the active profile. The gateway
     # treats sandd as optional (its /healthz skips probes for unset *_URL).
     depends_on:
       layamcp:
-        condition: service_healthy
+        # service_started, NOT service_healthy: the decision engine is an
+        # optional backing service — a cold multi-GB model load (or a failed
+        # model pull) must never block the gateway from booting or fail the
+        # whole stack. Chat works without it.
+        condition: service_started
     healthcheck:
       # node:22-slim ships no wget/curl — probe with node itself.
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8787/healthz', r => process.exit(r.statusCode && r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]

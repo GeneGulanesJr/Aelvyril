@@ -13,7 +13,11 @@ function mockFetchSequence(responses: Array<{ ok: boolean; status?: number; body
   const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     calls.push({ url: String(url), init });
     const r = responses[i++] ?? { ok: true, status: 204, body: undefined };
-    return new Response(r.body === undefined ? null : JSON.stringify(r.body), {
+    // A string body is used verbatim (raw non-JSON error bodies); anything
+    // else is JSON-encoded.
+    const payload =
+      r.body === undefined ? null : typeof r.body === "string" ? r.body : JSON.stringify(r.body);
+    return new Response(payload, {
       status: r.status ?? (r.ok ? 200 : 500),
     });
   });
@@ -45,6 +49,26 @@ describe("GatewayClient", () => {
     const { client } = makeClient();
     mockFetchSequence([{ ok: false, status: 404, body: { error: "not_found" } }]);
     await expect(client.renameConversation("conv_x", { title: "x" })).rejects.toThrow(/rename failed: 404/);
+  });
+
+  it("prompt surfaces the gateway's error body (cost-cap shape)", async () => {
+    const { client } = makeClient();
+    mockFetchSequence([
+      { ok: false, status: 402, body: { error: "cost_cap_reached", cost: 5.01, cap: 5 } },
+    ]);
+    await expect(
+      client.prompt("t1", { message: "hi", specMode: "auto" }),
+    ).rejects.toThrow(/prompt failed: 402 cost_cap_reached \(cost 5\.01 > cap 5\)/);
+  });
+
+  it("patchSpec surfaces a plain error code (413 spec_too_large) and falls back to status-only for non-JSON bodies", async () => {
+    const { client } = makeClient();
+    mockFetchSequence([{ ok: false, status: 413, body: { error: "spec_too_large" } }]);
+    await expect(
+      client.patchSpec("t1", { kind: "edit", field: "goal", value: "x" }),
+    ).rejects.toThrow(/patch spec failed: 413 spec_too_large$/);
+    mockFetchSequence([{ ok: false, status: 502, body: "<html>bad gateway</html>" }]);
+    await expect(client.deleteThread("t1")).rejects.toThrow(/^delete failed: 502$/);
   });
 
   it("getUpdateStatus fetches + parses the update payload", async () => {

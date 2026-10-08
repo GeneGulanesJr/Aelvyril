@@ -8,6 +8,7 @@ interface ConvRow {
   workspace: string | null;
   namespace: string;
   state: string;
+  status: string;
   created_at: string;
   usage: string | null;
 }
@@ -133,6 +134,11 @@ export class Store {
   constructor(dbPath: string, opts: StoreOptions = {}) {
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
+    // WAL + NORMAL: appendEvent fires once per streamed text_delta, and the
+    // default synchronous=FULL would fsync each of those. NORMAL skips the
+    // per-commit fsync — still durable across application crashes; only an
+    // OS-level crash may lose the tail of the WAL.
+    this.db.pragma("synchronous = NORMAL");
     this.eventRetentionPerThread = opts.eventRetentionPerThread ?? 10_000;
     runMigrations(this.db);
     this.db.exec(
@@ -176,8 +182,9 @@ export class Store {
         "INSERT INTO conversations(id, title, workspace, namespace, state, created_at) VALUES(?, ?, ?, ?, 'idle', ?)",
       )
       .run(id, input.title ?? null, input.workspace ?? null, input.namespace, createdAt);
-    // namespace is internal routing, not exposed on the public DTO.
-    return { id, title: input.title ?? null, workspace: input.workspace ?? null, state: "idle", createdAt, usage: null };
+    // namespace is internal routing, not exposed on the public DTO. status
+    // mirrors the DB default ('draft').
+    return { id, title: input.title ?? null, workspace: input.workspace ?? null, state: "idle", status: "draft", createdAt, usage: null };
   }
 
   renameConversation(id: string, namespace: string, title: string): void {
@@ -264,14 +271,18 @@ export class Store {
 
   /** Returns true if a conversation row was actually deleted. */
   deleteConversation(id: string, namespace: string): boolean {
-    // Cascade events so a deleted conversation leaves no orphan history. The
-    // seq counter is per-conversation so there's no global state to reset.
     const txn = this.db.transaction(() => {
-      this.db.prepare("DELETE FROM events WHERE conversation_id = ?").run(id);
+      // Guard FIRST: the namespaced delete decides whether this caller owns
+      // the thread; events cascade only when it matched. Cascading before
+      // the guard let a cross-tenant delete wipe the victim's event history
+      // while still returning 404. The seq counter is per-conversation so
+      // there's no global state to reset.
       const info = this.db
         .prepare("DELETE FROM conversations WHERE id = ? AND namespace = ?")
         .run(id, namespace);
-      return info.changes > 0;
+      if (info.changes === 0) return false;
+      this.db.prepare("DELETE FROM events WHERE conversation_id = ?").run(id);
+      return true;
     });
     return txn();
   }
@@ -555,6 +566,10 @@ export class Store {
       title: r.title,
       workspace: r.workspace,
       state: r.state as Conversation["state"],
+      // Written values are ThreadStatus members by construction: the DB
+      // default is 'draft', the routes pass schema-validated values, and
+      // markThreadReviewedById writes 'reviewed'.
+      status: r.status as Conversation["status"],
       createdAt: r.created_at,
       usage: r.usage ? (JSON.parse(r.usage) as Usage) : null,
     };

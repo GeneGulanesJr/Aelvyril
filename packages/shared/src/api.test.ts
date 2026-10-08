@@ -51,16 +51,38 @@ describe("PromptBody", () => {
 });
 
 describe("Conversation", () => {
-  it("parses a DTO", () => {
+  it("parses a DTO with its lifecycle status", () => {
     expect(
       Conversation.parse({
         id: "conv_1",
         title: null,
         workspace: null,
         state: "idle",
+        status: "draft",
         createdAt: "2026-09-22T12:00:00.000Z",
-      }).state,
-    ).toBe("idle");
+      }).status,
+    ).toBe("draft");
+  });
+  it("requires a valid status (the gateway always sends the column)", () => {
+    expect(
+      Conversation.safeParse({
+        id: "conv_1",
+        title: null,
+        workspace: null,
+        state: "idle",
+        createdAt: "2026-09-22T12:00:00.000Z",
+      }).success,
+    ).toBe(false);
+    expect(
+      Conversation.safeParse({
+        id: "conv_1",
+        title: null,
+        workspace: null,
+        state: "idle",
+        status: "bogus",
+        createdAt: "2026-09-22T12:00:00.000Z",
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -112,7 +134,7 @@ describe("ThreadStatus", () => {
 });
 
 describe("Thread", () => {
-  it("extends Conversation with status + spec fields", () => {
+  it("extends Conversation with the spec fields (status is base-level)", () => {
     const t = Thread.parse({
       id: "conv_1",
       title: "t",

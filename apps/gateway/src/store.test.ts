@@ -131,6 +131,17 @@ describe("Store", () => {
     expect(store.getConversation(conv.id, PLATFORM)?.state).toBe("streaming");
   });
 
+  it("exposes the lifecycle status on every conversation DTO", () => {
+    const store = new Store(":memory:");
+    const conv = store.createConversation({ namespace: PLATFORM });
+    // DB default lands on the DTO without any lifecycle write.
+    expect(conv.status).toBe("draft");
+    expect(store.getConversation(conv.id, PLATFORM)?.status).toBe("draft");
+    store.updateThreadStatus(conv.id, PLATFORM, "running");
+    expect(store.getConversation(conv.id, PLATFORM)?.status).toBe("running");
+    expect(store.listConversations(PLATFORM).map((c) => c.status)).toEqual(["running"]);
+  });
+
   it("records and returns cumulative usage (#84)", () => {
     const store = new Store(":memory:");
     const conv = store.createConversation({ namespace: PLATFORM });
@@ -274,5 +285,24 @@ describe("Store", () => {
     expect(store.patchSpecDraft(conv.id, "user:a", "goal", huge)).toBe(true);
     expect(store.patchSpecDraft(conv.id, "user:a", "plan", [huge, huge])).toBe("too_large");
     expect(store.getThreadSpec(conv.id, "user:a")?.specDraft?.plan).toEqual([]);
+  });
+
+  it("deleteConversation cascades events only after the namespaced guard matched", () => {
+    const store = new Store(":memory:");
+    const conv = store.createConversation({ namespace: "user:a" });
+    store.appendEvent({ conversationId: conv.id, ts, kind: "text_delta", payload: { delta: "x" } });
+    store.appendEvent({ conversationId: conv.id, ts, kind: "text_delta", payload: { delta: "y" } });
+
+    // Cross-tenant delete: 404 semantics — the victim's row AND its event
+    // history must both survive. The old delete-events-first ordering wiped
+    // the history before the guard said no.
+    expect(store.deleteConversation(conv.id, "user:b")).toBe(false);
+    expect(store.getConversation(conv.id, "user:a")).not.toBeNull();
+    expect(store.getEventsSince(conv.id, -1)).toHaveLength(2);
+
+    // The owner's delete cascades the events as before.
+    expect(store.deleteConversation(conv.id, "user:a")).toBe(true);
+    expect(store.getConversation(conv.id, "user:a")).toBeNull();
+    expect(store.getEventsSince(conv.id, -1)).toHaveLength(0);
   });
 });

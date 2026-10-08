@@ -65,4 +65,23 @@ describe("ThreadInput", () => {
     await waitFor(() => expect(ask).toHaveBeenCalled());
     expect((screen.getByTestId("thread-input") as HTMLTextAreaElement).value).toBe("keep me");
   });
+
+  it("keeps the text when a promise-returning onAsk resolves false (failed ask)", async () => {
+    const ask = vi.fn(() => Promise.resolve(false));
+    render(<ThreadInput onAsk={ask} disabled={false} />);
+    fireEvent.change(screen.getByTestId("thread-input"), { target: { value: "retry me" } });
+    fireEvent.click(screen.getByTestId("ask-button"));
+    await waitFor(() => expect(ask).toHaveBeenCalled());
+    expect((screen.getByTestId("thread-input") as HTMLTextAreaElement).value).toBe("retry me");
+  });
+
+  it("clears the text when a promise-returning onAsk resolves true (ask success)", async () => {
+    const ask = vi.fn(() => Promise.resolve(true));
+    render(<ThreadInput onAsk={ask} disabled={false} />);
+    fireEvent.change(screen.getByTestId("thread-input"), { target: { value: "send me" } });
+    fireEvent.click(screen.getByTestId("ask-button"));
+    await waitFor(() =>
+      expect((screen.getByTestId("thread-input") as HTMLTextAreaElement).value).toBe(""),
+    );
+  });
 });

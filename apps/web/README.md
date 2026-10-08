@@ -20,22 +20,20 @@ See `apps/web/.env.example` for a copy-paste template. Placeholder values (`pk_t
 
 ## How it talks to the gateway
 
-- `apps/web/lib/api.ts` — typed `GatewayClient` (list/create/prompt/abort/rename/delete + `openStream`).
-- `apps/web/lib/sse.ts` — incremental SSE parser with `Last-Event-ID` reconnect.
-- `apps/web/components/chat.tsx` — the conversation surface (dropdown picker with search/rename/delete, live stream, typing indicator, steer-queued sends, error banner, persistent degraded banner).
-- `apps/web/lib/filter-conversations.ts` — pure case-insensitive substring filter for the search box.
+- `apps/web/lib/api.ts` — typed `GatewayClient`: thread create/list, prompt (with steer), abort, rename, delete, kill-all, spec lifecycle (patch/approve/abandon/retry/merge), and `openStream` for the SSE event channel (reconnect with `Last-Event-ID`, terminal-loss `onLost`). Non-2xx responses surface the gateway's JSON error body (`error`, plus `message`/`cost`/`cap` when present) in the thrown `Error`.
+- `apps/web/lib/sse.ts` — incremental SSE parser feeding `openStream`.
+- `apps/web/app/thread/[id]/page.tsx` — the entire signed-in surface: sidebar, header, spec session, output tabs, prompt input. `app/page.tsx` is just a server redirect to `/thread/new`; the sign-in gate is client-side — the thread page renders a sign-in prompt when `useAppAuth()` reports no user (`NEXT_PUBLIC_AUTH_DISABLED=1` swaps Clerk for a fixed dev identity instead, see `lib/auth.ts`).
+- `apps/web/components/thread/*` — the UI pieces (sidebar, header, input, spec session, output tabs, banners); the sidebar search is an inline case-insensitive substring filter in `sidebar.tsx`.
 
-We use `fetch` + `ReadableStream` for the SSE path, **not** `EventSource` — `EventSource` cannot send an `Authorization` header, which Clerk requires.
-
-The home page (`app/page.tsx`) uses the server-side `auth()` helper from `@clerk/nextjs/server` instead of the removed `<SignedIn>` / `<SignedOut>` components (Clerk v7 / Core 3 migration — see commit `bfe4f79`). The sign-in gate renders server-side, no flash of chat.
+We use `fetch` + `ReadableStream` for the SSE path, **not** `EventSource` — `EventSource` cannot send an `Authorization` header, which the gateway requires.
 
 ## Checks
 
     pnpm --filter @aelvyril/web typecheck
     pnpm --filter @aelvyril/web lint
-    pnpm --filter @aelvyril/web test     # 18 tests (sse parser + filter + api client mocks + 5 chat component tests, 1 skipped)
+    pnpm --filter @aelvyril/web test:unit   # 100 tests (sse parser + api client + use-thread + thread components + thread page)
     pnpm --filter @aelvyril/web build
-    pnpm test:e2e                       # Playwright (root; requires gateway + web running)
+    pnpm test:e2e                           # Playwright (root; expects web on :3000 + gateway on :8787 already running)
 
 ## Next 16 notes
 

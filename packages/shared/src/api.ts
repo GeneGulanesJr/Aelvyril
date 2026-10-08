@@ -132,6 +132,10 @@ export const Conversation = z.object({
   title: z.string().nullable(),
   workspace: z.string().nullable(),
   state: ConversationState,
+  // Lifecycle status from the conversations.status column (DB default
+  // 'draft'). Base-level so the gateway actually returns it on the wire —
+  // the web sidebar status pill reads it off every conversation.
+  status: ThreadStatus,
   createdAt: z.string().datetime({ offset: true }),
   // #84: latest cumulative session usage (cost/token accounting). Null
   // until the first get_session_stats harvest lands.
@@ -141,7 +145,6 @@ export type Conversation = z.infer<typeof Conversation>;
 
 /** Thread = Conversation + spec-centric lifecycle (agent spec-centric UI). */
 export const Thread = Conversation.extend({
-  status: ThreadStatus,
   specDraft: SpecDraft.nullable(),
   specQuestions: z.array(SpecQuestion),
   specAnswers: z.record(z.string(), z.string()),

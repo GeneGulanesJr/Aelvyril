@@ -2,7 +2,10 @@
 import { useState } from "react";
 
 export function ThreadInput({ onAsk, disabled, waiting = false, onStop, submitting = false }: {
-  onAsk: (prompt: string, mode: "auto" | "force" | "off") => void | Promise<void>;
+  /** Promise-returning callers report the send outcome: resolve `false` (ask
+   *  failure) or reject (failed create) both keep the text; resolve
+   *  `true`/`undefined` clears it. Sync (fire-and-forget) callers clear now. */
+  onAsk: (prompt: string, mode: "auto" | "force" | "off") => void | boolean | Promise<void | boolean>;
   disabled: boolean;
   /** A turn is in flight — shows Stop (spec §6: sends queue as steers). */
   waiting?: boolean;
@@ -14,11 +17,15 @@ export function ThreadInput({ onAsk, disabled, waiting = false, onStop, submitti
 
   const send = (mode: "auto" | "force") => {
     const result = onAsk(text, mode);
-    // Promise-returning callers (new-thread create) clear only on success so
-    // a failed create keeps the message; fire-and-forget callers clear now.
     if (result instanceof Promise) {
-      void result.then(() => setText("")).catch(() => {});
-    } else {
+      void result
+        .then((ok) => {
+          // `false` is the existing-thread ask failure contract — keep the
+          // typed message so the user can retry.
+          if (ok !== false) setText("");
+        })
+        .catch(() => {}); // rejected callers keep the text (failed create)
+    } else if (result !== false) {
       setText("");
     }
   };

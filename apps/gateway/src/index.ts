@@ -205,8 +205,13 @@ const app = await buildApp({
 const bindHost = configuredHost ?? (fakeVerifier ? "127.0.0.1" : "::");
 try {
   await app.listen({ port, host: bindHost });
-} catch {
-  await app.listen({ port, host: configuredHost ?? "127.0.0.1" });
+} catch (err) {
+  // Only the DEFAULT bind ("::" dual-stack) has a fallback: an IPv6-less
+  // box retries on IPv4 loopback. An explicitly configured GATEWAY_HOST
+  // must surface its original error — retrying the identical host just
+  // guarantees a second failure that masks the first.
+  if (bindHost !== "::") throw err;
+  await app.listen({ port, host: "127.0.0.1" });
 }
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {

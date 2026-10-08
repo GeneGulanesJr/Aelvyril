@@ -271,8 +271,9 @@ describe("v1 routes", () => {
   });
 
   it("POST /v1/threads/kill-all abandons every live thread for the user (#84)", async () => {
-    // File-backed db so the test can read the status column directly (the
-    // conversation DTO predates Thread.status and doesn't expose it).
+    // File-backed db so the test can read the status column directly as a
+    // second layer (the wire DTO now exposes Thread.status — asserted below
+    // via GET /v1/threads/:id as well).
     const dbFile = join(tmpdir(), `aelvyril-killall-${randomUUID()}.db`);
     // Slow the fake child's deltas so a prompted turn is mid-stream (not
     // yet settled) when the switch is pulled — no timing race.
@@ -326,6 +327,24 @@ describe("v1 routes", () => {
         headers: { authorization: "Bearer good" },
       });
       expect(kill.json()).toEqual({ abandoned: 1 });
+      // status is on the wire now: the DTO exposes Thread.status, in both
+      // the single-thread GET and the list.
+      const one = await a.inject({
+        method: "GET",
+        url: `/v1/threads/${live.id}`,
+        headers: { authorization: "Bearer good" },
+      });
+      expect((one.json() as { status: string }).status).toBe("abandoned");
+      const listed = await a.inject({
+        method: "GET",
+        url: "/v1/threads",
+        headers: { authorization: "Bearer good" },
+      });
+      expect(
+        (listed.json() as { conversations: Array<{ id: string; status: string }> }).conversations.find(
+          (c) => c.id === live.id,
+        )?.status,
+      ).toBe("abandoned");
       const db = new Database(dbFile);
       try {
         expect(
@@ -1719,4 +1738,63 @@ describe("steer-path caps + rpc failure handling (review fixes 3, 4, 6)", () => 
     const m = await app.inject({ method: "GET", url: "/metrics" });
     expect(m.body).toMatch(/aelvyril_prompt_rejections_total\s+2/);
   });
+
+  // SHOULD-FIX: a THROW from supervisor.prompt on the dequeued path (here:
+  // the fail-closed scratch-dir mkdir) used to reach only an empty catch —
+  // but the dequeue had already written status="running", and no settle or
+  // exit would ever follow, so the thread stuck "running" forever with no
+  // degraded state and no error envelope. The catch now runs the same
+  // terminal-guarded writeback as the agent-rejection arm.
+  it("a dequeued prompt whose spawn throws (scratch mkdir) ends degraded/reviewed, not stuck running", async () => {
+    dbPath = join(tmpdir(), `aelvyril-runner-throw-${randomUUID()}.db`);
+    app = await buildApp({
+      dbPath,
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      metricsPublic: true,
+      maxRunningHostsPerUser: 1,
+      queueIntervalMs: 10,
+    });
+    const u1 = authed(app, "good");
+    const holder = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const queued = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const seedState = (id: string, state: string) => {
+      const db = new Database(dbPath!);
+      try {
+        db.prepare("UPDATE conversations SET state = ? WHERE id = ?").run(state, id);
+      } finally {
+        db.close();
+      }
+    };
+    // Occupy the user's single running slot (DB-only, no child spawned) so
+    // the route QUEUES the second prompt…
+    seedState(holder.id, "streaming");
+    const res = await u1.post(`/v1/threads/${queued.id}/prompt`, { message: "queued work" });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ accepted: true, queued: true });
+    // …then rig the scratch mkdir to fail fail-closed: a FILE where the
+    // directory must be (same mechanism as the supervisor fail-closed test).
+    const blocker = join(tmpdir(), "aelvyril-sessions", queued.id);
+    writeFileSync(blocker, "not a directory");
+    try {
+      // Free the slot → the runner dequeues → supervisor.prompt throws.
+      seedState(holder.id, "idle");
+      await vi.waitFor(
+        async () => {
+          const one = await u1.get(`/v1/threads/${queued.id}`);
+          expect(one.json()).toMatchObject({ state: "degraded", status: "reviewed" });
+        },
+        { timeout: 10_000 },
+      );
+      // The error envelope and the rejection metric fired too.
+      const errors = eventPayloads(dbPath!, queued.id, "error") as Array<{ message?: string }>;
+      expect(errors.some((e) => String(e.message ?? "").includes("rejected by the agent"))).toBe(true);
+      const m = await app.inject({ method: "GET", url: "/metrics" });
+      expect(m.body).toMatch(/aelvyril_prompt_rejections_total\s+1/);
+    } finally {
+      rmSync(blocker, { force: true });
+    }
+  }, 20_000);
 });

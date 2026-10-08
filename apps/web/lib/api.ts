@@ -13,6 +13,37 @@ import { SseParser } from "./sse.js";
 
 type GetToken = () => Promise<string | null>;
 
+/**
+ * Non-2xx → Error. The gateway returns actionable JSON bodies
+ * ({error:"agent_rejected"}, {error:"cost_cap_reached",cost,cap},
+ * already_queued, 413 spec_too_large) — surface error/message/cost/cap in
+ * the thrown Error instead of a bare status, falling back to a status-only
+ * message when the body isn't JSON (proxy HTML, empty body, ...).
+ */
+async function apiError(label: string, res: Response): Promise<Error> {
+  let detail = "";
+  try {
+    const body = (await res.json()) as {
+      error?: unknown;
+      message?: unknown;
+      cost?: unknown;
+      cap?: unknown;
+    };
+    if (typeof body?.error === "string") {
+      detail = body.error;
+      const parts: string[] = [];
+      if (typeof body.message === "string") parts.push(body.message);
+      if (typeof body.cost === "number" && typeof body.cap === "number") {
+        parts.push(`cost ${body.cost} > cap ${body.cap}`);
+      }
+      if (parts.length > 0) detail += ` (${parts.join("; ")})`;
+    }
+  } catch {
+    // Body wasn't JSON — keep the status-only message below.
+  }
+  return new Error(detail ? `${label} failed: ${res.status} ${detail}` : `${label} failed: ${res.status}`);
+}
+
 export class GatewayClient {
   constructor(
     private baseUrl: string,
@@ -40,7 +71,7 @@ export class GatewayClient {
       `${this.baseUrl}${ROUTES.conversationPrompt(id)}`,
       await this.authed({ method: "POST", body: JSON.stringify(body) }),
     );
-    if (!res.ok) throw new Error(`prompt failed: ${res.status}`);
+    if (!res.ok) throw await apiError("prompt", res);
   }
 
   async renameConversation(id: string, body: RenameConversationBody): Promise<Conversation> {
@@ -48,7 +79,7 @@ export class GatewayClient {
       `${this.baseUrl}${ROUTES.conversationRename(id)}`,
       await this.authed({ method: "PATCH", body: JSON.stringify(body) }),
     );
-    if (!res.ok) throw new Error(`rename failed: ${res.status}`);
+    if (!res.ok) throw await apiError("rename", res);
     return (await res.json()) as Conversation;
   }
 
@@ -57,66 +88,66 @@ export class GatewayClient {
   /** Create a thread. Server assigns id + draft status. */
   async createThread(body: CreateConversationBody = {}): Promise<Thread> {
     const res = await fetch(`${this.baseUrl}${ROUTES.threads}`, await this.authed({ method: "POST", body: JSON.stringify(body) }));
-    if (!res.ok) throw new Error(`create thread failed: ${res.status}`);
+    if (!res.ok) throw await apiError("create thread", res);
     return (await res.json()) as Thread;
   }
 
   /** List threads. Wire key stays `conversations` (historical); items are threads. */
   async listThreads(): Promise<Thread[]> {
     const res = await fetch(`${this.baseUrl}${ROUTES.threads}`, await this.authed());
-    if (!res.ok) throw new Error(`list threads failed: ${res.status}`);
+    if (!res.ok) throw await apiError("list threads", res);
     return ((await res.json()) as { conversations: Thread[] }).conversations;
   }
 
   /** Submit interview answers or edit a draft field. */
   async patchSpec(threadId: string, body: PatchSpecBody): Promise<void> {
     const res = await fetch(`${this.baseUrl}${ROUTES.threadSpec(threadId)}`, await this.authed({ method: "PATCH", body: JSON.stringify(body) }));
-    if (!res.ok) throw new Error(`patch spec failed: ${res.status}`);
+    if (!res.ok) throw await apiError("patch spec", res);
   }
 
   async approveSpec(threadId: string): Promise<void> {
     const res = await fetch(`${this.baseUrl}${ROUTES.threadApprove(threadId)}`, await this.authed({ method: "POST" }));
-    if (!res.ok) throw new Error(`approve failed: ${res.status}`);
+    if (!res.ok) throw await apiError("approve", res);
   }
 
   async abandonThread(threadId: string): Promise<void> {
     const res = await fetch(`${this.baseUrl}${ROUTES.threadAbandon(threadId)}`, await this.authed({ method: "POST" }));
-    if (!res.ok) throw new Error(`abandon failed: ${res.status}`);
+    if (!res.ok) throw await apiError("abandon", res);
   }
 
   /** #84: global kill switch — abandon every live thread for the user. */
   async killAllThreads(): Promise<{ abandoned: number }> {
     const res = await fetch(`${this.baseUrl}${ROUTES.threadKillAll}`, await this.authed({ method: "POST" }));
-    if (!res.ok) throw new Error(`kill-all failed: ${res.status}`);
+    if (!res.ok) throw await apiError("kill-all", res);
     return (await res.json()) as { abandoned: number };
   }
 
   async retryThread(threadId: string): Promise<void> {
     const res = await fetch(`${this.baseUrl}${ROUTES.threadRetry(threadId)}`, await this.authed({ method: "POST" }));
-    if (!res.ok) throw new Error(`retry failed: ${res.status}`);
+    if (!res.ok) throw await apiError("retry", res);
   }
 
   /** #80: accept the reviewed diff — reviewed → merged (terminal). */
   async mergeThread(threadId: string): Promise<void> {
     const res = await fetch(`${this.baseUrl}${ROUTES.threadMerge(threadId)}`, await this.authed({ method: "POST" }));
-    if (!res.ok) throw new Error(`merge failed: ${res.status}`);
+    if (!res.ok) throw await apiError("merge", res);
   }
 
   /** Cancel the in-flight turn (steer queue keeps the thread usable). */
   async abortThread(threadId: string): Promise<void> {
     const res = await fetch(`${this.baseUrl}${ROUTES.threadAbort(threadId)}`, await this.authed({ method: "POST" }));
-    if (!res.ok) throw new Error(`abort failed: ${res.status}`);
+    if (!res.ok) throw await apiError("abort", res);
   }
 
   /** Delete the thread and its event history (cascades gateway-side). */
   async deleteThread(threadId: string): Promise<void> {
     const res = await fetch(`${this.baseUrl}${ROUTES.thread(threadId)}`, await this.authed({ method: "DELETE" }));
-    if (!res.ok) throw new Error(`delete failed: ${res.status}`);
+    if (!res.ok) throw await apiError("delete", res);
   }
 
   async getUpdateStatus(): Promise<UpdateStatus> {
     const res = await fetch(`${this.baseUrl}${ROUTES.adminUpdateStatus}`, await this.authed());
-    if (!res.ok) throw new Error(`update status failed: ${res.status}`);
+    if (!res.ok) throw await apiError("update status", res);
     return (await res.json()) as UpdateStatus;
   }
 
@@ -125,7 +156,7 @@ export class GatewayClient {
       `${this.baseUrl}${ROUTES.adminUpdate}`,
       await this.authed({ method: "POST" }),
     );
-    if (!res.ok) throw new Error(`update apply failed: ${res.status}`);
+    if (!res.ok) throw await apiError("update apply", res);
     return (await res.json()) as { started: boolean; message: string };
   }
 

@@ -59,4 +59,14 @@ describe("applyUpdate", () => {
     writeFileSync(join(tmpDir, "uncommitted.txt"), "dirty");
     await expect(applyUpdate()).rejects.toThrow(/working tree is dirty/);
   });
+
+  // Review: a failed spawn (no bash on this host) used to emit an unobserved
+  // child 'error' — a fatal uncaught exception that took the gateway down
+  // instead of the admin route's update_failed reply.
+  it("reports a failed spawn as a structured update failure, not a crash", async () => {
+    const { applyUpdate } = await import("./updater.js");
+    await expect(
+      applyUpdate({ shell: "definitely-not-a-real-shell-xyz" }),
+    ).rejects.toThrow(/failed to start/);
+  });
 });

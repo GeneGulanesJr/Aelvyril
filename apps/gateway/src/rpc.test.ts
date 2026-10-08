@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { JsonlDecoder, RpcClient, type RpcEvent } from "./rpc.js";
+import { JsonlDecoder, JsonlOverflowError, RpcClient, type RpcEvent } from "./rpc.js";
 
 describe("JsonlDecoder", () => {
   it("decodes complete lines across chunk boundaries", () => {
@@ -30,6 +30,28 @@ describe("JsonlDecoder", () => {
     const b = d.push(bytes.subarray(split));
     expect(a).toEqual([]);
     expect(b).toEqual([{ e: "?" }]);
+  });
+
+  it("treats a line over the injected cap as a fatal protocol error", () => {
+    const d = new JsonlDecoder(8);
+    // Complete lines are unaffected by the cap.
+    expect(d.push('{"a":1}\n')).toEqual([{ a: 1 }]);
+    expect(() => d.push("0123456789")).toThrow(JsonlOverflowError);
+    // Poisoned after the overflow: never accumulates again.
+    expect(d.push("more of the same")).toEqual([]);
+  });
+
+  // NIT follow-up: the cap is BYTE-accurate (UTF-8 wire bytes). A code-unit
+  // check under-counts multibyte chars (an emoji is 2 UTF-16 units but 4
+  // bytes) and let a hostile line occupy ~2x the configured cap.
+  it("the cap counts UTF-8 bytes, not UTF-16 code units", () => {
+    // 3 emoji = 6 UTF-16 units (would slip past a unit check of 8) but
+    // 12 UTF-8 bytes — over the cap.
+    const d = new JsonlDecoder(8);
+    expect(() => d.push("😀😀😀")).toThrow(JsonlOverflowError);
+    // Multibyte lines under the byte cap decode normally.
+    const fine = new JsonlDecoder(16);
+    expect(fine.push('{"s":"😀"}\n')).toEqual([{ s: "😀" }]);
   });
 });
 
@@ -60,5 +82,39 @@ describe("RpcClient over fake child", () => {
     const rpc = new RpcClient(child);
     await new Promise((resolve) => child.once("exit", resolve));
     await expect(rpc.send({ type: "prompt", message: "hi" }, 500)).rejects.toThrow();
+  });
+
+  // Review: a failed spawn (PI_COMMAND binary missing) emits 'error' with
+  // NO 'exit' following. Unobserved, that is an uncaught exception — the
+  // whole gateway died with it. Now it funnels through the exit path:
+  // pending sends reject with a clear error and one terminal "exit" (null
+  // code) fires.
+  it("a spawn failure rejects pending sends and exits once instead of crashing", async () => {
+    const child = spawn("definitely-not-a-real-gateway-binary-xyz", ["--version"]);
+    const rpc = new RpcClient(child);
+    const exits: unknown[] = [];
+    rpc.on("exit", (code) => exits.push(code));
+    await expect(rpc.send({ type: "prompt", message: "hi" }, 1_000)).rejects.toThrow(
+      /failed to start/,
+    );
+    await vi.waitFor(() => expect(exits).toHaveLength(1));
+    expect(exits[0]).toBeNull();
+  });
+
+  // Review: JsonlDecoder buffers per line without limit — a child writing
+  // one huge unterminated line used to grow the buffer until OOM. With a
+  // cap injected, the overflow rejects the pending send and kills the child.
+  it("an unterminated line past the cap rejects pending sends and kills the child", async () => {
+    const child = spawn(process.execPath, [
+      "-e",
+      "process.stdout.write('x'.repeat(4096)); setInterval(() => {}, 1000);",
+    ]);
+    const rpc = new RpcClient(child, { maxLineBytes: 64 });
+    const exited = new Promise<unknown>((resolve) => rpc.once("exit", resolve));
+    await expect(rpc.send({ type: "prompt", message: "hi" }, 1_000)).rejects.toThrow(
+      /byte cap/,
+    );
+    // The child is torn down, not left idling on its interval.
+    await expect(exited).resolves.toBeDefined();
   });
 });

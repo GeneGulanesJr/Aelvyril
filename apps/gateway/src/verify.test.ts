@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { formatFailure, resolveVerifyCommands, runVerification } from "./verify.js";
+import { join, basename } from "node:path";
+import { formatFailure, resolveExecArgv, resolveVerifyCommands, runVerification } from "./verify.js";
 
 function tmpWorkspace(withPkg?: Record<string, unknown>): string {
   const dir = mkdtempSync(join(tmpdir(), "aelvyril-verify-"));
@@ -114,9 +114,8 @@ describe("runVerification (#82)", () => {
     try {
       const commands = await resolveVerifyCommands(dir);
       expect(commands).toEqual(["npm run test"]);
-      // The run path is covered by the default-exec test below with a
-      // direct executable — npm is a .cmd shim on Windows and execFile
-      // cannot spawn it without a shell.
+      // The default exec resolves npm through cmd /c on win32 (npm is a
+      // .cmd shim there) — covered by the win32-only exec test below.
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -134,6 +133,85 @@ describe("runVerification (#82)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+describe("resolveExecArgv (win32 .cmd shims)", () => {
+  // Injected predicate keeps the decision testable cross-platform: only
+  // "pnpm" and explicit .cmd paths count as shims here.
+  const isShim = (file: string) => file === "pnpm" || file.toLowerCase().endsWith(".cmd");
+
+  it("passes POSIX commands straight through", () => {
+    expect(resolveExecArgv(["pnpm", "run", "test"], "linux", isShim)).toEqual({
+      file: "pnpm",
+      args: ["run", "test"],
+    });
+  });
+
+  it("routes batch shims through cmd /d /s /c on win32", () => {
+    const { file, args } = resolveExecArgv(
+      ["C:\\tools\\pnpm.cmd", "run", "test"],
+      "win32",
+      isShim,
+    );
+    // ComSpec may be an absolute path; only the basename matters.
+    expect(basename(file).toLowerCase()).toBe("cmd.exe");
+    expect(args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+    // The full line rides as one argument (child_process's own shell
+    // quoting shape), so cmd strips exactly the outer quotes.
+    expect(args[3]).toBe("C:\\tools\\pnpm.cmd run test");
+  });
+
+  it("win32 leaves real executables alone", () => {
+    const { file, args } = resolveExecArgv(
+      [process.execPath, "-e", "process.exit(0)"],
+      "win32",
+      isShim,
+    );
+    expect(file).toBe(process.execPath);
+    expect(args).toEqual(["-e", "process.exit(0)"]);
+  });
+});
+
+describe("defaultVerifyExec child environment", () => {
+  it("hands the child the allowlisted env — operator secrets never reach verify scripts", async () => {
+    const dir = tmpWorkspace();
+    const prev = process.env.CLERK_SECRET_KEY;
+    process.env.CLERK_SECRET_KEY = "sk_test_must_not_leak";
+    try {
+      const run = await runVerification({
+        cwd: dir,
+        commands: [
+          `"${process.execPath}" -e "const leaks = Object.keys(process.env).filter((k) => /^(CLERK_|GATEWAY_)/.test(k)); console.log(JSON.stringify({ leaks, hasPath: Boolean(process.env.PATH) }));"`,
+        ],
+      });
+      expect(run.ok).toBe(true);
+      // PATH passes (the runner must be resolvable); CLERK_* never does.
+      expect(JSON.parse(run.results[0]!.output)).toEqual({ leaks: [], hasPath: true });
+    } finally {
+      if (prev === undefined) delete process.env.CLERK_SECRET_KEY;
+      else process.env.CLERK_SECRET_KEY = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  const win32Only = process.platform === "win32" ? it : it.skip;
+  win32Only(
+    "win32: a .cmd batch file runs via cmd /c, so package-manager shims verify",
+    async () => {
+      const dir = tmpWorkspace();
+      writeFileSync(join(dir, "echo-ok.cmd"), "@echo ok-from-cmd\r\n");
+      try {
+        const run = await runVerification({
+          cwd: dir,
+          commands: [`"${join(dir, "echo-ok.cmd")}"`],
+        });
+        expect(run.ok).toBe(true);
+        expect(run.results[0]!.output).toContain("ok-from-cmd");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 function mkdirSyncSafe(): string {

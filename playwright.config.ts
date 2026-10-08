@@ -6,8 +6,8 @@ import { defineConfig, devices } from "@playwright/test";
  *
  * Boots the gateway + web in a single shell before tests start. Both
  * processes use real Clerk dev keys (from apps/web/.env.local + apps/gateway/.env).
- * Tests run against http://localhost:3001 (web) + http://localhost:8787
- * (gateway), which is what the dev scripts already expose.
+ * Tests run against http://localhost:3000 (web dev/start port, per
+ * apps/web/package.json) + http://localhost:8787 (gateway).
  *
  * To run: pnpm --filter @aelvyril/web exec playwright test
  * Browsers live in ~/.cache/ms-playwright/ (installed via `playwright install`).
@@ -22,7 +22,7 @@ export default defineConfig({
   workers: process.env.CI ? 2 : undefined,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3001",
+    baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
     trace: "on-first-retry",
     screenshot: "only-on-failure",
   },

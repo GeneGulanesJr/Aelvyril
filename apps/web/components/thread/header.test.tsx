@@ -18,13 +18,13 @@ const thread: Thread = {
 describe("ThreadHeader", () => {
   beforeEach(() => cleanup());
 
-  it("renders title + status pill", () => {
+  it("renders title + status lamp", () => {
     render(<ThreadHeader thread={thread} onRename={() => {}} onAbandon={() => {}} />);
     expect(screen.getByTestId("thread-title").textContent).toBe("add RBAC");
     expect(screen.getByTestId("thread-status").textContent).toBe("spec'ing");
   });
 
-  it("renders the usage pill when usage exists, nothing when null (#84)", () => {
+  it("renders the usage readout when usage exists, nothing when null (#84)", () => {
     const usage = { tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 }, cost: 0.0042 };
     const { unmount } = render(
       <ThreadHeader thread={thread} usage={usage} onRename={() => {}} onAbandon={() => {}} />,
@@ -51,6 +51,13 @@ describe("ThreadHeader", () => {
     expect(screen.getByTestId("thread-title").textContent).toBe("untitled");
   });
 
+  it("shows the workspace as a mono chip when present", () => {
+    render(
+      <ThreadHeader thread={{ ...thread, workspace: "aelvyril" }} onRename={() => {}} onAbandon={() => {}} />,
+    );
+    expect(screen.getByText("aelvyril")).toBeDefined();
+  });
+
   it("renames via inline input on submit", () => {
     const onRename = vi.fn();
     render(<ThreadHeader thread={thread} onRename={onRename} onAbandon={() => {}} />);
@@ -61,11 +68,23 @@ describe("ThreadHeader", () => {
     expect(onRename).toHaveBeenCalledWith("better title");
   });
 
-  it("abandon calls back", () => {
+  it("abandon requires a second confirming click, like delete", () => {
     const onAbandon = vi.fn();
     render(<ThreadHeader thread={thread} onRename={() => {}} onAbandon={onAbandon} />);
     fireEvent.click(screen.getByTestId("abandon-button"));
+    expect(onAbandon).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("abandon-confirm"));
     expect(onAbandon).toHaveBeenCalled();
+  });
+
+  it("armed abandon can be cancelled", () => {
+    const onAbandon = vi.fn();
+    render(<ThreadHeader thread={thread} onRename={() => {}} onAbandon={onAbandon} />);
+    fireEvent.click(screen.getByTestId("abandon-button"));
+    fireEvent.click(screen.getByTestId("abandon-cancel"));
+    fireEvent.click(screen.getByTestId("abandon-button"));
+    fireEvent.click(screen.getByTestId("abandon-confirm"));
+    expect(onAbandon).toHaveBeenCalledTimes(1);
   });
 
   it("delete requires a second confirming click (no window.confirm)", () => {

@@ -1,6 +1,10 @@
 # @aelvyril/web
 
-Next.js (App Router) chat surface. Signed-in users create conversations, send prompts, and watch the agent stream over SSE. The gateway is the only identity authority; this app exchanges the Clerk session for a JWT and calls `/v1/*`.
+Next.js (App Router) surface for the Aelvyril agent workspace — the **dispatch desk**. Signed-in users open threads on a describer board, ask the agent for work (casually or through a forced spec interview), watch the run's route line advance, and review + merge the resulting diff. The gateway is the only identity authority; this app exchanges the Clerk session for a JWT and calls `/v1/*`.
+
+## The UI in one paragraph
+
+The design language is a railway dispatch panel: dark steel ground (`app/globals.css` `@theme` tokens — `bg-desk/panel/panel-raised`, hairline `border-seam`, Fira Sans voice, JetBrains Mono for every measurement), signal-aspect lamps for thread state (amber spec'ing, green running/cleared, red abandoned, dim draft; `lib/design.ts` `STATUS_META` is the single aspect map), and a Schiphol-yellow reserved **exclusively** for "Needs you" interrupts (blocked: question/dialog/capped/gated — the yellow band carries one message and exactly one action). Every thread renders a route line (SPEC → RUN → VERIFY → REVIEW → MERGE) lit from `routePosition()`; the Trace tab is a desk log (clocked narration, tool rows with durations and ok/error aspects, subagent/sandbox/verdict rows) built from the structured `timeline` in `use-thread`; the board sidebar groups threads into Needs you / In flight / Desk / Closed. Keyboard: Enter sends, Shift+Enter newlines, Cmd/Ctrl+Enter sends, ←/→ move the output tabs. Below `md` the board becomes a drawer behind the hamburger bar. `DESIGN.md` records the full system.
 
 ## Run (dev)
 
@@ -23,7 +27,8 @@ See `apps/web/.env.example` for a copy-paste template. Placeholder values (`pk_t
 - `apps/web/lib/api.ts` — typed `GatewayClient`: thread create/list, prompt (with steer), abort, rename, delete, kill-all, spec lifecycle (patch/approve/abandon/retry/merge), and `openStream` for the SSE event channel (reconnect with `Last-Event-ID`, terminal-loss `onLost`). Non-2xx responses surface the gateway's JSON error body (`error`, plus `message`/`cost`/`cap` when present) in the thrown `Error`.
 - `apps/web/lib/sse.ts` — incremental SSE parser feeding `openStream`.
 - `apps/web/app/thread/[id]/page.tsx` — the entire signed-in surface: sidebar, header, spec session, output tabs, prompt input. `app/page.tsx` is just a server redirect to `/thread/new`; the sign-in gate is client-side — the thread page renders a sign-in prompt when `useAppAuth()` reports no user (`NEXT_PUBLIC_AUTH_DISABLED=1` swaps Clerk for a fixed dev identity instead, see `lib/auth.ts`).
-- `apps/web/components/thread/*` — the UI pieces (sidebar, header, input, spec session, output tabs, banners); the sidebar search is an inline case-insensitive substring filter in `sidebar.tsx`.
+- `apps/web/components/thread/*` — the desk pieces: `sidebar` (describer board with grouping, search, kill-all), `header` (title, aspect lamp, usage, actions), `route-line` (lifecycle stations), `banner` (single status band: blocked > error > degraded), `output-tabs` + `tabs` + `trace-timeline` (Plan card / desk log / diff with true new-file line numbers), `spec-session` (the interview), `input` (auto-growing composer); `components/toasts` hosts quiet confirmations. The sidebar search is an inline case-insensitive substring filter in `sidebar.tsx`.
+- `apps/web/lib/design.ts` — the shared vocabulary: `STATUS_META` aspect map, `routePosition`, and the format helpers (cost, tokens, relative time, durations).
 
 We use `fetch` + `ReadableStream` for the SSE path, **not** `EventSource` — `EventSource` cannot send an `Authorization` header, which the gateway requires.
 
@@ -31,7 +36,7 @@ We use `fetch` + `ReadableStream` for the SSE path, **not** `EventSource` — `E
 
     pnpm --filter @aelvyril/web typecheck
     pnpm --filter @aelvyril/web lint
-    pnpm --filter @aelvyril/web test:unit   # 100 tests (sse parser + api client + use-thread + thread components + thread page)
+    pnpm --filter @aelvyril/web test:unit   # 140 tests (sse parser + api client + use-thread + thread components + thread page)
     pnpm --filter @aelvyril/web build
     pnpm test:e2e                           # Playwright (root; expects web on :3000 + gateway on :8787 already running)
 

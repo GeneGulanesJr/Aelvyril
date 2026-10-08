@@ -1,1 +1,152 @@
 @import "tailwindcss";
+
+/*
+ * Aelvyril design tokens — the dispatch desk.
+ *
+ * One dark steel ground, signal-aspect state colors, and a single reserved
+ * yellow that means "Needs you" and nothing else. Components consume these
+ * via Tailwind utilities (bg-panel, text-ink-muted, border-seam, bg-needsyou…)
+ * — never inline hex.
+ */
+@theme {
+  /* ground */
+  --color-desk: #0e1217;
+  --color-panel: #12171f;
+  --color-panel-raised: #171e28;
+  --color-panel-active: #1d2634;
+  --color-seam: #232c3a;
+  --color-seam-strong: #334052;
+
+  /* ink */
+  --color-ink: #e9eef5;
+  --color-ink-muted: #9aa7b8;
+  --color-ink-faint: #76839a;
+
+  /* signal aspects */
+  --color-go: #3fb950;
+  --color-caution: #e3b341;
+  --color-danger: #f85149;
+  --color-route: #4d8bef;
+  --color-lamp-off: #4a5468;
+
+  /* the reserved yellow — "Needs you" only */
+  --color-needsyou: #ffce00;
+  --color-needsyou-ink: #171207;
+
+  /* dark ink for text sitting on aspect lamps (approve buttons) */
+  --color-go-ink: #0b1a0d;
+
+  /* interaction */
+  --color-focus: #7db1ff;
+
+  --font-sans: var(--font-fira), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, "Cascadia Mono", monospace;
+
+  --ease-desk: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --shadow-drawer: 0 8px 24px rgb(0 0 0 / 0.5);
+  --shadow-pop: 0 6px 16px rgb(0 0 0 / 0.45);
+}
+
+/* Browser surfaces carry the world too. */
+::selection {
+  background: var(--color-caution);
+  color: var(--color-needsyou-ink);
+}
+
+* {
+  caret-color: var(--color-route);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 1px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-seam-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-seam-strong);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+input,
+textarea,
+select {
+  accent-color: var(--color-route);
+}
+
+a {
+  text-underline-offset: 3px;
+}
+
+/* Disclosure rows (tool args, verdicts, diff files) draw their own affordances. */
+summary {
+  list-style: none;
+}
+summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Running lamps breathe; the route line advances. One authored pulse. */
+@keyframes lamp-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes band-ignite {
+  from {
+    opacity: 0.4;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes stream-caret {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+.animate-lamp-pulse {
+  animation: lamp-pulse 2.4s ease-in-out infinite;
+}
+
+.animate-band-ignite {
+  animation: band-ignite 220ms var(--ease-desk) both;
+}
+
+.animate-stream-caret {
+  animation: stream-caret 1s steps(2, start) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-lamp-pulse,
+  .animate-band-ignite,
+  .animate-stream-caret {
+    animation: none;
+  }
+}

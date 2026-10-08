@@ -20,12 +20,12 @@ import { computeWorkspaceDiff, type FilePatch } from "./workspace-git.js";
 function defaultScratchCwd(conversationId: string): string {
   const safeId = conversationId.replace(/[^A-Za-z0-9_-]/g, "_") || "anonymous";
   const dir = join(tmpdir(), "aelvyril-sessions", safeId);
-  try {
-    mkdirSync(dir, { recursive: true });
-  } catch {
-    // Unwritable temp dir: spawn with an undefined cwd (node falls back to
-    // process.cwd()) rather than failing the prompt — spec §10 fail-soft.
-  }
+  // Review P2, fail-closed: an unwritable temp dir must NOT silently fall
+  // back to process.cwd() — that spawns (and writes!) inside the gateway's
+  // own repo tree. Let the mkdir failure propagate: the prompt fails (the
+  // routes turn it into 502 + degraded) instead of running in the wrong
+  // place.
+  mkdirSync(dir, { recursive: true });
   return dir;
 }
 
@@ -70,6 +70,10 @@ export interface SupervisorOptions {
    *  escalates to "established" (external actions auto-run). Default 5;
    *  0 disables escalation. */
   trustThreshold?: number;
+  /** Review: structured logger (pino-compatible subset). Contract reply
+   *  failures are reported here at warn level so a dead stdin / rpc
+   *  timeout on a fire-and-forget reply is observable. Optional. */
+  logger?: { warn(obj: object, msg?: string, ...args: unknown[]): void };
   /** #82: auto-verify loop config. Null disables verification entirely. */
   verify?: VerifyOptions | null;
   /** #80: diff producer override for tests. Default runs real git. */
@@ -97,6 +101,14 @@ interface Handle {
    *  from a handle with this set are dropped; a respawned host is a
    *  different handle and is never silenced. */
   zombie?: Promise<void>;
+  /** Review SHOULD-FIX: set by escalateGate when the gate's abort is
+   *  issued, consumed by the first settle the handle sees afterwards. The
+   *  abort ends the gated turn with an agent_settled; when a newer user
+   *  turn un-parks the thread (beginUserTurn clears gateStopped) BEFORE
+   *  that settle arrives, this marker identifies it as the OLD turn's
+   *  leftover so it is dropped instead of writing idle/harvest/pipeline
+   *  over the live turn. */
+  pendingAbortSettle: boolean;
 }
 
 /**
@@ -162,7 +174,12 @@ export class Supervisor {
             // store closed; the rpc send below still rejects safely
           }
           h.lastActivity = Date.now();
-          void h.rpc.send({ type: "prompt", message }).catch(() => {});
+          // Review: reply failures (dead stdin, rpc timeout, busy-reject)
+          // are no longer swallowed silently — the contract reports them to
+          // the supervisor's logger at warn level when one is wired.
+          void h.rpc.send({ type: "prompt", message }).catch((err) => {
+            h.contract.reportReplyFailure(err);
+          });
         },
         publish: (e: ContractEnvelope) => {
           try {
@@ -180,7 +197,21 @@ export class Supervisor {
         },
         autonomy: () => this.autonomyFor(conversationId),
       },
-      { specMode: "auto", maxSpecRounds: this.opts.specMaxRounds },
+      {
+        specMode: "auto",
+        maxSpecRounds: this.opts.specMaxRounds,
+        // Review: make fire-and-forget reply failures observable (warn).
+        onReplyFailure: (err) => {
+          try {
+            this.opts.logger?.warn(
+              { err: err instanceof Error ? err : String(err) },
+              "agent contract reply failed to reach the session host",
+            );
+          } catch {
+            // a broken logger must not break the reply path
+          }
+        },
+      },
     );
     const handle: Handle = {
       conversationId,
@@ -191,6 +222,7 @@ export class Supervisor {
       contract,
       verifyAttempts: 0,
       turnGeneration: 0,
+      pendingAbortSettle: false,
     };
     // Event routing is bound to THIS handle: a zombie's in-flight events
     // carry the zombie handle, a live host's carry the live one (review P1).
@@ -242,8 +274,13 @@ export class Supervisor {
     specMode: SpecMode = "auto",
   ): Promise<boolean> {
     const handle = await this.prepareTurn(conversationId, extraEnv, cwd);
-    // New user turn: the verify retry budget resets (#82).
+    // New user turn: the verify retry budget resets (#82), and the
+    // contract's per-turn state resets with it — gateStopped (a plain
+    // re-prompt after a gate stop must settle normally instead of sticking
+    // "streaming"), awaitingInterview, and specRounds (the question budget
+    // is per-interview, not lifetime-of-handle).
     handle.verifyAttempts = 0;
+    handle.contract.beginUserTurn();
     this.opts.store.setLastPromptById(conversationId, message);
     handle.contract.setTurnSpecMode(specMode);
     const command: Record<string, unknown> = {
@@ -296,7 +333,7 @@ export class Supervisor {
    */
   async approveExecution(conversationId: string): Promise<boolean> {
     const spec = this.opts.store.getThreadSpecById(conversationId);
-    const handle = await this.prepareTurn(conversationId, {}, undefined);
+    const handle = await this.prepareTurn(conversationId, this.namespaceEnv(conversationId), undefined);
     handle.contract.restoreDraft(spec?.specDraft ?? null);
     handle.contract.allowPendingGated();
     handle.contract.approveExecution();
@@ -307,7 +344,7 @@ export class Supervisor {
    *  prompt when the turn never had one). */
   async retryExecution(conversationId: string): Promise<boolean> {
     const spec = this.opts.store.getThreadSpecById(conversationId);
-    const handle = await this.prepareTurn(conversationId, {}, undefined);
+    const handle = await this.prepareTurn(conversationId, this.namespaceEnv(conversationId), undefined);
     handle.contract.restoreDraft(spec?.specDraft ?? null);
     if (spec?.specDraft) {
       handle.contract.retryExecution();
@@ -318,6 +355,18 @@ export class Supervisor {
     handle.contract.beginExecution();
     await handle.rpc.send({ type: "prompt", message: last });
     return true;
+  }
+
+  /**
+   * Review (ADR-0004): approve/retry can spawn a NEW session host (no live
+   * host after a gateway restart or host death), and the child env decides
+   * the memory namespace at module load. Resolving the conversation's
+   * namespace here (the same resolution autonomyFor uses) keeps memory
+   * writes out of the default namespace on the respawn path too.
+   */
+  private namespaceEnv(conversationId: string): Record<string, string> {
+    const ns = this.opts.store.getNamespaceById(conversationId);
+    return ns ? { LAPIS_PROJECT_KEY: ns } : {};
   }
 
   /** #80 fix 6: spec drafts/answers reach the live agent. */
@@ -503,11 +552,27 @@ export class Supervisor {
       return;
     }
     if (ev.type === "agent_settled") {
-      // #81: a gate stop owns the conversation state — the abort it issued
-      // ends the turn with a settle, and letting that settle write "idle"
-      // would erase the blocked escalation (the same race CI caught for
-      // #84 dialogs). The thread stays blocked until POST /approve.
-      if (handle?.contract.gateStopped) return;
+      // #81 + review: a gate stop owns the conversation state — the abort it
+      // issued ends the turn with a settle, and letting that settle write
+      // "idle" would erase the blocked escalation (the same race CI caught
+      // for #84 dialogs). The thread stays blocked until POST /approve.
+      // Review SHOULD-FIX: the abort is async, so its settle can arrive
+      // AFTER a newer user turn un-parked the thread (beginUserTurn clears
+      // gateStopped). pendingAbortSettle identifies that leftover: it is
+      // consumed and dropped — no idle write over the live turn's
+      // "streaming", no usage harvest, no post-turn pipeline over the
+      // aborted half-turn. The new turn's own settle finds the marker clear
+      // and proceeds normally. Scoping note: the marker freezes the turn
+      // the gate belonged to; a respawned host is a fresh handle and never
+      // inherits it.
+      if (handle?.contract.gateStopped) {
+        handle.pendingAbortSettle = false;
+        return;
+      }
+      if (handle?.pendingAbortSettle) {
+        handle.pendingAbortSettle = false;
+        return;
+      }
       this.opts.store.setConversationState(conversationId, "idle");
       this.publish(conversationId, { kind: "session_state", payload: { state: "idle" } });
       if (handle) void this.harvestUsage(conversationId, handle);
@@ -536,6 +601,9 @@ export class Supervisor {
    */
   private escalateGate(conversationId: string, handle: Handle | undefined, reason: string): void {
     if (handle) {
+      // One abort marker per gated turn: repeat gated actions in the same
+      // turn re-use it (the turn still ends with a single settle).
+      if (!handle.contract.gateStopped) handle.pendingAbortSettle = true;
       handle.contract.gateStopped = true;
       handle.contract.notePendingGated(reason);
     }

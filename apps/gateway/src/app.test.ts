@@ -1,5 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { buildApp, computeChildEnv } from "./app.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AddressInfo } from "node:net";
+import { fileURLToPath } from "node:url";
+import { buildApp, computeChildEnv, type App } from "./app.js";
+import { createMetrics } from "./metrics.js";
+import type { TokenVerifier } from "./auth.js";
+
+const fakePi = fileURLToPath(new URL("../fixtures/fake-pi.mjs", import.meta.url));
+
+const testVerifier: TokenVerifier = async (token) => (token === "good" ? { userId: "user_test1" } : null);
 
 describe("health", () => {
   it("responds ok with empty backing when no probes configured", async () => {
@@ -53,6 +61,7 @@ describe("computeChildEnv allowlist", () => {
     ["GEMINI_API_KEY", "gm_live"],
     ["ANTHROPIC_BASE_URL", "https://proxy.internal"],
     ["OPENAI_BASE_URL", "https://proxy.internal/openai"],
+    ["LAPIS_HOME", "/data/lapis"],
     ["LAPIS_UNRELATED", "nope"],
   ];
 
@@ -77,6 +86,10 @@ describe("computeChildEnv allowlist", () => {
     expect(env.ANTHROPIC_BASE_URL).toBe("https://proxy.internal");
     expect(env.OPENAI_BASE_URL).toBe("https://proxy.internal/openai");
     expect(env.LAPIS_PROJECT_KEY).toBe("user:u1");
+    // ADR-0004: the LaPis extension resolves its data root from LAPIS_HOME
+    // inside the child — the compose stack sets it on the gateway process,
+    // and the allowlist must pass it through.
+    expect(env.LAPIS_HOME).toBe("/data/lapis");
     // Operator secrets never reach children.
     expect(env.CLERK_SECRET_KEY).toBeUndefined();
     expect(env.GATEWAY_METRICS_SECRET).toBeUndefined();
@@ -153,4 +166,98 @@ describe("/metrics access control", () => {
     expect(good.statusCode).toBe(200);
     await app.close();
   });
+});
+
+// Review: the http metrics route label used to fall back to req.url — the
+// raw path+query — for every unmatched route, so any caller could mint
+// attacker-controlled label series (unbounded cardinality in memory).
+describe("metrics label cardinality", () => {
+  it("unmatched routes share one bounded label, never the raw URL", async () => {
+    const app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: "node",
+      childArgs: [],
+      verifyToken: async () => null,
+      metricsPublic: true,
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: `/definitely-not-a-route-${"x".repeat(64)}/dept?cardinality=boom&pad=${"y".repeat(256)}`,
+    });
+    expect(res.statusCode).toBe(404);
+    const second = await app.inject({ method: "GET", url: "/also-missing?q=1" });
+    expect(second.statusCode).toBe(404);
+    const m = await app.inject({ method: "GET", url: "/metrics" });
+    expect(m.statusCode).toBe(200);
+    // No raw URL (path segment or query key/value) ever becomes a label,
+    // and both 404s collapsed into the single "unmatched" series.
+    expect(m.body).not.toContain("cardinality");
+    expect(m.body).not.toContain("definitely-not-a-route");
+    expect(m.body).not.toContain("also-missing");
+    expect(m.body).toContain('route="unmatched"');
+    await app.close();
+  });
+});
+
+// Review: app.close() used to hang while any SSE viewer was connected — a
+// hijacked reply never completes, so Fastify's close() waited forever, the
+// 8s process-exit backstop (index.ts) killed the process, and onClose →
+// supervisor.disposeAll() (the SIGTERM-first child drain) never ran. The
+// preClose hook tears the streams down; close() must resolve promptly with
+// a live session host still registered, and the drain must have run.
+describe("graceful shutdown with an open SSE stream", () => {
+  it("preClose destroys the stream so close() resolves and the supervisor drains children", async () => {
+    const metrics = createMetrics();
+    const app: App = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      metrics,
+    });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const addr = app.server.address() as AddressInfo;
+    const base = `http://127.0.0.1:${addr.port}`;
+    try {
+      const conv = (await (
+        await fetch(`${base}/v1/threads`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: "Bearer good" },
+          body: JSON.stringify({}),
+        })
+      ).json()) as { id: string };
+      // Spawn a real session host; the turn settles and idleMs keeps it
+      // registered (alive) until shutdown.
+      const prompt = await fetch(`${base}/v1/threads/${conv.id}/prompt`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer good" },
+        body: JSON.stringify({ message: "hi" }),
+      });
+      expect(prompt.status).toBe(202);
+      await vi.waitFor(async () => {
+        const one = await fetch(`${base}/v1/threads/${conv.id}`, {
+          headers: { authorization: "Bearer good" },
+        });
+        expect(((await one.json()) as { state: string }).state).toBe("idle");
+      });
+      await vi.waitFor(() => {
+        expect(metrics.render()).toContain("aelvyril_active_session_hosts 1");
+      });
+      // Open an SSE stream and deliberately KEEP it open across shutdown.
+      const stream = await fetch(`${base}/v1/threads/${conv.id}/events`, {
+        headers: { authorization: "Bearer good" },
+      });
+      expect(stream.status).toBe(200);
+      // Without the preClose teardown this close() never resolves.
+      const start = Date.now();
+      await app.close();
+      expect(Date.now() - start).toBeLessThan(6_000);
+      // disposeAll actually ran: every child exited (gauge drained to 0).
+      expect(metrics.render()).toContain("aelvyril_active_session_hosts 0");
+    } catch (err) {
+      await app.close().catch(() => {});
+      throw err;
+    }
+  }, 20_000);
 });

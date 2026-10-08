@@ -5,6 +5,7 @@ import Fastify, {
 } from "fastify";
 import { spawn } from "node:child_process";
 import { createHash, timingSafeEqual } from "node:crypto";
+import type { ServerResponse } from "node:http";
 import {
   CreateConversationBody,
   EventEnvelope as EventEnvelopeSchema,
@@ -108,6 +109,14 @@ export interface AppOptions {
 
 export type App = FastifyInstance;
 
+/**
+ * Review: ThreadStatus values that are terminal lifecycle endpoints — the
+ * user already ended the thread (abandon is terminal; merged is the accepted
+ * end state). A dequeued prompt that fails after the fact must not overwrite
+ * them with "reviewed"/degraded.
+ */
+const TERMINAL_THREAD_STATUSES: ReadonlySet<string> = new Set(["abandoned", "merged"]);
+
 // Re-exported for the allowlist unit test (app.test.ts); the implementation
 // lives in child-env.ts so non-app paths (auto-verify exec) share the boundary.
 export { computeChildEnv };
@@ -176,6 +185,12 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   // bus listener + a heartbeat timer). Keyed by userId, counted on connect.
   const maxSseStreamsPerUser = opts.maxSseStreamsPerUser ?? 10;
   const sseStreams = new Map<string, number>();
+  // Review: hijacked SSE replies never "finish" — Fastify's close() waits
+  // for every open connection, so app.close() would hang while any viewer
+  // is connected (the index.ts process-exit backstop fires instead, and
+  // onClose → supervisor.disposeAll() never runs). Track the open streams
+  // so the preClose hook below can tear them down and let shutdown finish.
+  const sseReplies = new Set<ServerResponse>();
   const sseReplayPageSize = opts.sseReplayPageSize ?? 500;
   const metrics = opts.metrics ?? createMetrics();
   const supervisor = new Supervisor({
@@ -198,6 +213,9 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     trustThreshold: opts.trustThreshold,
     verify: opts.verify,
     computeDiff: opts.computeDiff,
+    // Review fix 11: fire-and-forget contract reply failures land in the
+    // request/process log at warn level (a no-op under logger:false).
+    logger: app.log,
   });
 
   const unauthorized = (reply: FastifyReply) => reply.code(401).send({ error: "unauthorized" });
@@ -258,8 +276,12 @@ export async function buildApp(opts: AppOptions): Promise<App> {
 
   // Spec §11: request-level metrics. onResponse fires after the route
   // handler has set reply.statusCode, so we capture the final response code.
+  // Review: the label must stay BOUNDED — falling back to req.url (raw
+  // path+query) for unmatched routes would let any caller mint
+  // attacker-controlled metric series (unbounded cardinality in memory).
+  // Unmatched requests share one fixed label instead.
   app.addHook("onResponse", async (req, reply) => {
-    const route = req.routeOptions?.url ?? req.url;
+    const route = req.routeOptions?.url || "unmatched";
     const labels = { method: req.method, route, status: String(reply.statusCode) };
     metrics.httpRequestsTotal.inc(labels);
     metrics.httpRequestDurationMs.observe(
@@ -520,10 +542,13 @@ export async function buildApp(opts: AppOptions): Promise<App> {
         conv.workspace ?? undefined,
         body.specMode,
       );
-    } catch {
+    } catch (err) {
       // Review fix 6: an RPC failure (dead host, timeout) used to bubble to
       // the 500 handler and leave the thread stuck 'running' until the idle
-      // reaper. Fail visibly instead.
+      // reaper. Fail visibly instead. Review fix 8: log the error so
+      // operators can tell an agent rejection from a gateway fault (rpc
+      // timeout vs busy-reject vs dead stdin) — the bare 502 alone can't.
+      req.log.warn({ err }, "supervisor prompt failed; responding 502 agent_rejected");
       metrics.promptRejections.inc();
       store.setConversationState(id, "degraded");
       bus.publish({
@@ -792,6 +817,9 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       reply.raw.destroy();
       return reply;
     }
+    // Handshake succeeded — the stream is now open and must be tracked for
+    // the preClose teardown (and dropped from it on any close/error below).
+    sseReplies.add(reply.raw);
 
     const raw = req.headers["last-event-id"];
     const parsed = Array.isArray(raw) ? Number(raw[0]) : Number(raw);
@@ -829,6 +857,7 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       if (writeEnvelope(env)) written++;
     }
     if (page.length >= sseReplayPageSize && written > 0) {
+      sseReplies.delete(reply.raw);
       try {
         reply.raw.end();
       } catch {
@@ -852,6 +881,7 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       closed = true;
       unsubscribe();
       clearInterval(heartbeat);
+      sseReplies.delete(reply.raw);
       releaseStream();
     };
     // #85: the hijacked raw socket previously had no error handler — an
@@ -880,6 +910,34 @@ export async function buildApp(opts: AppOptions): Promise<App> {
             kind: "spec_status",
             payload: { status: "running" },
           });
+          // Both failure shapes share one terminal-guarded writeback. Review
+          // SHOULD-FIX: a THROW from supervisor.prompt (the fail-closed
+          // scratch-dir mkdir, rpc teardown, store hiccups) used to reach
+          // only an empty catch — but the dequeue above already wrote
+          // status="running", and with no settle or exit coming the thread
+          // stuck "running" forever with no degraded state and no error
+          // envelope. Now both agent rejection and a thrown prompt fail
+          // visibly.
+          const failDequeuedPrompt = () => {
+            metrics.promptRejections.inc();
+            try {
+              // The thread may have gone terminal between dequeue and this
+              // failure (user abandoned/merged it) — the writeback must not
+              // resurrect a terminal status.
+              const status = store.getThreadStatus(item.conversationId, ns);
+              if (status === null || TERMINAL_THREAD_STATUSES.has(status)) return;
+              store.setConversationState(item.conversationId, "degraded");
+              store.updateThreadStatus(item.conversationId, ns, "reviewed");
+              bus.publish({
+                conversationId: item.conversationId,
+                ts: new Date().toISOString(),
+                kind: "error",
+                payload: { message: "queued prompt was rejected by the agent" },
+              });
+            } catch {
+              // store closed (shutdown); ignore
+            }
+          };
           void supervisor
             .prompt(
               item.conversationId,
@@ -902,22 +960,13 @@ export async function buildApp(opts: AppOptions): Promise<App> {
                 metrics.promptRequestsTotal.inc();
                 return;
               }
-              metrics.promptRejections.inc();
-              try {
-                store.setConversationState(item.conversationId, "degraded");
-                store.updateThreadStatus(item.conversationId, ns, "reviewed");
-                bus.publish({
-                  conversationId: item.conversationId,
-                  ts: new Date().toISOString(),
-                  kind: "error",
-                  payload: { message: "queued prompt was rejected by the agent" },
-                });
-              } catch {
-                // store closed (shutdown); ignore
-              }
+              failDequeuedPrompt(); // agent rejection (rpc answered success:false)
             })
             .catch(() => {
-              // prompt rejected at the rpc layer; already handled above
+              // supervisor.prompt THREW (not an agent answer) — the dequeue
+              // already flipped the thread to "running", so run the same
+              // writeback or the row sticks there forever.
+              failDequeuedPrompt();
             });
         }
       }
@@ -926,6 +975,19 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     }
   }, opts.queueIntervalMs ?? 2_000);
   queueTimer.unref();
+
+  // Review: runs BEFORE Fastify's close() starts draining connections —
+  // a hijacked SSE reply never completes on its own, so close() would wait
+  // forever on an open viewer and the 8s process-exit backstop (index.ts)
+  // would kill the gateway before onClose → supervisor.disposeAll() (the
+  // SIGTERM-first child drain) ever ran. Destroying the streams here lets
+  // close() finish and the drain actually happen.
+  app.addHook("preClose", async () => {
+    for (const raw of sseReplies) {
+      sseReplies.delete(raw);
+      raw.destroy();
+    }
+  });
 
   app.addHook("onClose", async () => {
     // Graceful shutdown: wait up to 5s for in-flight pi children to exit

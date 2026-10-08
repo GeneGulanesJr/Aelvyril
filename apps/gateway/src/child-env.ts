@@ -24,6 +24,11 @@ export const CHILD_ENV_ALLOWLIST: readonly string[] = [
   "OPENAI_BASE_URL",
   // D7: per-thread namespace key plumbed to the session host.
   "LAPIS_PROJECT_KEY",
+  // ADR-0004 contract: the LaPis pi extension resolves its data root from
+  // LAPIS_HOME at module load INSIDE each spawned child. The compose stack
+  // sets it on the gateway process; without this entry the allowlist strips
+  // it and agent memory silently misses the /data/lapis volume.
+  "LAPIS_HOME",
 ];
 
 /** Keys that must never reach a child, even via the opt-in extra allowlist. */

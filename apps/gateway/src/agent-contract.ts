@@ -40,6 +40,14 @@ export interface AgentContractOptions {
   specMode: SpecMode;
   /** Bounded question budget (#81.2). Default 3 rounds. */
   maxSpecRounds?: number;
+  /**
+   * Review: contract replies (execution prompts, budget cuts, spec patches)
+   * ride the rpc channel fire-and-forget — a dead stdin, rpc timeout, or
+   * busy-reject used to vanish into `.catch(() => {})`. When set, the
+   * transport layer reports the failure here so it can be logged. Default:
+   * ignore (no crash, same behavior as before).
+   */
+  onReplyFailure?: (err: unknown) => void;
 }
 
 export const SPEC_PROTOCOL_INSTRUCTIONS =
@@ -87,6 +95,7 @@ export class AgentContract {
   private readonly io: AgentContractIo;
   private specMode: SpecMode;
   private readonly maxSpecRounds: number;
+  private readonly onReplyFailure?: (err: unknown) => void;
   private specRounds = 0;
   private currentDraft: SpecDraft | null = null;
   /** An interview round is outstanding — the settle pipeline stands down. */
@@ -104,6 +113,20 @@ export class AgentContract {
     this.io = io;
     this.specMode = opts.specMode;
     this.maxSpecRounds = opts.maxSpecRounds ?? 3;
+    this.onReplyFailure = opts.onReplyFailure;
+  }
+
+  /**
+   * Transport hook (review): the supervisor's reply closure catches rpc
+   * failures and reports them here. The observer itself is failure-proof —
+   * a throwing logger must not crash the contract.
+   */
+  reportReplyFailure(err: unknown): void {
+    try {
+      this.onReplyFailure?.(err);
+    } catch {
+      // observability must never break the contract
+    }
   }
 
   get rounds(): number {
@@ -117,6 +140,22 @@ export class AgentContract {
   /** Per-turn override (the route carries specMode on every prompt). */
   setTurnSpecMode(mode: SpecMode): void {
     this.specMode = mode;
+  }
+
+  /**
+   * Review: a NEW user turn starts — per-turn contract state returns to its
+   * fresh-turn values. Without this, gateStopped (set by escalateGate, only
+   * cleared by beginExecution) left a plain re-prompt after a gate stop
+   * stuck "streaming" until the idle reaper, and the lifetime-of-handle
+   * specRounds cut turn-2 interviews off with "Question budget exhausted"
+   * despite the budget being per-interview. The gate stop still suppresses
+   * the settle pipeline for the turn it was set in: the reset only happens
+   * when the next turn actually begins.
+   */
+  beginUserTurn(): void {
+    this.gateStopped = false;
+    this.awaitingInterview = false;
+    this.specRounds = 0;
   }
 
   /** Reattach the persisted draft after a respawn / restart (#80). */

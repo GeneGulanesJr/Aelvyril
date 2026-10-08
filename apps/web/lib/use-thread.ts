@@ -3,6 +3,39 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { GatewayClient } from "./api.js";
 import type { EventEnvelope, SpecDraft, SpecQuestion, ThreadStatus, Usage } from "@aelvyril/shared";
 
+/** One entry in the structured run timeline the Trace tab renders. The
+ *  legacy `trace: string[]` lines stay for the reduced debug log; the
+ *  timeline is the readable desk log (narration, tools with durations,
+ *  subagent team activity). */
+export type TimelineItem =
+  | { kind: "user"; id: string; ts: string; text: string }
+  | { kind: "narration"; id: string; ts: string; text: string; live: boolean }
+  | {
+      kind: "tool";
+      id: string;
+      ts: string;
+      name: string;
+      args?: string;
+      result?: { isError: boolean; ts: string };
+    }
+  | {
+      kind: "subagents";
+      id: string;
+      ts: string;
+      mode: "single" | "parallel" | "chain";
+      agents: { agent: string; task: string }[];
+    }
+  | { kind: "sandbox"; id: string; ts: string; profile: string; sandboxId?: string }
+  | { kind: "promote"; id: string; ts: string; sandboxId: string; paths: string[] }
+  | {
+      kind: "verdict";
+      id: string;
+      ts: string;
+      tool: string;
+      verdict: Record<string, unknown>;
+    }
+  | { kind: "dialog"; id: string; ts: string; title: string; action: string };
+
 export interface ThreadState {
   status: ThreadStatus;
   /** True once a live spec_status envelope arrived — before that, `status`
@@ -13,6 +46,7 @@ export interface ThreadState {
   draft: SpecDraft | null;
   plan: string[];
   trace: string[];
+  timeline: TimelineItem[];
   diff: { path: string; patch: string }[];
   error: string | null;
   /** Session host died mid-turn — next prompt respawns it (spec §10). */
@@ -45,6 +79,7 @@ const initialThreadState: ThreadState = {
   draft: null,
   plan: [],
   trace: [],
+  timeline: [],
   diff: [],
   error: null,
   degraded: false,
@@ -212,6 +247,23 @@ export function useThread(
   return { ...state, ask, submitAnswers, editSpec, approve, abandon, retry, merge, stop, dismissError };
 }
 
+/** Close any open narration block so a new speaker/tool starts fresh. */
+function sealNarration(timeline: TimelineItem[]): TimelineItem[] {
+  const last = timeline[timeline.length - 1];
+  if (last && last.kind === "narration" && last.live) {
+    return [...timeline.slice(0, -1), { ...last, live: false }];
+  }
+  return timeline;
+}
+
+function appendNarration(timeline: TimelineItem[], id: string, ts: string, delta: string): TimelineItem[] {
+  const last = timeline[timeline.length - 1];
+  if (last && last.kind === "narration" && last.live) {
+    return [...timeline.slice(0, -1), { ...last, text: last.text + delta }];
+  }
+  return [...timeline, { kind: "narration", id, ts, text: delta, live: true }];
+}
+
 function applyEnvelope(s: ThreadState, e: EventEnvelope): ThreadState {
   switch (e.kind) {
     case "spec_status":
@@ -221,20 +273,79 @@ function applyEnvelope(s: ThreadState, e: EventEnvelope): ThreadState {
     case "spec_draft":
       return { ...s, draft: e.payload.draft, plan: e.payload.draft.plan };
     case "text_delta":
-      return { ...s, trace: [...s.trace, e.payload.delta] };
+      return { ...s, trace: [...s.trace, e.payload.delta], timeline: appendNarration(s.timeline, String(e.seq), e.ts, e.payload.delta) };
+    case "user_message":
+      return { ...s, timeline: [...sealNarration(s.timeline), { kind: "user", id: String(e.seq), ts: e.ts, text: e.payload.text }] };
     case "tool_call": {
       // Display-only reduction: the gated banner (#81) tells users to
       // "review it in the trace", so tool activity must appear there.
       const args = e.payload.args === undefined ? "" : JSON.stringify(e.payload.args);
-      return { ...s, trace: [...s.trace, `→ ${e.payload.toolName}(${args})`] };
+      const timeline = [
+        ...sealNarration(s.timeline),
+        { kind: "tool" as const, id: e.payload.toolCallId, ts: e.ts, name: e.payload.toolName, args },
+      ];
+      return { ...s, trace: [...s.trace, `→ ${e.payload.toolName}(${args})`], timeline };
     }
-    case "tool_result":
-      return { ...s, trace: [...s.trace, `← ${e.payload.isError ? "error" : "ok"}`] };
+    case "tool_result": {
+      // Pair by toolCallId so the timeline shows durations; the reduced
+      // trace line stays positional as before.
+      let matched = false;
+      const timeline = sealNarration(s.timeline).map((item) => {
+        if (!matched && item.kind === "tool" && item.id === e.payload.toolCallId && !item.result) {
+          matched = true;
+          return { ...item, result: { isError: e.payload.isError, ts: e.ts } };
+        }
+        return item;
+      });
+      return { ...s, trace: [...s.trace, `← ${e.payload.isError ? "error" : "ok"}`], timeline };
+    }
+    case "subagent_spawn":
+      return {
+        ...s,
+        timeline: [
+          ...sealNarration(s.timeline),
+          {
+            kind: "subagents",
+            id: String(e.seq),
+            ts: e.ts,
+            mode: e.payload.mode,
+            agents: e.payload.agents,
+          },
+        ],
+      };
+    case "sandbox_exec":
+      return {
+        ...s,
+        timeline: [
+          ...sealNarration(s.timeline),
+          { kind: "sandbox", id: String(e.seq), ts: e.ts, profile: e.payload.profile, sandboxId: e.payload.sandboxId },
+        ],
+      };
+    case "sandbox_promote":
+      return {
+        ...s,
+        timeline: [
+          ...sealNarration(s.timeline),
+          { kind: "promote", id: String(e.seq), ts: e.ts, sandboxId: e.payload.sandboxId, paths: e.payload.paths },
+        ],
+      };
+    case "laya_verdict":
+      return {
+        ...s,
+        timeline: [
+          ...sealNarration(s.timeline),
+          { kind: "verdict", id: String(e.seq), ts: e.ts, tool: e.payload.tool, verdict: e.payload.verdict },
+        ],
+      };
     case "dialog":
       // #84: surfaced/auto-answered dialogs stay auditable in the trace.
       return {
         ...s,
         trace: [...s.trace, `dialog: ${e.payload.title} (${e.payload.action})`],
+        timeline: [
+          ...sealNarration(s.timeline),
+          { kind: "dialog", id: String(e.seq), ts: e.ts, title: e.payload.title, action: e.payload.action },
+        ],
       };
     case "diff":
       return { ...s, diff: e.payload.files };

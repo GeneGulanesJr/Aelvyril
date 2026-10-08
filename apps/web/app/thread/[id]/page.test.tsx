@@ -43,17 +43,23 @@ vi.mock("../../../lib/api.js", () => ({
   GatewayClient: vi.fn().mockImplementation(() => h.client),
 }));
 
-vi.mock("../../../lib/use-thread.js", () => ({
-  useThread: (_id: string | null, deps?: { onStatus?: (s: string) => void }) => {
-    h.hook.onStatus = deps?.onStatus ?? null;
-    return {
-      status: "draft", statusLive: false, questions: [], draft: null, plan: ["step1"], trace: [], diff: [],
-      error: h.hook.error, degraded: true, blocked: null, waiting: false, usage: null,
-      ask: vi.fn(), submitAnswers: vi.fn(), editSpec: vi.fn(), approve: vi.fn(), abandon: vi.fn(), retry: vi.fn(),
-      stop: vi.fn(), dismissError: vi.fn(),
-    };
-  },
-}));
+vi.mock("../../../lib/use-thread.js", async () => {
+  const { useState } = await import("react");
+  return {
+    useThread: (_id: string | null, deps?: { onStatus?: (s: string) => void }) => {
+      h.hook.onStatus = deps?.onStatus ?? null;
+      // Error lives in real state so dismissal re-renders (the band's
+      // precedence behavior is pinned against this hook seam).
+      const [error, setError] = useState(h.hook.error);
+      return {
+        status: "draft", statusLive: false, questions: [], draft: null, plan: ["step1"], trace: [], timeline: [], diff: [],
+        error, degraded: true, blocked: null, waiting: false, usage: null,
+        ask: vi.fn(), submitAnswers: vi.fn(), editSpec: vi.fn(), approve: vi.fn(), abandon: vi.fn(), retry: vi.fn(),
+        stop: vi.fn(), dismissError: () => setError(null),
+      };
+    },
+  };
+});
 
 function threadRow(id: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -87,12 +93,15 @@ describe("ThreadPage", () => {
     expect(screen.getByTestId("tab-plan")).toBeTruthy();
   });
 
-  it("renders degraded + error banners with dismiss", async () => {
+  it("status band shows one state: error outranks degraded until dismissed", async () => {
     h.hook.error = "boom";
     render(<ThreadPage />);
     await screen.findByTestId("new-thread");
-    expect(screen.getByTestId("degraded-banner")).toBeTruthy();
     expect(screen.getByTestId("error-banner").textContent).toContain("boom");
+    expect(screen.queryByTestId("degraded-banner")).toBeNull();
+    fireEvent.click(screen.getByTestId("dismiss-error"));
+    await waitFor(() => expect(screen.getByTestId("degraded-banner")).toBeTruthy());
+    expect(screen.queryByTestId("error-banner")).toBeNull();
   });
 
   it("sidebar search filters the list", async () => {

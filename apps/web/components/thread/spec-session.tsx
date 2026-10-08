@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { Play } from "lucide-react";
 import type { SpecDraft, SpecQuestion, ThreadStatus } from "@aelvyril/shared";
 
 const SPEC_FIELDS = ["goal", "filesAffected", "plan", "risks"] as const;
@@ -129,17 +130,28 @@ export function SpecSession({
 
   if (status !== "spec'ing" && !forceVisible) return null;
 
+  const hasQuestions = questions.length > 0;
+
   return (
-    <div className="border-t border-[#2b3245] bg-[#0d1117] p-3 text-sm" data-testid="spec-session">
-      {questions.length > 0 && (
-        <div className="space-y-2">
+    <div className="border-t border-caution/40 bg-panel-raised p-4 text-sm" data-testid="spec-session">
+      {(hasQuestions || draft) && (
+        <div className="mb-3 flex items-center gap-2">
+          <span aria-hidden className="size-2 animate-lamp-pulse rounded-full bg-caution" />
+          <span className="font-mono text-xs uppercase tracking-wider text-caution">
+            {hasQuestions ? "Spec interview" : "Draft under negotiation"}
+          </span>
+        </div>
+      )}
+      {hasQuestions && (
+        <div>
           {questions.map((q) => (
-            <label key={q.id} className="block">
-              <span className="block text-[#8b96a8]">{q.prompt}</span>
+            <div className="mb-3" key={q.id}>
+              <label className="mb-1.5 block text-sm text-ink" htmlFor={`spec-q-${q.id}`}>{q.prompt}</label>
               {q.kind === "select" && q.options ? (
                 <select
-                  className="mt-1 w-full rounded border border-[#2b3245] bg-[#161b27] p-1"
+                  className="w-full rounded-md border border-seam bg-panel px-2.5 py-1.5 text-sm transition-colors focus:border-route"
                   data-testid={`q-${q.id}`}
+                  id={`spec-q-${q.id}`}
                   value={answers[q.id] ?? ""}
                   onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
                 >
@@ -148,16 +160,17 @@ export function SpecSession({
                 </select>
               ) : (
                 <input
-                  className="mt-1 w-full rounded border border-[#2b3245] bg-[#161b27] p-1"
+                  className="w-full rounded-md border border-seam bg-panel px-2.5 py-1.5 text-sm transition-colors focus:border-route"
                   data-testid={`q-${q.id}`}
+                  id={`spec-q-${q.id}`}
                   onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
                   value={answers[q.id] ?? ""}
                 />
               )}
-            </label>
+            </div>
           ))}
           <button
-            className="rounded bg-[#1f6feb] px-3 py-1 text-xs"
+            className="rounded-md bg-route px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-route/90 disabled:cursor-not-allowed disabled:opacity-40"
             data-testid="submit-answers"
             onClick={() => onSubmitAnswers(answers)}
             disabled={questions.some((q) => !answers[q.id])}
@@ -165,22 +178,25 @@ export function SpecSession({
         </div>
       )}
       {draft && (
-        <div className="mt-3 space-y-2 border-t border-[#2b3245] pt-3">
-          <SpecField label="Goal" value={fields.goal} testId="spec-goal"
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <SpecField label="Goal" value={fields.goal} testId="spec-goal" wide
             onChange={(v) => handleFieldChange("goal", v)}
             onFocus={() => { editingRef.current = "goal"; }} onBlur={handleFieldBlur} />
           <SpecField label="Files" value={fields.filesAffected} testId="spec-files"
             onChange={(v) => handleFieldChange("filesAffected", v)}
             onFocus={() => { editingRef.current = "filesAffected"; }} onBlur={handleFieldBlur} />
-          <SpecField label="Plan" value={fields.plan} testId="spec-plan" multiline
+          <SpecField label="Plan" value={fields.plan} testId="spec-plan" multiline wide
             onChange={(v) => handleFieldChange("plan", v)}
             onFocus={() => { editingRef.current = "plan"; }} onBlur={handleFieldBlur} />
-          <SpecField label="Risks" value={fields.risks} testId="spec-risks" multiline
+          <SpecField label="Risks" value={fields.risks} testId="spec-risks" multiline wide
             onChange={(v) => handleFieldChange("risks", v)}
             onFocus={() => { editingRef.current = "risks"; }} onBlur={handleFieldBlur} />
-          <div className="flex gap-2 pt-2">
-            <button className="rounded bg-[#3fb950] px-3 py-1 text-xs font-medium" data-testid="approve" onClick={onApprove}>Approve &amp; run</button>
-            <button className="rounded border border-[#2b3245] px-3 py-1 text-xs" data-testid="cancel" onClick={onCancel}>Cancel</button>
+          <div className="flex gap-2 pt-1 md:col-span-2">
+            <button className="inline-flex items-center gap-1.5 rounded-md bg-go px-3.5 py-1.5 text-sm font-semibold text-go-ink transition-colors hover:bg-go/90" data-testid="approve" onClick={onApprove}>
+              <Play aria-hidden className="size-3.5" />
+              Approve &amp; run
+            </button>
+            <button className="rounded-md border border-seam-strong px-3.5 py-1.5 text-sm text-ink-muted transition-colors hover:text-ink" data-testid="cancel" onClick={onCancel}>Cancel</button>
           </div>
         </div>
       )}
@@ -188,17 +204,17 @@ export function SpecSession({
   );
 }
 
-function SpecField({ label, value, onChange, onFocus, onBlur, testId, multiline }: {
+function SpecField({ label, value, onChange, onFocus, onBlur, testId, multiline, wide = false }: {
   label: string; value: string; onChange: (v: string) => void;
-  onFocus: () => void; onBlur: () => void; testId: string; multiline?: boolean;
+  onFocus: () => void; onBlur: () => void; testId: string; multiline?: boolean; wide?: boolean;
 }) {
   return (
-    <label className="block">
-      <span className="block text-xs text-[#8b96a8]">{label}</span>
+    <label className={wide ? "block md:col-span-2" : "block"}>
+      <span className="mb-1 block text-xs font-mono uppercase tracking-wider text-ink-faint">{label}</span>
       {multiline ? (
-        <textarea className="mt-1 w-full rounded border border-[#2b3245] bg-[#161b27] p-1 text-xs" data-testid={testId} onChange={(e) => onChange(e.target.value)} onFocus={onFocus} onBlur={onBlur} rows={3} value={value} />
+        <textarea className="w-full rounded-md border border-seam bg-panel px-2.5 py-1.5 text-sm transition-colors focus:border-route" data-testid={testId} onChange={(e) => onChange(e.target.value)} onFocus={onFocus} onBlur={onBlur} rows={3} value={value} />
       ) : (
-        <input className="mt-1 w-full rounded border border-[#2b3245] bg-[#161b27] p-1 text-xs" data-testid={testId} onChange={(e) => onChange(e.target.value)} onFocus={onFocus} onBlur={onBlur} value={value} />
+        <input className="w-full rounded-md border border-seam bg-panel px-2.5 py-1.5 text-sm transition-colors focus:border-route" data-testid={testId} onChange={(e) => onChange(e.target.value)} onFocus={onFocus} onBlur={onBlur} value={value} />
       )}
     </label>
   );

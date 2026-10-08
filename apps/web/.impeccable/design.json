@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-08T12:00:00Z",
+  "title": "Design System: Aelvyril — The Dispatch Desk",
+  "extensions": {
+    "colorMeta": {
+      "route": { "role": "primary", "displayName": "Route Blue", "canonical": "#4d8bef", "tonalRamp": ["oklch(15% 0.14 260)", "oklch(27% 0.14 260)", "oklch(39% 0.14 260)", "oklch(51% 0.14 260)", "oklch(63% 0.14 260)", "oklch(74% 0.14 260)", "oklch(85% 0.14 260)", "oklch(95% 0.14 260)"] },
+      "focus": { "role": "interaction", "displayName": "Focus Blue", "canonical": "#7db1ff", "tonalRamp": ["oklch(15% 0.11 258)", "oklch(27% 0.11 258)", "oklch(39% 0.11 258)", "oklch(51% 0.11 258)", "oklch(63% 0.11 258)", "oklch(74% 0.11 258)", "oklch(85% 0.11 258)", "oklch(95% 0.11 258)"] },
+      "go": { "role": "aspect", "displayName": "Go Aspect", "canonical": "#3fb950", "tonalRamp": ["oklch(15% 0.17 145)", "oklch(27% 0.17 145)", "oklch(39% 0.17 145)", "oklch(51% 0.17 145)", "oklch(63% 0.17 145)", "oklch(74% 0.17 145)", "oklch(85% 0.17 145)", "oklch(95% 0.17 145)"] },
+      "caution": { "role": "aspect", "displayName": "Caution Aspect", "canonical": "#e3b341", "tonalRamp": ["oklch(15% 0.14 85)", "oklch(27% 0.14 85)", "oklch(39% 0.14 85)", "oklch(51% 0.14 85)", "oklch(63% 0.14 85)", "oklch(74% 0.14 85)", "oklch(85% 0.14 85)", "oklch(95% 0.14 85)"] },
+      "danger": { "role": "aspect", "displayName": "Danger Aspect", "canonical": "#f85149", "tonalRamp": ["oklch(15% 0.19 25)", "oklch(27% 0.19 25)", "oklch(39% 0.19 25)", "oklch(51% 0.19 25)", "oklch(63% 0.19 25)", "oklch(74% 0.19 25)", "oklch(85% 0.19 25)", "oklch(95% 0.19 25)"] },
+      "lamp-off": { "role": "aspect", "displayName": "Lamp Off", "canonical": "#4a5468", "tonalRamp": ["oklch(15% 0.045 262)", "oklch(27% 0.045 262)", "oklch(39% 0.045 262)", "oklch(51% 0.045 262)", "oklch(63% 0.045 262)", "oklch(74% 0.045 262)", "oklch(85% 0.045 262)", "oklch(95% 0.045 262)"] },
+      "needsyou": { "role": "reserved", "displayName": "Needs You Yellow", "canonical": "#ffce00", "tonalRamp": ["oklch(15% 0.18 95)", "oklch(27% 0.18 95)", "oklch(39% 0.18 95)", "oklch(51% 0.18 95)", "oklch(63% 0.18 95)", "oklch(74% 0.18 95)", "oklch(85% 0.18 95)", "oklch(95% 0.18 95)"] },
+      "needsyou-ink": { "role": "reserved", "displayName": "Needs You Ink", "canonical": "#171207", "tonalRamp": ["oklch(15% 0.035 95)", "oklch(27% 0.035 95)", "oklch(39% 0.035 95)", "oklch(51% 0.035 95)", "oklch(63% 0.035 95)", "oklch(74% 0.035 95)", "oklch(85% 0.035 95)", "oklch(95% 0.035 95)"] },
+      "go-ink": { "role": "on-aspect ink", "displayName": "Go Ink", "canonical": "#0b1a0d", "tonalRamp": ["oklch(15% 0.04 148)", "oklch(27% 0.04 148)", "oklch(39% 0.04 148)", "oklch(51% 0.04 148)", "oklch(63% 0.04 148)", "oklch(74% 0.04 148)", "oklch(85% 0.04 148)", "oklch(95% 0.04 148)"] },
+      "desk": { "role": "neutral", "displayName": "Desk Steel", "canonical": "#0e1217", "tonalRamp": ["oklch(15% 0.02 255)", "oklch(27% 0.02 255)", "oklch(39% 0.02 255)", "oklch(51% 0.02 255)", "oklch(63% 0.02 255)", "oklch(74% 0.02 255)", "oklch(85% 0.02 255)", "oklch(95% 0.02 255)"] },
+      "panel": { "role": "neutral", "displayName": "Panel Steel", "canonical": "#12171f", "tonalRamp": ["oklch(15% 0.025 256)", "oklch(27% 0.025 256)", "oklch(39% 0.025 256)", "oklch(51% 0.025 256)", "oklch(63% 0.025 256)", "oklch(74% 0.025 256)", "oklch(85% 0.025 256)", "oklch(95% 0.025 256)"] },
+      "panel-raised": { "role": "neutral", "displayName": "Raised Panel", "canonical": "#171e28", "tonalRamp": ["oklch(15% 0.028 257)", "oklch(27% 0.028 257)", "oklch(39% 0.028 257)", "oklch(51% 0.028 257)", "oklch(63% 0.028 257)", "oklch(74% 0.028 257)", "oklch(85% 0.028 257)", "oklch(95% 0.028 257)"] },
+      "panel-active": { "role": "neutral", "displayName": "Active Panel", "canonical": "#1d2634", "tonalRamp": ["oklch(15% 0.032 258)", "oklch(27% 0.032 258)", "oklch(39% 0.032 258)", "oklch(51% 0.032 258)", "oklch(63% 0.032 258)", "oklch(74% 0.032 258)", "oklch(85% 0.032 258)", "oklch(95% 0.032 258)"] },
+      "seam": { "role": "neutral", "displayName": "Seam", "canonical": "#232c3a", "tonalRamp": ["oklch(15% 0.035 260)", "oklch(27% 0.035 260)", "oklch(39% 0.035 260)", "oklch(51% 0.035 260)", "oklch(63% 0.035 260)", "oklch(74% 0.035 260)", "oklch(85% 0.035 260)", "oklch(95% 0.035 260)"] },
+      "seam-strong": { "role": "neutral", "displayName": "Seam Strong", "canonical": "#334052", "tonalRamp": ["oklch(15% 0.04 262)", "oklch(27% 0.04 262)", "oklch(39% 0.04 262)", "oklch(51% 0.04 262)", "oklch(63% 0.04 262)", "oklch(74% 0.04 262)", "oklch(85% 0.04 262)", "oklch(95% 0.04 262)"] },
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#e9eef5", "tonalRamp": ["oklch(15% 0.015 255)", "oklch(27% 0.015 255)", "oklch(39% 0.015 255)", "oklch(51% 0.015 255)", "oklch(63% 0.015 255)", "oklch(74% 0.015 255)", "oklch(85% 0.015 255)", "oklch(95% 0.015 255)"] },
+      "ink-muted": { "role": "neutral", "displayName": "Ink Muted", "canonical": "#9aa7b8", "tonalRamp": ["oklch(15% 0.03 258)", "oklch(27% 0.03 258)", "oklch(39% 0.03 258)", "oklch(51% 0.03 258)", "oklch(63% 0.03 258)", "oklch(74% 0.03 258)", "oklch(85% 0.03 258)", "oklch(95% 0.03 258)"] },
+      "ink-faint": { "role": "neutral", "displayName": "Ink Faint", "canonical": "#76839a", "tonalRamp": ["oklch(15% 0.035 260)", "oklch(27% 0.035 260)", "oklch(39% 0.035 260)", "oklch(51% 0.035 260)", "oklch(63% 0.035 260)", "oklch(74% 0.035 260)", "oklch(85% 0.035 260)", "oklch(95% 0.035 260)"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Hero headline only — the new-thread screen and the sign-in wordmark." },
+      "title": { "displayName": "Title", "purpose": "Thread title in the desk header; the wordmark instead uses the label voice at wide tracking." },
+      "body": { "displayName": "Body", "purpose": "The single UI voice: narration, plan steps, band copy, buttons, board rows." },
+      "label": { "displayName": "Label", "purpose": "Uppercase mono micro-labels: board groups, route stations, spec fields, status labels." },
+      "measure": { "displayName": "Measure", "purpose": "Every number, always tabular-nums: cost, tokens, clocks, durations, line numbers, stats." }
+    },
+    "shadows": [
+      { "name": "shadow-drawer", "value": "0 8px 24px rgb(0 0 0 / 0.5)", "purpose": "The mobile board drawer — the only full-panel shadow." },
+      { "name": "shadow-pop", "value": "0 6px 16px rgb(0 0 0 / 0.45)", "purpose": "Small floating chrome: toasts, the jump-to-now pill, the hero composer container." }
+    ],
+    "motion": [
+      { "name": "ease-desk", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "The desk's one easing — entrances and settles." },
+      { "name": "transition-colors", "value": "color/border/background 150ms", "purpose": "The universal hover/focus response — colors only, never transforms." },
+      { "name": "animate-lamp-pulse", "value": "lamp-pulse 2.4s ease-in-out infinite (opacity 1 -> 0.55 -> 1)", "purpose": "A lamp breathes only while its phase is live: running, spec'ing, blocked." },
+      { "name": "animate-band-ignite", "value": "band-ignite 220ms var(--ease-desk) both (opacity 0.4/translateY(-3px) -> 1/0)", "purpose": "A band or toast arriving demanded attention." },
+      { "name": "animate-stream-caret", "value": "stream-caret 1s steps(2, start) infinite (opacity 1 <-> 0)", "purpose": "Narration is streaming right now — the live caret." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px", "purpose": "Header action labels and keyboard hints hide below this." },
+      { "name": "md", "value": "768px", "purpose": "The describer board collapses into a shadow-drawer below this." }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary action button (Ask)",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The set-route action: Ask, Submit answers, sign in. Route blue, white label.",
+      "html": "<button class=\"ds-btn-primary\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m22 2-7 20-4-9-9-4Z\"/><path d=\"M22 2 11 13\"/></svg>Ask</button>",
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--color-route);color:#fff;font:500 14px/1.43 var(--font-sans);padding:6px 14px;border:0;border-radius:6px;cursor:pointer;transition:background-color .15s}.ds-btn-primary:hover{background:color-mix(in srgb,var(--color-route) 90%,transparent)}.ds-btn-primary:focus-visible{outline:2px solid var(--color-focus);outline-offset:1px}.ds-btn-primary:disabled{opacity:.4;cursor:not-allowed}"
+    },
+    {
+      "name": "Approve & run button (go aspect)",
+      "kind": "button",
+      "refersTo": "button-approve",
+      "description": "The desk's terminal/clearing action: Approve & run, Merge. Solid go aspect with dark go-ink label.",
+      "html": "<button class=\"ds-btn-approve\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"currentColor\" stroke=\"none\" aria-hidden=\"true\"><polygon points=\"6 3 20 12 6 21 6 3\"/></svg>Approve &amp; run</button>",
+      "css": ".ds-btn-approve{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--color-go);color:var(--color-go-ink);font:600 14px/1.43 var(--font-sans);padding:6px 14px;border:0;border-radius:6px;cursor:pointer;transition:background-color .15s}.ds-btn-approve:hover{background:color-mix(in srgb,var(--color-go) 90%,transparent)}.ds-btn-approve:focus-visible{outline:2px solid var(--color-focus);outline-offset:1px}.ds-btn-approve:disabled{opacity:.4;cursor:not-allowed}"
+    },
+    {
+      "name": "Ghost button (Ask + spec)",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Secondary actions on seamed plates: Ask + spec, Cancel. Transparent fill, seam-strong border.",
+      "html": "<button class=\"ds-btn-ghost\">Ask + spec</button>",
+      "css": ".ds-btn-ghost{display:inline-flex;align-items:center;gap:6px;background:transparent;color:var(--color-ink-muted);font:400 14px/1.43 var(--font-sans);padding:6px 14px;border:1px solid var(--color-seam-strong);border-radius:6px;cursor:pointer;transition:border-color .15s,color .15s}.ds-btn-ghost:hover{border-color:var(--color-ink-faint);color:var(--color-ink)}.ds-btn-ghost:focus-visible{outline:2px solid var(--color-focus);outline-offset:1px}.ds-btn-ghost:disabled{opacity:.4;cursor:not-allowed}"
+    },
+    {
+      "name": "Composer input",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "Auto-growing textarea on a raised plate; route-blue focus border, route-blue caret.",
+      "html": "<textarea class=\"ds-input\" rows=\"2\" placeholder=\"Ask anything...\"></textarea>",
+      "css": ".ds-input{width:100%;min-height:3.4rem;resize:none;background:var(--color-panel-raised);color:var(--color-ink);border:1px solid var(--color-seam);border-radius:6px;padding:12px;font:400 14px/1.43 var(--font-sans);caret-color:var(--color-route);transition:border-color .15s}.ds-input::placeholder{color:var(--color-ink-faint)}.ds-input:focus{outline:none;border-color:var(--color-route)}.ds-input:focus-visible{outline:2px solid var(--color-focus);outline-offset:1px}"
+    },
+    {
+      "name": "Board row (thread lamp row)",
+      "kind": "custom",
+      "refersTo": "board-row-active",
+      "description": "The describer board's row: aspect lamp, title, mono status · rel-time sub-line, right-aligned mono cost.",
+      "html": "<button class=\"ds-board-row is-active\"><span class=\"ds-lamp ds-lamp--live\"></span><span class=\"ds-board-text\"><span class=\"ds-board-title\">Fix the login redirect</span><span class=\"ds-board-meta\">running · 3m</span></span><span class=\"ds-board-cost\">$0.0421</span></button>",
+      "css": ".ds-board-row{display:flex;align-items:center;gap:10px;width:100%;padding:8px 12px;text-align:left;background:transparent;border:0;cursor:pointer;font-family:var(--font-sans);transition:background-color .15s}.ds-board-row:hover{background:var(--color-panel-raised)}.ds-board-row.is-active{background:var(--color-panel-active)}.ds-board-row:focus-visible{outline:2px solid var(--color-focus);outline-offset:-2px}.ds-lamp{width:8px;height:8px;border-radius:9999px;background:var(--color-lamp-off);flex-shrink:0}.ds-lamp--live{background:var(--color-go);animation:ds-lamp-pulse 2.4s ease-in-out infinite}.ds-lamp--needsyou{background:var(--color-needsyou)}.ds-board-text{display:flex;flex-direction:column;min-width:0;flex:1}.ds-board-title{font-size:14px;color:var(--color-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ds-board-meta{margin-top:2px;font:400 12px var(--font-mono);font-variant-numeric:tabular-nums;color:var(--color-ink-faint)}.ds-board-cost{flex-shrink:0;font:400 12px var(--font-mono);font-variant-numeric:tabular-nums;color:var(--color-ink-faint)}@keyframes ds-lamp-pulse{0%,100%{opacity:1}50%{opacity:.55}}@media (prefers-reduced-motion:reduce){.ds-lamp--live{animation:none}}"
+    },
+    {
+      "name": "\"Needs you\" band",
+      "kind": "custom",
+      "refersTo": "band-blocked",
+      "description": "The reserved-yellow blocked band: exactly one message and one inverting action button inside it.",
+      "html": "<div class=\"ds-band\" role=\"alert\"><span class=\"ds-band-text\">Needs you — blocked: The agent tried an irreversible action. Review it in the trace, then approve to allow exactly that action and continue.</span><button class=\"ds-band-action\">Review &amp; approve</button></div>",
+      "css": ".ds-band{display:flex;align-items:center;gap:12px;background:var(--color-needsyou);color:var(--color-needsyou-ink);font:500 14px/1.43 var(--font-sans);padding:10px 16px;animation:ds-ignite 220ms cubic-bezier(0.16,1,0.3,1) both}.ds-band-text{min-width:0;flex:1}.ds-band-action{flex-shrink:0;background:var(--color-needsyou-ink);color:var(--color-needsyou);font:600 12px/1.43 var(--font-sans);padding:4px 10px;border:0;border-radius:4px;cursor:pointer;transition:opacity .15s}.ds-band-action:hover{opacity:.9}.ds-band-action:focus-visible{outline:2px solid var(--color-focus);outline-offset:1px}@keyframes ds-ignite{from{opacity:.4;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}@media (prefers-reduced-motion:reduce){.ds-band{animation:none}}"
+    },
+    {
+      "name": "Output tab",
+      "kind": "nav",
+      "refersTo": "output-tab",
+      "description": "Underline tab on the working-surface strip: active is a 2px route-blue underline; the trace tab carries a mono count.",
+      "html": "<div class=\"ds-tabs\"><button class=\"ds-tab\" role=\"tab\">Plan</button><button class=\"ds-tab is-active\" role=\"tab\" aria-selected=\"true\">Diff</button><button class=\"ds-tab\" role=\"tab\">Trace<span class=\"ds-tab-count\">12</span></button></div>",
+      "css": ".ds-tabs{display:flex;gap:4px;border-bottom:1px solid var(--color-seam);background:var(--color-panel);padding:0 16px}.ds-tab{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--color-ink-muted);font:400 14px/1.43 var(--font-sans);padding:8px 12px;margin-bottom:-1px;cursor:pointer;transition:color .15s}.ds-tab:hover{color:var(--color-ink)}.ds-tab.is-active{color:var(--color-ink);font-weight:500;border-bottom-color:var(--color-route)}.ds-tab:focus-visible{outline:2px solid var(--color-focus);outline-offset:-2px}.ds-tab-count{margin-left:6px;font:400 12px var(--font-mono);font-variant-numeric:tabular-nums;color:var(--color-ink-faint)}"
+    },
+    {
+      "name": "Diff card",
+      "kind": "card",
+      "refersTo": "diff-card",
+      "description": "One seamed disclosure card per file: mono path, +N/-M stats, copy swap; go/danger line washes with true new-file numbers.",
+      "html": "<details class=\"ds-diff\" open><summary><span class=\"ds-diff-path\">apps/web/app/page.tsx</span><span class=\"ds-diff-add\">+12</span><span class=\"ds-diff-rem\">-3</span><button class=\"ds-diff-copy\" aria-label=\"Copy patch\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\"/><path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"/></svg></button></summary><pre><span class=\"ln\">41</span><span class=\"ctx\">export default function Page() {</span>\n<span class=\"ln\">42</span><span class=\"add\">+  const desk = useDesk();</span>\n<span class=\"ln\"></span><span class=\"rem\">-  const legacy = useLegacy();</span>\n<span class=\"ln\">43</span><span class=\"ctx\">  return &lt;Desk /&gt;;</span></pre></details>",
+      "css": ".ds-diff{border:1px solid var(--color-seam);border-radius:4px;font-family:var(--font-mono)}.ds-diff>summary{display:flex;align-items:center;gap:8px;padding:6px 8px;cursor:pointer;list-style:none;font-size:12px;transition:background-color .15s}.ds-diff>summary::-webkit-details-marker{display:none}.ds-diff>summary:hover{background:var(--color-panel)}.ds-diff-path{color:var(--color-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ds-diff-add{color:var(--color-go);font-variant-numeric:tabular-nums}.ds-diff-rem{color:var(--color-danger);font-variant-numeric:tabular-nums}.ds-diff-copy{margin-left:auto;background:none;border:0;color:var(--color-ink-faint);cursor:pointer;padding:2px;display:flex}.ds-diff-copy:hover{color:var(--color-ink)}.ds-diff summary:focus-visible{outline:2px solid var(--color-focus);outline-offset:-2px}.ds-diff pre{margin:0;overflow-x:auto;padding:8px;font:400 12px/20px var(--font-mono);color:var(--color-ink-faint)}.ds-diff .ln{display:inline-block;width:36px;padding-right:8px;text-align:right;color:var(--color-ink-faint);user-select:none}.ds-diff .add{color:var(--color-go);background:color-mix(in srgb,var(--color-go) 10%,transparent)}.ds-diff .rem{color:var(--color-danger);background:color-mix(in srgb,var(--color-danger) 10%,transparent)}"
+    },
+    {
+      "name": "Toast (confirmation)",
+      "kind": "custom",
+      "refersTo": "toast",
+      "description": "Quiet confirmation plate, bottom-right, go check icon; errors never appear here — the status band is the single error surface.",
+      "html": "<div class=\"ds-toast\" role=\"status\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"m9 12 2 2 4-4\"/></svg><span>Thread renamed</span></div>",
+      "css": ".ds-toast{display:flex;align-items:center;gap:8px;background:var(--color-panel-raised);border:1px solid var(--color-seam);border-radius:6px;padding:8px 12px;font:400 14px/1.43 var(--font-sans);color:var(--color-ink);box-shadow:0 6px 16px rgb(0 0 0 / 0.45);animation:ds-ignite 220ms cubic-bezier(0.16,1,0.3,1) both}.ds-toast svg{color:var(--color-go)}@keyframes ds-ignite{from{opacity:.4;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}@media (prefers-reduced-motion:reduce){.ds-toast{animation:none}}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Dispatch Desk",
+    "overview": "Aelvyril is an agent workspace styled as a railway signal box. You are the signal operator, not a chat participant: you approve routes (executions) for trains (threads) that run unattended, and every thread ends at the same desk — a plan, a trace, and a diff to merge. The world refuses the chat transcript with bubbles (threads are work, not conversations) and the generic GitHub-dark dashboard clone (state is carried by lit lamps on a dark steel panel, not by stat cards). The ground is dark steel divided by 1px hairline seams into flat panels — no cards, no glass, no gradients. State is a lit lamp drawn from a fixed signal-aspect vocabulary, plus one Schiphol-yellow held exclusively for \"Needs you\" moments. Fira Sans is the single UI voice; JetBrains Mono carries every measurement, always tabular-nums. The signature moments: the route line lighting station by station as the agent works, and the yellow band igniting when the interlock demands a human.",
+    "keyCharacteristics": [
+      "Dark steel grounds (desk → panel → panel-raised → panel-active), separated by hairline seams, flat by default",
+      "Signal-aspect state vocabulary; blue is the route/primary-action color, never a status lamp",
+      "One reserved yellow — \"Needs you\" only, never decorative",
+      "JetBrains Mono for every measurement, always tabular-nums",
+      "Lucide icons only (aria-hidden, never unicode/emoji); binding product vocabulary (\"thread\", never \"conversation\")",
+      "Motion exists only to convey state; prefers-reduced-motion kills all of it"
+    ],
+    "rules": [
+      { "name": "The Reserved Yellow Rule", "body": "#ffce00 means \"Needs you\" and nothing else: the blocked band, the blocked board lamp, and the inverting buttons inside them. It never appears as a lifecycle aspect, a highlight, or decoration.", "section": "colors" },
+      { "name": "The Aspect Rule", "body": "Any new state must join STATUS_META as a lamp + text class (+ pulse). Railway-true: green means the route is clear and the train is moving. Blue (route) is the set-route/primary-action color and is never a lifecycle lamp.", "section": "colors" },
+      { "name": "The No-Inline-Hex Rule", "body": "Components consume tokens via Tailwind utilities (bg-panel, text-ink-muted, border-seam, bg-needsyou) — never inline hex.", "section": "colors" },
+      { "name": "The Mono Measure Rule", "body": "If it is a measurement, it is JetBrains Mono with tabular-nums — cost, tokens, time, duration, line numbers, file paths, station names. Fira Sans never renders a number the operator compares or scans.", "section": "typography" },
+      { "name": "The Flat Desk Rule", "body": "Depth is tonal, not cast: four ground steps separated by 1px seams. No cards, no glass, no gradients, no hover-lift. Shadows exist only for chrome that genuinely floats above the desk.", "section": "elevation" },
+      { "name": "The State-Or-Nothing Rule", "body": "An animation exists only because a state exists to convey; if you cannot name the state, there is no animation. Four authored motions (lamp pulse, band ignite, stream caret, 150ms color transitions), and prefers-reduced-motion kills every one.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do consume tokens as Tailwind utilities (bg-panel, text-ink-muted, border-seam, bg-needsyou) — never inline hex.",
+      "Do render every new state through the aspect map (lamp + text class + optional pulse); extend STATUS_META rather than inventing a color.",
+      "Do set every measurement in JetBrains Mono with tabular-nums.",
+      "Do keep errors in the status band and use toasts for confirmations only.",
+      "Do arm destructive actions in place (\"confirm …?\" + \"no\") — kill-all, delete, abandon.",
+      "Do use binding product vocabulary: thread, spec interview, Ask / Ask + spec, approve & run, Needs you, degraded, kill-all, workspace.",
+      "Do add animation only when a state demands it, and honor prefers-reduced-motion."
+    ],
+    "donts": [
+      "Don't use the reserved yellow (#ffce00) for anything but \"Needs you\" surfaces and their inverting buttons.",
+      "Don't use route blue as a status lamp — blue is the set-route/primary-action color; green is \"clear and moving\".",
+      "Don't introduce cards, glass, gradients, or hover-lift — surfaces are flat panels divided by 1px seams.",
+      "Don't render state as chat bubbles or a transcript; narration is desk-log rows under a clock column.",
+      "Don't use emoji, unicode glyphs, or icon fonts — lucide icons only, aria-hidden.",
+      "Don't say \"conversation\" in the UI — the unit of work is a thread.",
+      "Don't add a second UI font or set a number in Fira Sans where operators compare values.",
+      "Don't clone the GitHub-dark dashboard — no stat cards, no colored badge pills for status; state is a lamp."
+    ]
+  }
+}

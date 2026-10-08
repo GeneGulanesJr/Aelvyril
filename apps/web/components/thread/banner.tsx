@@ -1,4 +1,5 @@
 "use client";
+import { CircleAlert, Hand, Unplug, X } from "lucide-react";
 import type { ThreadState } from "../../lib/use-thread.js";
 
 const BLOCKED_REASONS: Record<"question" | "dialog" | "capped" | "gated", string> = {
@@ -13,58 +14,115 @@ const BLOCKED_REASONS: Record<"question" | "dialog" | "capped" | "gated", string
 };
 
 /**
- * Spec §10 status banners, ported to the thread surface.
- * - Degraded (yellow, persistent): the session host died mid-turn; chat
- *   continues and the next prompt respawns it automatically.
- * - Blocked (orange, persistent): needs-you escalation with a reason (#84) —
- *   unanswered question, blocking dialog, or budget cap exceeded.
- * - Error (red, dismissable): per-request failure or an error envelope.
+ * Spec §10 status bands — one at a time, by precedence:
+ * blocked (the reserved yellow "Needs you" aspect) > error (red, dismissable,
+ * with an optional retry) > degraded (amber, persistent context). The lower
+ * bands stay logically true but yield the surface to the higher one.
  */
-export function Banners({ degraded, blocked, error, onDismissError }: {
+export function Banners({ degraded, blocked, error, onDismissError, onRetry, onGotoSpec, onApprove }: {
   degraded: ThreadState["degraded"];
   blocked: ThreadState["blocked"];
   error: ThreadState["error"];
   onDismissError: () => void;
+  /** Re-run the failed turn — adds a Retry control to the error band. */
+  onRetry?: () => void;
+  /** Jump to the spec panel — backs the question/dialog blocked actions. */
+  onGotoSpec?: () => void;
+  /** Approve the gated action (#81) — backs the gated blocked action. */
+  onApprove?: () => void;
 }) {
-  return (
-    <>
-      {degraded && (
-        <div
-          className="border-b border-[#e3b341]/40 bg-[#e3b341]/15 px-4 py-2 text-xs text-[#e3b341]"
-          data-testid="degraded-banner"
-          role="status"
-        >
-          The agent session was interrupted — your thread is safe. Send your next
-          prompt and the session host respawns automatically.
-        </div>
-      )}
-      {blocked && (
-        <div
-          className="border-b border-[#e3b341]/60 bg-[#bc4c00]/20 px-4 py-2 text-xs text-[#f0883e]"
-          data-testid="blocked-banner"
-          role="status"
-        >
+  if (blocked) {
+    return (
+      <div
+        className="animate-band-ignite flex items-center gap-3 bg-needsyou px-4 py-2.5 text-sm font-medium text-needsyou-ink"
+        data-testid="blocked-banner"
+        role="alert"
+      >
+        <Hand aria-hidden className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1">
           Needs you — blocked{blocked === "capped" ? " (budget cap)" : ""}:{" "}
           {BLOCKED_REASONS[blocked]}
-        </div>
-      )}
-      {error && (
-        <div
-          className="flex items-center justify-between border-b border-[#f85149]/40 bg-[#f85149]/15 px-4 py-2 text-xs text-[#f85149]"
-          data-testid="error-banner"
-          role="alert"
-        >
-          <span>{error}</span>
+        </span>
+        {blocked === "question" && onGotoSpec && (
           <button
-            className="ml-3 text-[#8b96a8] hover:text-[#e6edf3]"
+            type="button"
+            className="shrink-0 rounded bg-needsyou-ink px-2.5 py-1 text-xs font-semibold text-needsyou transition-colors duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={onGotoSpec}
+          >
+            Answer the questions
+          </button>
+        )}
+        {blocked === "dialog" && onGotoSpec && (
+          <button
+            type="button"
+            className="shrink-0 rounded bg-needsyou-ink px-2.5 py-1 text-xs font-semibold text-needsyou transition-colors duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={onGotoSpec}
+          >
+            Open the trace
+          </button>
+        )}
+        {blocked === "gated" && onApprove && (
+          <button
+            type="button"
+            className="shrink-0 rounded bg-needsyou-ink px-2.5 py-1 text-xs font-semibold text-needsyou transition-colors duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={onApprove}
+          >
+            {"Review & approve"}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div
+        className="flex items-center gap-2 border-b border-danger/30 bg-danger/15 px-4 py-2 text-sm text-danger"
+        data-testid="error-banner"
+        role="alert"
+      >
+        <CircleAlert aria-hidden className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1">{error}</span>
+        <span className="ml-auto flex shrink-0 items-center gap-2">
+          {onRetry && (
+            <button
+              type="button"
+              className="text-danger underline-offset-2 transition-colors duration-150 hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+              data-testid="retry-error"
+              onClick={onRetry}
+            >
+              Retry turn
+            </button>
+          )}
+          <button
+            type="button"
+            className="rounded p-0.5 text-danger transition-colors duration-150 hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-40"
             data-testid="dismiss-error"
             onClick={onDismissError}
             aria-label="Dismiss error"
           >
-            ✕
+            <X aria-hidden className="size-3.5" />
           </button>
-        </div>
-      )}
-    </>
-  );
+        </span>
+      </div>
+    );
+  }
+
+  if (degraded) {
+    return (
+      <div
+        className="flex items-center gap-2 border-b border-caution/30 bg-caution/15 px-4 py-2 text-sm text-caution"
+        data-testid="degraded-banner"
+        role="status"
+      >
+        <Unplug aria-hidden className="size-4 shrink-0" />
+        <span>
+          The agent session was interrupted — your thread is safe. Send your next
+          prompt and the session host respawns automatically.
+        </span>
+      </div>
+    );
+  }
+
+  return null;
 }

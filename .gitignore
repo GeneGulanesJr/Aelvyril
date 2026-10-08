@@ -16,6 +16,8 @@ out/
 
 # Machine-local agent/tool dirs
 .agents/
+**/.impeccable/*
+!**/.impeccable/design.json
 .bench-venv/
 .claude/
 .kilo/

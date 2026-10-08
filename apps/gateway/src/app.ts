@@ -24,6 +24,7 @@ import { createRateLimiter, type RateLimiter } from "./rate-limit.js";
 import { createMetrics, type Metrics } from "./metrics.js";
 import { runHealthCheck, defaultServiceProbes, type BackingServiceProbes } from "./health.js";
 import { getUpdateStatus, applyUpdate } from "./updater.js";
+import { computeChildEnv } from "./child-env.js";
 
 export interface AppOptions {
   dbPath: string;
@@ -107,51 +108,9 @@ export interface AppOptions {
 
 export type App = FastifyInstance;
 
-/**
- * Review P1: the exact process.env keys a session-host child may inherit.
- * Children used to get `{ ...process.env }`, leaking operator secrets
- * (CLERK_*, GATEWAY_*) into every pi process. Only baseline OS vars, LLM
- * provider config, and the per-thread namespace key pass through.
- */
-const CHILD_ENV_ALLOWLIST: readonly string[] = [
-  "PATH",
-  "HOME",
-  "LANG",
-  "LC_ALL",
-  "TMPDIR",
-  "TERM",
-  // LLM provider config for real pi sessions.
-  "ANTHROPIC_API_KEY",
-  "OPENAI_API_KEY",
-  "GOOGLE_API_KEY",
-  "GOOGLE_GENERATIVE_AI_API_KEY",
-  "GEMINI_API_KEY",
-  "ANTHROPIC_BASE_URL",
-  "OPENAI_BASE_URL",
-  // D7: per-thread namespace key plumbed to the session host.
-  "LAPIS_PROJECT_KEY",
-];
-
-/** Keys that must never reach a child, even via the opt-in extra allowlist. */
-const CHILD_ENV_NEVER = /^(CLERK_|GATEWAY_)/;
-
-/**
- * Computes the child spawn env: the base allowlist ∪ the caller's opt-in
- * extra keys ∪ extraEnv (gateway-controlled, e.g. LAPIS_PROJECT_KEY).
- * Exported for the allowlist unit test.
- */
-export function computeChildEnv(
-  extraEnv: Record<string, string>,
-  extraAllowlist: readonly string[] = [],
-): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const key of [...CHILD_ENV_ALLOWLIST, ...extraAllowlist]) {
-    if (CHILD_ENV_NEVER.test(key)) continue;
-    const value = process.env[key];
-    if (value !== undefined) env[key] = value;
-  }
-  return { ...env, ...extraEnv };
-}
+// Re-exported for the allowlist unit test (app.test.ts); the implementation
+// lives in child-env.ts so non-app paths (auto-verify exec) share the boundary.
+export { computeChildEnv };
 
 /**
  * Review P3: constant-time bearer comparison for /metrics. Both sides are

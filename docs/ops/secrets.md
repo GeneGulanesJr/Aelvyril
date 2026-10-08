@@ -51,7 +51,7 @@ rotation but recommend it annually. Google API keys have a max age of
 Some env values change over time and need updates:
 
 - `GATEWAY_RATE_LIMIT_*` — adjust if abuse patterns change
-- `GATEWAY_MAX_CONVERSATIONS_PER_USER` — relax for paid users
+- `GATEWAY_MAX_THREADS` — relax for paid users (default 30)
 - `GATEWAY_WORKSPACE_ALLOWLIST` — add repos as they're onboarded
 - `PI_PROVIDER` / `PI_MODEL` — swap when the platform standardizes
 

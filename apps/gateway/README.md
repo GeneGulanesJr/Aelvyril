@@ -34,7 +34,7 @@ reverse proxy (`infra/docker/Caddyfile`), not in this app.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/healthz` | Liveness + readiness. Probes backing services via env. Returns 503 on probe failure. |
-| `GET` | `/metrics` | Prometheus text format. Unauthenticated (internal network only). |
+| `GET` | `/metrics` | Prometheus text format. Fail-closed: 401 unless `GATEWAY_METRICS_SECRET` is configured (Bearer required) or `GATEWAY_METRICS_PUBLIC=1`. |
 | `POST` | `/v1/conversations` | Create conversation. 503 on per-user cap, 400 on disallowed workspace. |
 | `GET` | `/v1/conversations` | List conversations in the caller's namespace. |
 | `GET` | `/v1/conversations/:id` | Get one. |
@@ -57,7 +57,26 @@ reverse proxy (`infra/docker/Caddyfile`), not in this app.
 | `GATEWAY_WORKSPACE_ALLOWLIST` | empty (default-deny) | Comma-separated ABSOLUTE paths for workspace allowlist. Relative paths and `..` rejected. |
 | `GATEWAY_ADMIN_USER_IDS` | empty (default-deny) | #76: comma-separated Clerk user ids allowed to call `/v1/admin/*` (update status/apply). |
 | `GATEWAY_RATE_LIMIT_PER_MIN` | `20` | Per-user rate limit on `/prompt`. Token-bucket capacity 20, refill 20/60/sec. |
-| `GATEWAY_MAX_CONVERSATIONS_PER_USER` | `3` | Per-user cap on total conversations. |
+| `GATEWAY_MAX_THREADS` | `30` | Per-user cap on total threads. 503 `conversation_limit_reached` on exceed. |
+| `GATEWAY_MAX_RUNNING_HOSTS` | `2` | #83: concurrent running session hosts per user (the real resource cap). |
+| `GATEWAY_MAX_SESSION_HOSTS` | `100` | #83: session hosts across all threads per user (resume ceiling). |
+| `GATEWAY_MAX_THREAD_COST_USD` | unset (no cap) | #84: per-thread budget in USD; blocked + refused prompts past the cap. |
+| `GATEWAY_QUEUE_INTERVAL_MS` | `2000` | #83: delay between queued prompt dispatches. |
+| `GATEWAY_METRICS_SECRET` | unset (401) | #85: Bearer secret for `/metrics`. Fail-closed: unset = 401. |
+| `GATEWAY_METRICS_PUBLIC` | unset (401) | #85: `1` serves `/metrics` with no secret (opt-in). |
+| `CLERK_AUTHORIZED_PARTIES` | unset | #85: comma-separated azp origins pinned during JWT verify. |
+| `GATEWAY_MAX_SSE_STREAMS` | `10` | #85: concurrent SSE streams per user; excess connects rejected. |
+| `GATEWAY_SSE_REPLAY_PAGE` | `500` | #85: max events per `Last-Event-ID` replay page. |
+| `GATEWAY_EVENT_RETENTION` | `10000` | #85: event-log rows kept per thread; `0` disables retention. |
+| `GATEWAY_SPEC_MAX_ROUNDS` | `3` | #80: bounded question budget per spec interview. |
+| `GATEWAY_TRUST_THRESHOLD` | `5` | #81: merges-without-revision before autonomy escalates; `0` disables. |
+| `GATEWAY_SPEC_HEURISTIC` | `auto` | Spec-interview kill switch: `off` forces auto mode to never trigger. |
+| `GATEWAY_DIALOG_MODE` | `auto-responder` | #84: `blocked` escalates blocking dialogs to the needs-you state. |
+| `GATEWAY_VERIFY` | on | #82: `0` disables the auto-verify loop entirely. |
+| `GATEWAY_VERIFY_COMMANDS` | auto-detect | #82: comma-separated override for the workspace's test/lint/typecheck scripts. |
+| `GATEWAY_VERIFY_RETRIES` | `3` | #82: self-retry budget before escalating to the user. |
+| `GATEWAY_VERIFY_TIMEOUT_MS` | `300000` | #82: per-verify-command timeout. |
+| `PI_FAKE_ALLOW_NON_LOOPBACK` | unset | #78 container ack: permits the fake verifier on a non-loopback bind. |
 | `GATEWAY_LOG` | not "silent" → JSON logs | Set to `silent` to disable structured pino output (dev). |
 | `SSE_HEARTBEAT_MS` | `15000` | SSE keepalive ping interval. Lower for tighter proxy timeouts. |
 | `PI_FAKE` | unset | `1` = use the scripted fake child (no real LLM). |
@@ -66,6 +85,7 @@ reverse proxy (`infra/docker/Caddyfile`), not in this app.
 | `PI_MODEL` | unset (→ default) | Pinned at spawn. |
 | `PI_COMMAND_ARGS` | unset | JSON array of extra args (Windows node.exe + cli.js path workaround). |
 | `FAKE_DELAY_MS` | `5` | Fake-child per-message delay. |
+| `FAKE_SPEC_QUESTIONS` / `FAKE_PLAN_JSON` / `FAKE_GATED_TOOL` / `FAKE_EDIT_FILE` / `FAKE_UI_DIALOG` | unset | Scripted fake-child scenarios (see `fixtures/fake-pi.mjs`; only these cross the child env allowlist in fake mode). |
 | `LAPIS_URL` | unset | Enables the `/healthz` probe for LaPis. |
 | `SANDD_URL` | unset | Enables the `/healthz` probe for PiSandboxed. |
 | `LAYAMCP_URL` | unset | Enables the `/healthz` probe for LayaMCP. |

@@ -4,6 +4,11 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: the workflow only checks out code — no token-scoped
+# writes (GITHUB_TOKEN runs with repo-default permissions otherwise).
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest

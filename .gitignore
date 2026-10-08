@@ -29,6 +29,8 @@ out/
 
 # Docker dev state
 infra/.docker-state/
+# compose WORKSPACES_HOST_PATH default — created on first `up` (gateway /workspaces)
+infra/workspaces/
 
 # Gateway dev database
 data/

@@ -7,24 +7,30 @@ Docker stack + smoke verification for the Aelvyril agent platform (spec §4/§5/
 ```
 infra/
 ├── README.md           ← this file
-├── compose.yaml        ← 5 services (web, gateway, caddy, lapis, sandd, layamcp)
+├── compose.yaml        ← 5 services: web, gateway, layamcp (dev + prod
+│                          profiles) + caddy, sandd (prod profile only).
+│                          LaPis is NOT a service — it runs in-process
+│                          inside the gateway (LAPIS_HOME on gateway-data).
+├── .env.example        ← template for every var compose interpolates
+│                          (copy to infra/.env)
 ├── docker/
 │   ├── Caddyfile       ← TLS termination (Let's Encrypt via ACME)
 │   ├── Dockerfile.web       ← Next.js standalone, Node 22 slim, non-root
-│   ├── Dockerfile.gateway   ← Node 22 + @mariozechner/pi, env-file-if-exists
-│   ├── Dockerfile.lapis     ← built from ../LaPis
+│   ├── Dockerfile.gateway   ← Node 22 + @earendil-works/pi-coding-agent
+│   │                          (bin: `pi`), env-file-if-exists
 │   ├── Dockerfile.sandd     ← built from ../PiSandboxed, /dev/kvm + SYS_ADMIN
-│   └── Dockerfile.layamcp   ← built from ../LayaMCP, CPU-only torch
+│   └── Dockerfile.layamcp   ← built from ../../DecisionMCP via the
+│                              `decisionmcp_src` named context, CPU-only torch
 └── smoke.sh            ← boots compose dev profile + verifies healthchecks
 ```
 
 ## Quick start
 
-Requires Docker + docker compose v2 + sibling repos cloned at `../LaPis`, `../PiSandboxed`, `../LayaMCP`. Operator must pre-seed the sandd auth token file (see comment in compose.yaml).
+Requires Docker + docker compose v2 + sibling repos cloned at `../LaPis`, `../PiSandboxed`, `../DecisionMCP` (ex-LayaMCP, renamed 2026-10-05). Operator must pre-seed the sandd auth token file (see comment in compose.yaml).
 
 ```sh
 # Dev profile: web 3000 + gateway 8787 published LOOPBACK-ONLY (#79);
-# lapis/sandd/layamcp stay internal.
+# layamcp stays internal (sandd is prod-profile only).
 docker compose -f infra/compose.yaml --profile dev up -d --build
 
 # Tail logs
@@ -54,7 +60,7 @@ CSP_CLERK_ORIGINS="https://clerk.acmeinc.com wss://clerk.acmeinc.com" \
   convenience; plaintext never leaves the host. To drop them entirely,
   add an override file with `ports: !override []` under both services and
   start with `-f infra/compose.yaml -f <override>`.
-- **Internal-only:** lapis, layamcp (and sandd via host networking).
+- **Internal-only:** layamcp (and sandd via host networking).
 - The gateway is never exposed unauthenticated: `/metrics` is gated by
   `GATEWAY_METRICS_SECRET`, and everything under `/v1/*` requires a Clerk
   JWT; in prod those paths are only reachable through the Caddy route.
@@ -64,7 +70,7 @@ CSP_CLERK_ORIGINS="https://clerk.acmeinc.com wss://clerk.acmeinc.com" \
 These patches live in the sibling repos — not in `infra/`:
 
 - **LaPis @ `c49aeb3`** (`docs/decision-engine-plan` branch) — `LAPIS_PROJECT_KEY` env override at the top of `resolveProjectKey()` and `detectProject()` in LaPis. Without this, multi-user access to the same repo would collide on `basename(cwd)` and silently leak memory across users. See ADR 0002.
-- **LayaMCP @ `e08ced4`** (`main`) — drops broken `mcp.server.fastapi.create_fastapi_app` (crashes on every released SDK today), mounts `mcp.server.sse.SseServerTransport` on plain FastAPI, pins `mcp[server]<2`, adds `GET /health`. Without this, `layamcp` would not start at all.
+- **DecisionMCP (ex-LayaMCP) @ `e08ced4`** (`main`) — drops broken `mcp.server.fastapi.create_fastapi_app` (crashes on every released SDK today), mounts `mcp.server.sse.SseServerTransport` on plain FastAPI, pins `mcp[server]<2`, adds `GET /health`. Without this, `layamcp` would not start at all.
 
 ## Notable constraints
 
@@ -82,7 +88,7 @@ Backing-service Dockerfiles build from sibling repos:
 ├── Aelvyril/         ← this repo
 ├── LaPis/            ← LAPIS_PROJECT_KEY patch lives here
 ├── PiSandboxed/
-└── LayaMCP/          ← FastAPI patch lives here
+└── DecisionMCP/      ← FastAPI patch lives here (ex-LayaMCP, renamed 2026-10-05)
 ```
 
 Prebuilt images replace the sibling-checkout builds once each backing service has a release.
@@ -90,11 +96,22 @@ Prebuilt images replace the sibling-checkout builds once each backing service ha
 ## Verification
 
 `infra/smoke.sh`:
-1. Boots `docker compose --profile dev up -d --build`.
-2. Polls `http://127.0.0.1:8787/healthz` until the gateway responds 200.
-3. Probes `http://layamcp:8765/health` from a one-off container (layamcp is internal-only).
-4. Polls `http://127.0.0.1:3000/` until the web responds 200.
-5. Exits 0 on success, exits 3 on healthcheck failure.
-6. With `--down`, also tears down compose.
+
+1. Preflight (before anything boots): requires `NEXT_PUBLIC_AUTH_DISABLED=1`
+   + `PI_FAKE=1` in `infra/.env` (or real Clerk keys in the env); with
+   `PI_FAKE=1` and no Clerk key it also requires
+   `PI_FAKE_ALLOW_NON_LOOPBACK=1`. Preflight failures exit 2.
+2. Boots `docker compose --profile dev up -d --build`.
+3. Polls `http://127.0.0.1:8787/healthz` until the gateway responds 200
+   (30 × 1s attempts).
+4. Polls `http://127.0.0.1:3000/` until the web responds 200 (30 × 1s
+   attempts). It does NOT probe layamcp from a one-off container — a 200
+   from gateway `/healthz` already implies layamcp answered its TCP probe,
+   because compose sets `LAYAMCP_URL` on the gateway.
+5. Exit codes: 0 = pass; 2 = preflight failure (or unknown argument);
+   3 = a health poll never went healthy.
+6. With `--down`, compose is torn down on EVERY exit path (the argument is
+   parsed up front and the teardown is wired through the script's EXIT
+   trap, which preserves the original rc).
 
 The smoke is intentionally minimal — it proves the stack is up + Clerk routing works. Full sign-in → prompt → SSE round-trip is covered by the live browser smoke + the e2e Playwright tests (see `e2e/` at repo root).

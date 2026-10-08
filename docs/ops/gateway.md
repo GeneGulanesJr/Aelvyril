@@ -318,12 +318,15 @@ The compose.yaml wires these env vars automatically in the prod profile.
 
 ### `/metrics` (Prometheus text format)
 
-Unauthenticated by default — set `GATEWAY_METRICS_SECRET` (#85) to require
-`Authorization: Bearer <secret>` on scrapes (e.g. when the gateway is
-exposed directly rather than behind a gating reverse proxy).
+Fail-closed (#85): with no configuration `/metrics` answers **401**. Set
+`GATEWAY_METRICS_SECRET` to require `Authorization: Bearer <secret>` on
+scrapes (e.g. when the gateway is exposed directly rather than behind a
+gating reverse proxy), or set `GATEWAY_METRICS_PUBLIC=1` to deliberately
+serve it unauthenticated (local networks only).
 
 ```sh
 curl -s http://127.0.0.1:8787/metrics
+# 401 unless the secret is set (or GATEWAY_METRICS_PUBLIC=1).
 # or, with the scrape secret set:
 curl -s -H 'Authorization: Bearer <secret>' http://127.0.0.1:8787/metrics
 ```

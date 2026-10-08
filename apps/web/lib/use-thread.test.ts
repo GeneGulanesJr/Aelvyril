@@ -15,15 +15,24 @@ const instances: Array<{
   abortThread: ReturnType<typeof vi.fn>;
   deleteThread: ReturnType<typeof vi.fn>;
   onEnvelope: ((e: EventEnvelope) => void) | null;
+  onLost: ((reason: "not_found" | "gave_up") => void) | null;
 }> = [];
 
 vi.mock("./api.js", () => ({
   GatewayClient: vi.fn().mockImplementation(() => {
     const inst = {
-      openStream: vi.fn((_id: string, onEnvelope: (e: EventEnvelope) => void) => {
-        inst.onEnvelope = onEnvelope;
-        return () => {};
-      }),
+      openStream: vi.fn(
+        (
+          _id: string,
+          onEnvelope: (e: EventEnvelope) => void,
+          _signal: AbortSignal | undefined,
+          onLost: (reason: "not_found" | "gave_up") => void,
+        ) => {
+          inst.onEnvelope = onEnvelope;
+          inst.onLost = onLost;
+          return () => {};
+        },
+      ),
       prompt: vi.fn().mockResolvedValue(undefined),
       patchSpec: vi.fn().mockResolvedValue(undefined),
       approveSpec: vi.fn().mockResolvedValue(undefined),
@@ -33,6 +42,7 @@ vi.mock("./api.js", () => ({
       abortThread: vi.fn().mockResolvedValue(undefined),
       deleteThread: vi.fn().mockResolvedValue(undefined),
       onEnvelope: null as ((e: EventEnvelope) => void) | null,
+      onLost: null as ((reason: "not_found" | "gave_up") => void) | null,
     };
     instances.push(inst);
     return inst;
@@ -78,12 +88,14 @@ describe("useThread", () => {
     expect(instances.length).toBe(before); // no client created for null id
   });
 
-  it("ask forwards message + specMode to client.prompt", async () => {
+  it("ask forwards message + specMode to client.prompt and resolves true on success", async () => {
     const { result, inst } = await renderThread();
+    let ok: boolean | undefined;
     await act(async () => {
-      await result.current.ask("add RBAC", "force");
+      ok = await result.current.ask("add RBAC", "force");
     });
     expect(inst.prompt).toHaveBeenCalledWith("t1", { message: "add RBAC", specMode: "force" });
+    expect(ok).toBe(true);
   });
 
   it("reduces spec envelopes into state", async () => {
@@ -293,13 +305,16 @@ describe("useThread", () => {
     expect(result.current.trace).toEqual(["from B"]);
   });
 
-  it("mutation failures land in the error banner instead of rejecting", async () => {
+  it("mutation failures land in the error banner and resolve false instead of rejecting", async () => {
     const { result, inst } = await renderThread();
     inst.prompt.mockRejectedValueOnce(new Error("prompt failed: 500"));
     inst.approveSpec.mockRejectedValueOnce(new Error("approve failed: 403"));
+    let ok: boolean | undefined;
     await act(async () => {
-      await result.current.ask("hi", "auto");
+      ok = await result.current.ask("hi", "auto");
     });
+    // Boolean send contract: false = failed, so ThreadInput keeps the text.
+    expect(ok).toBe(false);
     expect(result.current.error).toBe("prompt failed: 500");
     expect(result.current.waiting).toBe(false);
     await act(async () => {
@@ -310,5 +325,37 @@ describe("useThread", () => {
       result.current.dismissError();
     });
     expect(result.current.error).toBeNull();
+  });
+
+  it("a terminal stream loss clears waiting and surfaces the error (no ghost Stop button)", async () => {
+    const { result, inst } = await renderThread();
+    await act(async () => {
+      inst.onEnvelope!(env("session_state", { state: "streaming" }, 0));
+    });
+    expect(result.current.waiting).toBe(true);
+    await act(async () => {
+      inst.onLost!("gave_up");
+    });
+    expect(result.current.waiting).toBe(false);
+    expect(result.current.error).toBe(
+      "Live updates stopped after repeated failures — reload to reconnect.",
+    );
+  });
+
+  it("spec_status envelopes push the live status to onStatus (#83 sidebar)", async () => {
+    const onStatus = vi.fn();
+    const getToken = vi.fn().mockResolvedValue("tok");
+    renderHook(() => useThread("t1", { getToken, onStatus }));
+    await act(async () => {});
+    const inst = instances[instances.length - 1]!;
+    await act(async () => {
+      inst.onEnvelope!(env("spec_status", { status: "running" }, 0));
+    });
+    expect(onStatus).toHaveBeenCalledWith("running");
+    // Non-status envelopes don't fire it.
+    await act(async () => {
+      inst.onEnvelope!(env("text_delta", { delta: "x" }, 1));
+    });
+    expect(onStatus).toHaveBeenCalledTimes(1);
   });
 });

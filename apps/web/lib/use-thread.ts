@@ -30,6 +30,11 @@ export interface UseThreadDeps {
   /** Clerk token getter — threaded through so the hook stays render-agnostic. */
   getToken?: () => Promise<string | null>;
   gatewayUrl?: string;
+  /** Live status updates for the sidebar (#83): fired on each spec_status
+   *  envelope so the ACTIVE entry in the thread list tracks the header pill
+   *  instead of its mount-time snapshot. Kept as a callback because the
+   *  threads list itself lives above the hook. */
+  onStatus?: (status: ThreadStatus) => void;
 }
 
 /** Clean slate for a thread — also the reset target when threadId changes. */
@@ -56,7 +61,9 @@ export function useThread(
   threadId: string | null,
   deps: UseThreadDeps = {},
 ): ThreadState & {
-  ask: (prompt: string, specMode: "auto" | "force" | "off") => Promise<void>;
+  /** Resolves true when the prompt was accepted, false when it failed
+   *  (the error banner is set) — callers use it to keep typed text alive. */
+  ask: (prompt: string, specMode: "auto" | "force" | "off") => Promise<boolean>;
   submitAnswers: (answers: Record<string, string>) => Promise<void>;
   editSpec: (field: "goal" | "filesAffected" | "plan" | "risks", value: string | string[]) => Promise<void>;
   approve: () => Promise<void>;
@@ -66,9 +73,13 @@ export function useThread(
   stop: () => Promise<void>;
   dismissError: () => void;
 } {
-  const { getToken, gatewayUrl } = deps;
+  const { getToken, gatewayUrl, onStatus } = deps;
   const [state, setState] = useState<ThreadState>(initialThreadState);
   const clientRef = useRef<GatewayClient | null>(null);
+  // Ref so a fresh inline callback per render can't re-open the stream (the
+  // effect below intentionally doesn't depend on it).
+  const onStatusRef = useRef(onStatus);
+  onStatusRef.current = onStatus;
 
   useEffect(() => {
     if (!threadId) return;
@@ -87,11 +98,22 @@ export function useThread(
     // instead of an invisible 1s retry loop.
     const close = client.openStream(
       threadId,
-      (e) => setState((s) => applyEnvelope(s, e)),
+      (e) => {
+        setState((s) => applyEnvelope(s, e));
+        // #83 sidebar: forward authoritative live status so the thread list's
+        // ACTIVE entry tracks the header pill (the list itself lives above).
+        if (e.kind === "spec_status") onStatusRef.current?.(e.payload.status);
+      },
       undefined,
       (reason) =>
+        // Terminal stream loss must not leave a turn "in flight" forever:
+        // the Stop button and steer-queued sends would persist against a
+        // dead stream until reload. waiting reuses the existing shape; the
+        // error banner carries the stream-loss messaging (degraded stays
+        // reserved for the session host actually dying, via session_state).
         setState((s) => ({
           ...s,
+          waiting: false,
           error:
             reason === "not_found"
               ? "This thread no longer exists."
@@ -105,15 +127,17 @@ export function useThread(
   }, [threadId, getToken, gatewayUrl]);
 
   const ask = useCallback(
-    async (message: string, specMode: "auto" | "force" | "off") => {
-      if (!clientRef.current || !threadId) return;
+    async (message: string, specMode: "auto" | "force" | "off"): Promise<boolean> => {
+      if (!clientRef.current || !threadId) return false;
       // Spec §6: a send while a turn is mid-flight queues as a steer.
       const steer = state.waiting ? { streamingBehavior: "steer" as const } : {};
       setState((s) => ({ ...s, waiting: true }));
       try {
         await clientRef.current.prompt(threadId, { message, specMode, ...steer });
+        return true;
       } catch (err) {
         setState((s) => ({ ...s, error: toErrorMessage(err) }));
+        return false;
       } finally {
         setState((s) => ({ ...s, waiting: false }));
       }

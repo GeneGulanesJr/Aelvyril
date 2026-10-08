@@ -1,4 +1,4 @@
-import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ThreadPage from "./page.js";
 
@@ -28,8 +28,9 @@ const h = vi.hoisted(() => {
     killAllThreads: vi.fn(),
   };
   // Mutable slice of the useThread mock — tests flip error to null so the
-  // page-level actionError path (new-thread create failures) is reachable.
-  const hook = { error: null as string | null };
+  // page-level actionError path (new-thread create failures) is reachable,
+  // and grab the deps.onStatus callback to simulate live spec_status events.
+  const hook = { error: null as string | null, onStatus: null as ((s: string) => void) | null };
   return { mockGetToken, push, nav, client, hook };
 });
 
@@ -43,12 +44,15 @@ vi.mock("../../../lib/api.js", () => ({
 }));
 
 vi.mock("../../../lib/use-thread.js", () => ({
-  useThread: () => ({
-    status: "draft", statusLive: false, questions: [], draft: null, plan: ["step1"], trace: [], diff: [],
-    error: h.hook.error, degraded: true, blocked: null, waiting: false, usage: null,
-    ask: vi.fn(), submitAnswers: vi.fn(), editSpec: vi.fn(), approve: vi.fn(), abandon: vi.fn(), retry: vi.fn(),
-    stop: vi.fn(), dismissError: vi.fn(),
-  }),
+  useThread: (_id: string | null, deps?: { onStatus?: (s: string) => void }) => {
+    h.hook.onStatus = deps?.onStatus ?? null;
+    return {
+      status: "draft", statusLive: false, questions: [], draft: null, plan: ["step1"], trace: [], diff: [],
+      error: h.hook.error, degraded: true, blocked: null, waiting: false, usage: null,
+      ask: vi.fn(), submitAnswers: vi.fn(), editSpec: vi.fn(), approve: vi.fn(), abandon: vi.fn(), retry: vi.fn(),
+      stop: vi.fn(), dismissError: vi.fn(),
+    };
+  },
 }));
 
 function threadRow(id: string, overrides: Record<string, unknown> = {}) {
@@ -63,6 +67,7 @@ describe("ThreadPage", () => {
   beforeEach(() => {
     h.nav.params.id = "t1";
     h.hook.error = null;
+    h.hook.onStatus = null;
     h.push.mockClear();
     h.client.listThreads.mockReset().mockResolvedValue([threadRow("t1", { title: "add RBAC" })]);
     h.client.createThread.mockReset().mockResolvedValue(threadRow("t-new"));
@@ -160,5 +165,50 @@ describe("ThreadPage", () => {
     await waitFor(() =>
       expect(screen.getByTestId("thread-t1").textContent).toContain("abandoned"),
     );
+  });
+
+  it("a failed listThreads load surfaces the error banner", async () => {
+    h.client.listThreads.mockRejectedValueOnce(new Error("list threads failed: 503"));
+    render(<ThreadPage />);
+    const banner = await screen.findByTestId("error-banner");
+    expect(banner.textContent).toContain("list threads failed: 503");
+  });
+
+  it("a failed kill-all surfaces the error banner and keeps the list", async () => {
+    render(<ThreadPage />);
+    await screen.findByTestId("new-thread");
+    h.client.killAllThreads.mockRejectedValueOnce(new Error("kill-all failed: 500"));
+    fireEvent.click(screen.getByTestId("kill-all-button")); // arm
+    fireEvent.click(screen.getByTestId("kill-all-button")); // confirm
+    const banner = await screen.findByTestId("error-banner");
+    expect(banner.textContent).toContain("kill-all failed: 500");
+    expect(screen.getByTestId("thread-t1")).toBeTruthy();
+  });
+
+  it("a failed delete surfaces the error banner, keeps the thread and stays put", async () => {
+    render(<ThreadPage />);
+    await screen.findByTestId("new-thread");
+    h.client.deleteThread.mockRejectedValueOnce(new Error("delete failed: 409"));
+    fireEvent.click(screen.getByTestId("delete-button"));
+    fireEvent.click(screen.getByTestId("delete-button"));
+    const banner = await screen.findByTestId("error-banner");
+    expect(banner.textContent).toContain("delete failed: 409");
+    expect(screen.getByTestId("thread-t1")).toBeTruthy();
+    expect(h.push).not.toHaveBeenCalled();
+  });
+
+  it("live spec_status updates the ACTIVE thread's sidebar pill (#83)", async () => {
+    render(<ThreadPage />);
+    await screen.findByTestId("new-thread");
+    expect(screen.getByTestId("thread-t1").textContent).toContain("draft");
+    expect(h.hook.onStatus).toBeTruthy();
+    await act(async () => {
+      h.hook.onStatus!("running");
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-t1").textContent).toContain("running"),
+    );
+    // Other list entries are untouched by the live merge.
+    expect(screen.getByTestId("thread-t1").textContent).not.toContain("draft");
   });
 });

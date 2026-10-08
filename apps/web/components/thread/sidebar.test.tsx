@@ -1,6 +1,7 @@
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ThreadSidebar } from "./sidebar.js";
+import { UIProvider } from "../crew/ui-mode.js";
 import type { Thread } from "@aelvyril/shared";
 
 const threads: Thread[] = [
@@ -9,7 +10,10 @@ const threads: Thread[] = [
 ];
 
 describe("ThreadSidebar", () => {
-  beforeEach(() => cleanup());
+  beforeEach(() => {
+    cleanup();
+    window.localStorage.clear();
+  });
 
   it("renders threads with status pills", () => {
     render(<ThreadSidebar threads={threads} activeId="t1" onSelect={() => {}} onCreate={() => {}} />);
@@ -70,13 +74,15 @@ describe("ThreadSidebar", () => {
   it("kill all requires a second confirming click (#84)", () => {
     const onKillAll = vi.fn();
     render(
-      <ThreadSidebar
-        threads={threads}
-        activeId="t1"
-        onSelect={() => {}}
-        onCreate={() => {}}
-        onKillAll={onKillAll}
-      />,
+      <UIProvider>
+        <ThreadSidebar
+          threads={threads}
+          activeId="t1"
+          onSelect={() => {}}
+          onCreate={() => {}}
+          onKillAll={onKillAll}
+        />
+      </UIProvider>,
     );
     fireEvent.click(screen.getByTestId("kill-all-button"));
     expect(onKillAll).not.toHaveBeenCalled();
@@ -149,5 +155,43 @@ describe("ThreadSidebar", () => {
     expect(closed!.querySelector('[data-testid="thread-t1"]')).toBeTruthy();
     expect(closed!.querySelector('[data-testid="thread-t2"]')).toBeTruthy();
     expect(closed!.querySelector('[data-testid="thread-t3"]')).toBeNull();
+  });
+
+  it("the footer hosts the view mode toggle, desk pressed by default", () => {
+    render(
+      <UIProvider>
+        <ThreadSidebar threads={threads} activeId="t1" onSelect={() => {}} onCreate={() => {}} onKillAll={() => {}} />
+      </UIProvider>,
+    );
+    expect(screen.getByTestId("ui-mode-toggle")).toBeTruthy();
+    expect(screen.getByText("view")).toBeTruthy();
+    expect(screen.getByTestId("ui-mode-desk").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("ui-mode-crew").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("switching to Crew flips aria-pressed and persists the choice", () => {
+    render(
+      <UIProvider>
+        <ThreadSidebar threads={threads} activeId="t1" onSelect={() => {}} onCreate={() => {}} onKillAll={() => {}} />
+      </UIProvider>,
+    );
+    fireEvent.click(screen.getByTestId("ui-mode-crew"));
+    expect(screen.getByTestId("ui-mode-crew").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("ui-mode-desk").getAttribute("aria-pressed")).toBe("false");
+    expect(window.localStorage.getItem("aelvyril.ui-mode")).toBe("crew");
+  });
+
+  it("switching back to Dispatch restores the desk default", () => {
+    window.localStorage.setItem("aelvyril.ui-mode", "crew");
+    render(
+      <UIProvider>
+        <ThreadSidebar threads={threads} activeId="t1" onSelect={() => {}} onCreate={() => {}} onKillAll={() => {}} />
+      </UIProvider>,
+    );
+    expect(screen.getByTestId("ui-mode-crew").getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByTestId("ui-mode-desk"));
+    expect(screen.getByTestId("ui-mode-desk").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("ui-mode-crew").getAttribute("aria-pressed")).toBe("false");
+    expect(window.localStorage.getItem("aelvyril.ui-mode")).toBe("desk");
   });
 });

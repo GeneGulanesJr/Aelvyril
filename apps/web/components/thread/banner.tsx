@@ -1,6 +1,8 @@
 "use client";
 import { CircleAlert, Hand, Unplug, X } from "lucide-react";
 import type { ThreadState } from "../../lib/use-thread.js";
+import { Engineer } from "../crew/engineer.js";
+import { useUiMode } from "../crew/ui-mode.js";
 
 const BLOCKED_REASONS: Record<"question" | "dialog" | "capped" | "gated", string> = {
   question: "The agent asked a question — answer it in the spec panel.",
@@ -31,6 +33,8 @@ export function Banners({ degraded, blocked, error, onDismissError, onRetry, onG
   /** Approve the gated action (#81) — backs the gated blocked action. */
   onApprove?: () => void;
 }) {
+  const { mode } = useUiMode();
+
   if (blocked) {
     return (
       <div
@@ -38,7 +42,14 @@ export function Banners({ degraded, blocked, error, onDismissError, onRetry, onG
         data-testid="blocked-banner"
         role="alert"
       >
-        <Hand aria-hidden className="size-4 shrink-0" />
+        {mode === "crew" ? (
+          // Crew mode: the engineer IS the needs-you signal — arm raised,
+          // helmet lamp on the reserved yellow aspect. This band is the one
+          // place bg-needsyou/fill-needsyou belongs.
+          <Engineer pose="attention" lamp="needsyou" className="h-7 w-6 shrink-0" />
+        ) : (
+          <Hand aria-hidden className="size-4 shrink-0" />
+        )}
         <span className="min-w-0 flex-1">
           Needs you — blocked{blocked === "capped" ? " (budget cap)" : ""}:{" "}
           {BLOCKED_REASONS[blocked]}

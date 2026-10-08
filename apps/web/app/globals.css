@@ -143,10 +143,176 @@ summary::-webkit-details-marker {
   animation: stream-caret 1s steps(2, start) infinite;
 }
 
+
+/* ── Crew mode: the engineer's rig ───────────────────────────────────────
+   Every animation encodes state (working, walking, attention, unplugged);
+   none runs without one. Reduced-motion freezes them all below. */
+@keyframes crew-arm-work {
+  0%,
+  100% {
+    transform: rotate(8deg);
+  }
+  50% {
+    transform: rotate(-26deg);
+  }
+}
+
+@keyframes crew-arm-swing {
+  0%,
+  100% {
+    transform: rotate(14deg);
+  }
+  50% {
+    transform: rotate(-14deg);
+  }
+}
+
+@keyframes crew-leg-swing-a {
+  0%,
+  100% {
+    transform: rotate(13deg);
+  }
+  50% {
+    transform: rotate(-13deg);
+  }
+}
+
+@keyframes crew-leg-swing-b {
+  0%,
+  100% {
+    transform: rotate(-13deg);
+  }
+  50% {
+    transform: rotate(13deg);
+  }
+}
+
+@keyframes crew-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1.2px);
+  }
+}
+
+@keyframes crew-wave {
+  0%,
+  100% {
+    transform: rotate(-152deg);
+  }
+  50% {
+    transform: rotate(-128deg);
+  }
+}
+
+.crew-arm-rest {
+  transform: rotate(0deg);
+}
+
+.crew-arm-work {
+  animation: crew-arm-work 0.7s ease-in-out infinite;
+}
+
+.crew-arm-swing {
+  animation: crew-arm-swing 0.5s ease-in-out infinite;
+}
+
+.crew-arm-raise {
+  transform: rotate(-140deg);
+}
+
+.crew-arm-raise-done {
+  transform: rotate(-166deg);
+}
+
+.crew-leg-swing-a {
+  animation: crew-leg-swing-a 0.5s ease-in-out infinite;
+}
+
+.crew-leg-swing-b {
+  animation: crew-leg-swing-b 0.5s ease-in-out infinite;
+}
+
+.crew-bob {
+  animation: crew-bob 0.5s ease-in-out infinite;
+}
+
+/* attention waves the raised arm; done holds steady */
+g.crew-arm-raise {
+  animation: crew-wave 1.6s ease-in-out infinite;
+}
+
+.crew-slump {
+  transform: rotate(3deg) translateY(0.6px);
+}
+
+
+/* ── Crew RTS layer ──────────────────────────────────────────────────────
+   The engineer walks the line; drones hover; active work sparks at the
+   station. Every loop still encodes real state (walking / active run /
+   pending tool) and dies under reduced-motion. */
+@keyframes crew-drone-hover {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2.5px);
+  }
+}
+
+@keyframes crew-drone-flame {
+  0%,
+  100% {
+    opacity: 0.9;
+    transform: scaleY(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scaleY(0.6);
+  }
+}
+
+@keyframes crew-spark {
+  0% {
+    opacity: 0.85;
+    transform: translate(-50%, -50%) scale(0.35);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.5);
+  }
+}
+
+.crew-drone-hover {
+  animation: crew-drone-hover 2.2s ease-in-out infinite;
+}
+
+.crew-drone-flame {
+  animation: crew-drone-flame 0.55s ease-in-out infinite;
+  transform-origin: 50% 0%;
+}
+
+.crew-spark {
+  animation: crew-spark 1s var(--ease-desk) infinite;
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-lamp-pulse,
   .animate-band-ignite,
-  .animate-stream-caret {
+  .animate-stream-caret,
+  .crew-arm-work,
+  .crew-arm-swing,
+  .crew-leg-swing-a,
+  .crew-leg-swing-b,
+  .crew-bob,
+  .crew-drone-hover,
+  .crew-drone-flame,
+  .crew-spark,
+  g.crew-arm-raise {
     animation: none;
   }
 }

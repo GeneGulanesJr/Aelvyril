@@ -259,6 +259,28 @@ The world carries into the browser: text selection is amber (`caution` backgroun
 - **Enter / Space** — toggle disclosure rows (tool args, verdicts, diff files).
 - **Tab** — standard order; every focus lands the 2px focus ring. No Esc bindings in the build.
 
+### Crew mode (the inhabited desk)
+A persisted interface mode (`localStorage` key `aelvyril.ui-mode`, `desk` default, invalid → desk) toggled by the segmented **Dispatch / Crew** control in the board footer (`ModeToggle`, mono uppercase labels, TrainFront/Users icons, `aria-pressed`). Crew mode does NOT re-skin the world — it inhabits it: same tokens, same data surfaces, one additional encoding of state.
+
+**The engineer rig** (`components/crew/engineer.tsx`): an authored SVG signal technician, never an emoji. The helmet lamp carries the thread's aspect color (with `animate-lamp-pulse` only while live); the body and limbs are `fill-panel-active stroke-seam-strong`, the head `fill-panel-raised stroke-seam-strong`. Poses map 1:1 to real state and nothing else:
+
+| state | pose | lamp |
+|---|---|---|
+| degraded | `unplugged` (dangling cord, slumped) | `off` |
+| running / spec'ing | `working` (hammering arm) | go / caution |
+| queued | `idle` (on the platform) | caution |
+| draft | `idle` | off |
+| abandoned | `idle` | danger |
+| reviewed | `idle` (standing at REVIEW, waiting on you) | go |
+| merged | `done` (arm raised) | go |
+| blocked band | `attention` (waves at you) | `needsyou` |
+
+**Where the engineer lives (RTS track):** the crew route strip is a fixed-proportion rail (stations at 0/25/50/75/100%); the engineer stands ON the rail at `active ?? reached` and physically WALKS to the next station when it changes — `left` transitions over 600ms `ease-desk` with the walking pose and the sprite facing the direction of travel (the ONE orchestrated motion; timer cleaned up). While a tool is in flight (`workPending` = run live + newest tool call without a result) a caution spark-ring pulses at the station; degraded parks everything. The blocked band swaps its `Hand` icon for the attention engineer. The new-thread hero inherits the idle engineer automatically (draft → idle at the dim SPEC station).
+
+**Crew drones** (`components/crew/crew-token.tsx` + `drone.tsx`): dispatched subagents render as hovering drone UNITS in the yard below the rail (authored sprite, caution visor, thruster bob while the run is live) — not name chips. Hovering a unit shows the REAL task it was spawned with (from `subagent_spawn`); ≤4 drones + `+N` overflow; null in desk mode or when empty. Drones are aria-hidden — the trace stays the authoritative surface.
+
+**Crew rules:** every crew animation encodes real SSE-derived state (motion without state is banned, same as desk); reduced-motion freezes the rig like everything else; the reserved yellow is still needs-you-only — the attention engineer's lamp is the one yellow figure on a blocked screen; crew mode adds NO new information surfaces (trace, diff, board stay authoritative and untouched).
+
 ### Deferred by vocabulary (cited, not forgotten)
 - **The cap line** (right-aligned usage against a hard cap) awaits the cap on the wire: the gateway enforces `GATEWAY_MAX_THREAD_COST_USD` server-side and announces it as a `capped` blocked band; the UI renders the cost column but draws no gauge until remaining budget is exposed.
 - **Concurrent agent columns** (duration-encoded side-by-side spans) await per-agent timing spans in the SSE vocabulary; until then subagents render as an indented task list under a single row.
@@ -274,6 +296,7 @@ The world carries into the browser: text selection is amber (`caution` backgroun
 - **Do** use binding product vocabulary: thread, spec interview, Ask / Ask + spec, approve & run, Needs you, degraded, kill-all, workspace.
 - **Do** add animation only when a state demands it, and honor `prefers-reduced-motion`.
 
+- **Do** let the engineer embody state in crew mode (pose/lamp strictly from the mapping table) — the crew layer is a second encoding of real state, never a mascot beside it.
 ### Don't:
 - **Don't** use the reserved yellow (`#ffce00`) for anything but "Needs you" surfaces and their inverting buttons.
 - **Don't** use route blue as a status lamp — blue is the set-route/primary-action color; green is "clear and moving".

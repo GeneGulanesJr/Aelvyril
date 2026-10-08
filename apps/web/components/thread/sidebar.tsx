@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { OctagonX, Plus, Search } from "lucide-react";
 import type { Thread } from "@aelvyril/shared";
+import { ModeToggle } from "../crew/mode-toggle.js";
 import { STATUS_META, fmtCost, fmtRelTime } from "../../lib/design.js";
 
 const cn = (...parts: Array<string | false | null | undefined>): string =>
@@ -132,6 +133,10 @@ export function ThreadSidebar({ threads, activeId, onSelect, onCreate, onKillAll
       </nav>
       {onKillAll && (
         <div className="border-t border-seam p-3">
+          <div className="flex items-center justify-between pb-2">
+            <span className="text-xs font-mono uppercase tracking-wider text-ink-faint">view</span>
+            <ModeToggle />
+          </div>
           {armed ? (
             <div className="flex items-center gap-2">
               <button

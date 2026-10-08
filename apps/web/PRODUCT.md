@@ -28,6 +28,7 @@ Runs as a local/self-hosted Docker stack (web :3000, gateway :8787 behind Caddy 
 - Envelope kinds the UI may receive: `text_delta`, `tool_call`, `tool_result`, `subagent_spawn`, `sandbox_exec`, `sandbox_promote`, `laya_verdict`, `user_message`, `session_state`, `error`, `spec_question`, `spec_draft`, `spec_status`, `diff`, `usage`, `dialog`, `custom`.
 - Error contracts the UI must render: 429 `rate_limited` (Retry-After), 503 `conversation_limit_reached`, 202 `{queued:true}` / 409 `already_queued`, 403 `cost_cap_reached`, 429 `too_many_streams`, 413 `spec_too_large`, 400 `workspace_not_allowed`.
 - Diffs render as plain unified-diff text with line highlighting — no Monaco, no in-browser code editing (documented non-goal, keep).
+- Interface modes (2026-10-08): **desk** (default) and **crew** — crew inhabits the desk with the engineer rig (characters embody thread state per DESIGN.md's crew mapping); persisted per browser, same data surfaces either way.
 - Admin self-update endpoints exist but are not part of the ordinary UI surface.
 - Terminology is binding: "thread" (never "conversation" in UI), "spec interview / spec draft / answers", "Ask" and "Ask + spec", "approve & run / abandon / retry / merge", "degraded", "Needs you" (blocked), "kill-all", "workspace".
 

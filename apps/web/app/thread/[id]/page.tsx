@@ -14,6 +14,7 @@ import { ThreadHeader } from "../../../components/thread/header.js";
 import { Banners } from "../../../components/thread/banner.js";
 import { RouteLine } from "../../../components/thread/route-line.js";
 import { ToastHost, useToast } from "../../../components/toasts.js";
+import { UIProvider } from "../../../components/crew/ui-mode.js";
 
 /** The brand mark: a three-aspect signal head. */
 function SignalMark() {
@@ -129,6 +130,16 @@ function Desk() {
   const activeThread = threads.find((t) => t.id === id);
   const boardStatus = threadState.statusLive ? threadState.status : (activeThread?.status ?? "draft");
   const gotoSpec = () => specRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  // Crew mode: dispatched subagents (real name + task from subagent_spawn).
+  const crew = threadState.timeline
+    .filter((t) => t.kind === "subagents")
+    .flatMap((t) => t.agents.map((a) => ({ name: a.agent, task: a.task })));
+  const seenCrew = new Set<string>();
+  const crewUnits = crew.filter((u) => (seenCrew.has(u.name) ? false : (seenCrew.add(u.name), true)));
+  // Work sparks encode "a tool is executing right now": the run is live and
+  // the newest tool call on the timeline has not landed a result yet.
+  const lastTool = [...threadState.timeline].reverse().find((t) => t.kind === "tool");
+  const workPending = threadState.waiting && !!lastTool && !lastTool.result;
 
   const sidebar = (
     <ThreadSidebar
@@ -237,7 +248,7 @@ function Desk() {
           />
         )}
 
-        {!isNew && <RouteLine status={boardStatus} />}
+        {!isNew && <RouteLine status={boardStatus} degraded={threadState.degraded} crew={crewUnits} workPending={workPending} />}
 
         {!isNew && (
           <>
@@ -327,7 +338,9 @@ function Desk() {
 export default function ThreadPage() {
   return (
     <ToastHost>
-      <Desk />
+      <UIProvider>
+        <Desk />
+      </UIProvider>
     </ToastHost>
   );
 }

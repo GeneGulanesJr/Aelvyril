@@ -107,8 +107,11 @@ export interface ApplyResult {
  * (or the operator's process manager in dev) picks up the new code.
  *
  * Returns {started: true, ...} on success, or throws with stderr.
+ * `shell` is injectable so tests can pin the failed-spawn path (POSIX
+ * default "bash"; a gateway without bash — Windows, most commonly — used
+ * to crash the process via an unobserved child 'error' event).
  */
-export async function applyUpdate(): Promise<ApplyResult> {
+export async function applyUpdate(opts: { shell?: string } = {}): Promise<ApplyResult> {
   const repoPath = repoRoot();
   // Fail fast if the working tree is dirty — refuse to clobber local
   // changes during an update.
@@ -135,10 +138,18 @@ export async function applyUpdate(): Promise<ApplyResult> {
     # captured at script start instead.
     kill -TERM $PPID
   `;
-  const child = spawn("bash", ["-c", script], {
+  const child = spawn(opts.shell ?? "bash", ["-c", script], {
     detached: true,
     stdio: ["ignore", "ignore", "ignore"],
     env: { ...process.env, PATH: process.env.PATH ?? "/usr/bin:/usr/local/bin" },
+  });
+  // A failed spawn emits 'error' (no 'exit') — with no listener that is a
+  // fatal uncaught exception instead of the admin route's structured
+  // update_failed reply. Await the outcome: 'spawn' is the success arm, so
+  // the fire-and-forget unref below still happens only for a live child.
+  await new Promise<void>((resolve, reject) => {
+    child.once("spawn", () => resolve());
+    child.once("error", (err) => reject(new Error(`update subprocess failed to start: ${err.message}`)));
   });
   child.unref();
   return {

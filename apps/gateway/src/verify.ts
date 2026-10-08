@@ -5,8 +5,10 @@
 // injectable so tests never shell out.
 
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile, access } from "node:fs/promises";
-import { join } from "node:path";
+import { delimiter, extname, join } from "node:path";
+import { computeChildEnv } from "./child-env.js";
 
 export interface CommandResult {
   command: string;
@@ -38,16 +40,64 @@ export interface VerificationRun {
 const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_OUTPUT_LIMIT = 8_000;
 
-/** Default exec: split "pnpm run test" style strings and execFile them. */
+/**
+ * win32 only: npm/pnpm/yarn ship as .cmd/.bat shims and execFile cannot
+ * spawn those (Node refuses batch files without a shell since the 2024
+ * argv-injection hardening — auto-verify failed on every Windows host).
+ * An explicit .cmd/.bat suffix always counts; any other explicit extension
+ * is a real executable; a bare name counts only when a `<name>.cmd` or
+ * `<name>.bat` exists on PATH.
+ */
+function isCmdShim(file: string): boolean {
+  const ext = extname(file).toLowerCase();
+  if (ext === ".cmd" || ext === ".bat") return true;
+  if (ext !== "") return false;
+  return (process.env.PATH ?? "")
+    .split(delimiter)
+    .some(
+      (dir) =>
+        dir !== "" &&
+        (existsSync(join(dir, `${file}.cmd`)) || existsSync(join(dir, `${file}.bat`))),
+    );
+}
+
+/**
+ * Resolve a verify command to execFile argv. win32 batch shims route
+ * through `cmd /d /s /c` — the same quoting child_process uses for its own
+ * shell:true path (the joined line rides as ONE quoted argument and /s
+ * strips only the outer quotes). Everything else, and every POSIX command,
+ * execs directly. `isShim` is injectable so the decision is unit-testable
+ * cross-platform.
+ */
+export function resolveExecArgv(
+  command: string[],
+  platform: NodeJS.Platform = process.platform,
+  isShim: (file: string) => boolean = isCmdShim,
+): { file: string; args: string[] } {
+  const [file = "", ...args] = command;
+  if (platform === "win32" && isShim(file)) {
+    return {
+      file: process.env.ComSpec ?? "cmd.exe",
+      args: ["/d", "/s", "/c", command.join(" ")],
+    };
+  }
+  return { file, args };
+}
+
+/** Default exec: split "pnpm run test" style strings and execFile them.
+ *  The verify commands come from an agent-editable package.json, so the
+ *  child gets the computeChildEnv boundary — never the gateway's full
+ *  process.env (CLERK_ and GATEWAY_ secrets must not reach workspace
+ *  scripts). */
 export const defaultVerifyExec: VerifyExec = async (command, cwd, timeoutMs) => {
-  const [file, ...args] = command;
+  const { file, args } = resolveExecArgv(command);
   const outputLimit = DEFAULT_OUTPUT_LIMIT;
   try {
     const res = await new Promise<{ ok: boolean; stdout: string; stderr: string }>((resolve, reject) => {
       execFile(
-        file!,
+        file,
         args,
-        { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+        { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 16 * 1024 * 1024, env: computeChildEnv({}) },
         (err, stdout, stderr) => {
           // A non-zero exit is a RESULT, not a rejection — verification
           // failures are the loop's working state. Only spawn-level errors

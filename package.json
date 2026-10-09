@@ -17,7 +17,9 @@
     "test:e2e": "pnpm exec playwright test",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "self-update": "node scripts/self-update.mjs",
+    "self-update:loop": "node scripts/self-update.mjs --loop"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

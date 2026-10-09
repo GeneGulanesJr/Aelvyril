@@ -41,3 +41,7 @@ data/
 playwright-report/
 test-results/
 .zcode/
+
+# Self-update keeper state (scripts/self-update.mjs): last-good sha, failure
+# breaker, lock, service + keeper logs. Machine-local, never commit.
+.self-update/

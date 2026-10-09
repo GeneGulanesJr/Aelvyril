@@ -263,6 +263,19 @@ export class Supervisor {
     // Event routing is bound to THIS handle: a zombie's in-flight events
     // carry the zombie handle, a live host's carry the live one (review P1).
     rpc.on("event", (ev: RpcEvent) => this.onProtocolEvent(handle, ev));
+    rpc.on("stderr", (chunk: string) => {
+      // Dogfood 2026-10-09: a session host's stderr used to vanish, so a
+      // child dying mid-turn left nothing to diagnose. Bounded warn; the
+      // text is never parsed.
+      try {
+        this.opts.logger?.warn(
+          { conversationId, stderr: chunk.slice(-2_000) },
+          "session host stderr",
+        );
+      } catch {
+        // a broken logger must not break the stderr drain
+      }
+    });
     rpc.on("exit", () => {
       // The host exited — the gauge reflects that regardless of whether the
       // exit was expected (kill/reap/dispose) or a crash.
@@ -889,7 +902,28 @@ export class Supervisor {
         // left the original as an unkillable orphan if it ignored SIGTERM.
         // sigtermWithEscalation guarantees the exit actually happens.
         this.sigtermWithEscalation(handle);
+        this.strandTurnIfMidTurn(handle);
       }
+    }
+  }
+
+  /**
+   * Dogfood 2026-10-09: a host reaped while its conversation is mid-turn
+   * strands the turn — the exit path treats ANY expected teardown as
+   * silent (handle.exiting), so nothing ever moved the thread off
+   * "streaming" and the surface hung with no degraded banner. A hung tool
+   * call freezes protocol activity, so this is the common shape, not an
+   * edge case. Land the same degraded envelope a crash produces; the next
+   * prompt respawns per spec §10. Idle hosts (settled turns) are untouched.
+   */
+  private strandTurnIfMidTurn(handle: Handle): void {
+    try {
+      const conv = this.opts.store.getConversationById(handle.conversationId);
+      if (conv?.state !== "streaming") return;
+      this.opts.store.setConversationState(handle.conversationId, "degraded");
+      this.publish(handle.conversationId, { kind: "session_state", payload: { state: "degraded" } });
+    } catch {
+      // store closed (shutdown race); best-effort, like the exit path
     }
   }
 

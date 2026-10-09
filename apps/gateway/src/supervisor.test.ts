@@ -195,6 +195,66 @@ describe("Supervisor", () => {
     });
   });
 
+  // Dogfood 2026-10-09: a hung tool call freezes protocol activity, so the
+  // idle reaper reaps a host MID-TURN. Expected teardown is silent on the
+  // exit path (handle.exiting), which used to leave the thread stuck
+  // "streaming" forever with no degraded banner.
+  it("reaping a host mid-turn degrades the thread instead of sticking streaming", async () => {
+    const { store, bus, supervisor } = makeFakeSupervisor({
+      idleMs: 30,
+      killGraceMs: 60,
+      spawnChild: () => {
+        const child = fakeRpcChild();
+        // A host with an OPEN turn: answers the prompt RPC but never
+        // settles — exactly what a hung tool call looks like.
+        const stdin = new EventEmitter() as FakeChild["stdin"];
+        stdin.write = (buf: string) => {
+          const cmd = JSON.parse(buf) as { id?: string };
+          setImmediate(() => {
+            if (typeof cmd.id === "string") {
+              child.stdout.emit(
+                "data",
+                Buffer.from(JSON.stringify({ id: cmd.id, type: "response", command: "prompt", success: true }) + "\n"),
+              );
+            }
+          });
+          return true;
+        };
+        child.stdin = stdin;
+        return child as unknown as ChildProcess;
+      },
+    });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    const states: string[] = [];
+    bus.subscribe(conv.id, (e) => {
+      if (e.kind === "session_state") states.push((e.payload as { state: string }).state);
+    });
+    expect(await supervisor.prompt(conv.id, "hang")).toBe(true);
+    expect(store.getConversation(conv.id, "platform")?.state).toBe("streaming");
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("degraded");
+    });
+    expect(states).toContain("degraded");
+    await supervisor.disposeAll(50);
+  });
+
+  it("surfaces session-host stderr on the logger", async () => {
+    const warns: Array<{ obj: object; msg?: string }> = [];
+    const { store, supervisor, children } = makeFakeSupervisor({
+      logger: { warn: (obj, msg) => warns.push({ obj, msg }) },
+    });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    await supervisor.prompt(conv.id, "hi");
+    const child = children[0] as unknown as FakeChild;
+    child.stderr.emit("data", "boom: extension failed to load");
+    await vi.waitFor(() => expect(warns.length).toBeGreaterThan(0));
+    expect(JSON.stringify(warns[0]!.obj)).toContain("boom: extension failed to load");
+    expect(warns[0]!.msg).toContain("stderr");
+    await supervisor.disposeAll(50);
+  });
+
   // Dogfood 2026-10-09: a real model prints the spec signal as JSON inside
   // its assistant text (fake-pi emits it as a scripted top-level protocol
   // line). The supervisor must translate the embedded signal, or the spec

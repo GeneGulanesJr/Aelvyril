@@ -12,6 +12,42 @@ import { formatFailure, resolveVerifyCommands, runVerification, type VerifyExec 
 import { computeWorkspaceDiff, type FilePatch } from "./workspace-git.js";
 
 /**
+ * Dogfood 2026-10-09: a real pi never emits top-level custom_spec_* protocol
+ * events — that shape is a fake-pi fixture convenience. A real model follows
+ * SPEC_PROTOCOL_INSTRUCTIONS and prints the signal JSON inside its assistant
+ * TEXT, where it used to be lost (the spec interview, draft registration,
+ * and auto-run never fired against a live host). Scan assistant text for
+ * those JSON objects and feed them to the contract exactly like the
+ * scripted protocol lines.
+ */
+export function extractSpecSignals(
+  text: string,
+): Array<{ type: string } & Record<string, unknown>> {
+  const out: Array<{ type: string } & Record<string, unknown>> = [];
+  // Bound the scan: pathological messages must not turn into O(n²) parses.
+  const window = text.length > 262_144 ? text.slice(0, 262_144) : text;
+  const start = /\{\s*"type"\s*:\s*"custom_spec_(?:question|draft)"/g;
+  for (const m of window.matchAll(start)) {
+    // The JSON may be preceded and followed by prose, so the end is unknown:
+    // try each closing brace as a candidate end until the slice parses.
+    // Braces inside JSON strings can't complete a valid document, so this
+    // is exact, not heuristic.
+    for (let end = window.indexOf("}", m.index); end !== -1; end = window.indexOf("}", end + 1)) {
+      try {
+        const parsed = JSON.parse(window.slice(m.index, end + 1)) as {
+          type: string;
+        } & Record<string, unknown>;
+        if (typeof parsed.type === "string" && parsed.type.startsWith("custom_spec_")) out.push(parsed);
+        break;
+      } catch {
+        continue;
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Review P2: with no workspace configured, session hosts must never spawn
  * inside the gateway's own repo tree (the old process.cwd() fallback). Each
  * thread gets a scratch dir under the OS temp dir instead. The id is
@@ -227,6 +263,19 @@ export class Supervisor {
     // Event routing is bound to THIS handle: a zombie's in-flight events
     // carry the zombie handle, a live host's carry the live one (review P1).
     rpc.on("event", (ev: RpcEvent) => this.onProtocolEvent(handle, ev));
+    rpc.on("stderr", (chunk: string) => {
+      // Dogfood 2026-10-09: a session host's stderr used to vanish, so a
+      // child dying mid-turn left nothing to diagnose. Bounded warn; the
+      // text is never parsed.
+      try {
+        this.opts.logger?.warn(
+          { conversationId, stderr: chunk.slice(-2_000) },
+          "session host stderr",
+        );
+      } catch {
+        // a broken logger must not break the stderr drain
+      }
+    });
     rpc.on("exit", () => {
       // The host exited — the gauge reflects that regardless of whether the
       // exit was expected (kill/reap/dispose) or a crash.
@@ -490,6 +539,26 @@ export class Supervisor {
       // #80: the agent's spec-protocol signals — the contract translates
       // them into schema-validated envelopes + lifecycle transitions.
       handle?.contract.onProtocolEvent(ev);
+      return;
+    }
+    if (ev.type === "message_end") {
+      // Dogfood 2026-10-09: real pi delivers spec signals inside the
+      // assistant's text (see extractSpecSignals). Scanning here feeds the
+      // contract the same events the fixture emits at top level. A signal
+      // that arrives BOTH ways is schema-validated twice — the contract
+      // tolerates that (the duplicate fails safeParse and publishes an
+      // error envelope) and no real pi emits both today.
+      const message = ev.message as
+        | { role?: string; content?: Array<Record<string, unknown>> }
+        | undefined;
+      if (message?.role === "assistant" && Array.isArray(message.content)) {
+        for (const block of message.content) {
+          if (block?.type !== "text" || typeof block.text !== "string") continue;
+          for (const signal of extractSpecSignals(block.text)) {
+            handle?.contract.onProtocolEvent(signal);
+          }
+        }
+      }
       return;
     }
     if (ev.type.startsWith("custom_")) {
@@ -833,7 +902,28 @@ export class Supervisor {
         // left the original as an unkillable orphan if it ignored SIGTERM.
         // sigtermWithEscalation guarantees the exit actually happens.
         this.sigtermWithEscalation(handle);
+        this.strandTurnIfMidTurn(handle);
       }
+    }
+  }
+
+  /**
+   * Dogfood 2026-10-09: a host reaped while its conversation is mid-turn
+   * strands the turn — the exit path treats ANY expected teardown as
+   * silent (handle.exiting), so nothing ever moved the thread off
+   * "streaming" and the surface hung with no degraded banner. A hung tool
+   * call freezes protocol activity, so this is the common shape, not an
+   * edge case. Land the same degraded envelope a crash produces; the next
+   * prompt respawns per spec §10. Idle hosts (settled turns) are untouched.
+   */
+  private strandTurnIfMidTurn(handle: Handle): void {
+    try {
+      const conv = this.opts.store.getConversationById(handle.conversationId);
+      if (conv?.state !== "streaming") return;
+      this.opts.store.setConversationState(handle.conversationId, "degraded");
+      this.publish(handle.conversationId, { kind: "session_state", payload: { state: "degraded" } });
+    } catch {
+      // store closed (shutdown race); best-effort, like the exit path
     }
   }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -10,6 +10,20 @@ const ts = "2026-09-22T12:00:00.000Z";
 const PLATFORM = "platform";
 
 describe("Store", () => {
+  it("creates the database parent directory when missing", () => {
+    const root = join(tmpdir(), "store-mkdir-" + randomUUID());
+    const dbPath = join(root, "nested", "data", "gateway.db");
+    const store = new Store(dbPath);
+    try {
+      const conv = store.createConversation({ namespace: PLATFORM });
+      expect(store.getConversation(conv.id, PLATFORM)?.id).toBe(conv.id);
+      expect(existsSync(dbPath)).toBe(true);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("creates and lists conversations", () => {
     const store = new Store(":memory:");
     const conv = store.createConversation({ title: "t", workspace: "LaPis", namespace: PLATFORM });

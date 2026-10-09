@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EventBus } from "./bus.js";
 import { Store } from "./store.js";
-import { Supervisor, type SupervisorOptions } from "./supervisor.js";
+import { Supervisor, extractSpecSignals, type SupervisorOptions } from "./supervisor.js";
 import type { EventEnvelope } from "@aelvyril/shared";
 import type { FilePatch } from "./workspace-git.js";
 
@@ -193,6 +193,144 @@ describe("Supervisor", () => {
     await vi.waitFor(() => {
       expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
     });
+  });
+
+  // Dogfood 2026-10-09: a hung tool call freezes protocol activity, so the
+  // idle reaper reaps a host MID-TURN. Expected teardown is silent on the
+  // exit path (handle.exiting), which used to leave the thread stuck
+  // "streaming" forever with no degraded banner.
+  it("reaping a host mid-turn degrades the thread instead of sticking streaming", async () => {
+    const { store, bus, supervisor } = makeFakeSupervisor({
+      idleMs: 30,
+      killGraceMs: 60,
+      spawnChild: () => {
+        const child = fakeRpcChild();
+        // A host with an OPEN turn: answers the prompt RPC but never
+        // settles — exactly what a hung tool call looks like.
+        const stdin = new EventEmitter() as FakeChild["stdin"];
+        stdin.write = (buf: string) => {
+          const cmd = JSON.parse(buf) as { id?: string };
+          setImmediate(() => {
+            if (typeof cmd.id === "string") {
+              child.stdout.emit(
+                "data",
+                Buffer.from(JSON.stringify({ id: cmd.id, type: "response", command: "prompt", success: true }) + "\n"),
+              );
+            }
+          });
+          return true;
+        };
+        child.stdin = stdin;
+        return child as unknown as ChildProcess;
+      },
+    });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    const states: string[] = [];
+    bus.subscribe(conv.id, (e) => {
+      if (e.kind === "session_state") states.push((e.payload as { state: string }).state);
+    });
+    expect(await supervisor.prompt(conv.id, "hang")).toBe(true);
+    expect(store.getConversation(conv.id, "platform")?.state).toBe("streaming");
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("degraded");
+    });
+    expect(states).toContain("degraded");
+    await supervisor.disposeAll(50);
+  });
+
+  it("surfaces session-host stderr on the logger", async () => {
+    const warns: Array<{ obj: object; msg?: string }> = [];
+    const { store, supervisor, children } = makeFakeSupervisor({
+      logger: { warn: (obj, msg) => warns.push({ obj, msg }) },
+    });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    await supervisor.prompt(conv.id, "hi");
+    const child = children[0] as unknown as FakeChild;
+    child.stderr.emit("data", "boom: extension failed to load");
+    await vi.waitFor(() => expect(warns.length).toBeGreaterThan(0));
+    expect(JSON.stringify(warns[0]!.obj)).toContain("boom: extension failed to load");
+    expect(warns[0]!.msg).toContain("stderr");
+    await supervisor.disposeAll(50);
+  });
+
+  // Dogfood 2026-10-09: a real model prints the spec signal as JSON inside
+  // its assistant text (fake-pi emits it as a scripted top-level protocol
+  // line). The supervisor must translate the embedded signal, or the spec
+  // interview/draft/auto-run machinery never fires against a live host.
+  it("translates a spec draft embedded in assistant text into the contract", async () => {
+    const draft = {
+      goal: "Add greet()",
+      filesAffected: ["src/greet.js"],
+      plan: ["Create src/greet.js"],
+      risks: [],
+      questions: [],
+      answers: {},
+    };
+    const text =
+      "Repo state resolved the ambiguities. " +
+      JSON.stringify({ type: "custom_spec_draft", draft }) +
+      " Plan is ready — the gateway can start execution.";
+    const writes: string[] = [];
+    const { store, bus, supervisor } = makeFakeSupervisor({
+      spawnChild: () => {
+        const child = fakeRpcChild();
+        // First prompt: stream a message_end whose assistant text embeds
+        // the draft, then settle. Contract replies (the auto-run execution
+        // prompt) just settle.
+        const stdin = new EventEmitter() as FakeChild["stdin"];
+        stdin.write = (buf: string) => {
+          writes.push(buf);
+          const cmd = JSON.parse(buf) as { id?: string; type: string; message?: string };
+          setImmediate(() => {
+            if (typeof cmd.id === "string") {
+              child.stdout.emit(
+                "data",
+                Buffer.from(
+                  JSON.stringify({ id: cmd.id, type: "response", command: cmd.type, success: true }) + "\n",
+                ),
+              );
+            }
+            if (cmd.type !== "prompt") return true;
+            if (typeof cmd.message === "string" && cmd.message.startsWith("Spec approved")) {
+              child.stdout.emit("data", Buffer.from(JSON.stringify({ type: "agent_settled" }) + "\n"));
+            } else {
+              child.stdout.emit(
+                "data",
+                Buffer.from(
+                  JSON.stringify({
+                    type: "message_end",
+                    message: { role: "assistant", content: [{ type: "text", text }] },
+                  }) + "\n",
+                ),
+              );
+              child.stdout.emit("data", Buffer.from(JSON.stringify({ type: "agent_settled" }) + "\n"));
+            }
+            return true;
+          });
+          return true;
+        };
+        child.stdin = stdin;
+        return child as unknown as ChildProcess;
+      },
+    });
+    s = supervisor;
+
+    const conv = store.createConversation({ namespace: "platform" });
+    const kinds: string[] = [];
+    bus.subscribe(conv.id, (e) => kinds.push(e.kind));
+    await supervisor.prompt(conv.id, "add greet");
+    await vi.waitFor(() => {
+      // The reversible plan auto-runs: the contract replied with the
+      // execution prompt on the same rpc channel.
+      expect(
+        writes.some((w) => (JSON.parse(w) as { message?: string }).message?.startsWith("Spec approved")),
+      ).toBe(true);
+    });
+    expect(kinds).toContain("spec_draft");
+    expect(kinds).toContain("laya_verdict");
+    expect(kinds).toContain("spec_status");
   });
 
   it("re-prompting after killChild lifts the dead mark so events flow again (2nd review)", async () => {
@@ -1005,5 +1143,43 @@ describe("Supervisor", () => {
     expect(warns[0]!.msg).toContain("reply failed");
     expect((warns[0]!.obj as { err: Error }).err).toBeInstanceOf(Error);
     await supervisor.disposeAll(50);
+  });
+});
+
+describe("extractSpecSignals", () => {
+  const draft = {
+    type: "custom_spec_draft",
+    draft: { goal: "g", filesAffected: [], plan: [], risks: [], questions: [], answers: {} },
+  };
+
+  it("extracts a signal embedded before and after prose", () => {
+    const text = `Reasoning here. ${JSON.stringify(draft)} Plan is ready.`;
+    const signals = extractSpecSignals(text);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.type).toBe("custom_spec_draft");
+    expect((signals[0] as unknown as { draft: { goal: string } }).draft.goal).toBe("g");
+  });
+
+  it("extracts multiple signals from one message", () => {
+    const question = { type: "custom_spec_question", questions: [{ id: "q1", prompt: "p", kind: "text" }] };
+    const text = `First ${JSON.stringify(question)} then ${JSON.stringify(draft)}`;
+    const signals = extractSpecSignals(text);
+    expect(signals.map((s) => s.type)).toEqual(["custom_spec_question", "custom_spec_draft"]);
+  });
+
+  it("ignores truncated or unparseable fragments", () => {
+    expect(extractSpecSignals('{"type":"custom_spec_draft","draft": {"goal":')).toEqual([]);
+    expect(extractSpecSignals("no signals here")).toEqual([]);
+  });
+
+  it("handles braces inside string values", () => {
+    const tricky = {
+      type: "custom_spec_draft",
+      draft: { goal: "render { } braces {", filesAffected: [], plan: [], risks: [], questions: [], answers: {} },
+    };
+    const text = `${JSON.stringify(tricky)} done`;
+    const signals = extractSpecSignals(text);
+    expect(signals).toHaveLength(1);
+    expect((signals[0] as unknown as { draft: { goal: string } }).draft.goal).toBe("render { } braces {");
   });
 });

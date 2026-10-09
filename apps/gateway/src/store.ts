@@ -1,5 +1,7 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import type { Conversation, SpecDraft, Usage } from "@aelvyril/shared";
 
 interface ConvRow {
@@ -132,6 +134,10 @@ export class Store {
   private eventRetentionPerThread: number;
 
   constructor(dbPath: string, opts: StoreOptions = {}) {
+    // better-sqlite3 refuses to open a database whose parent directory does
+    // not exist (a fresh checkout has no data/ — found dogfooding 2026-10-09).
+    // ":memory:" and bare filenames resolve to cwd, where mkdir is a no-op.
+    if (!dbPath.startsWith(":")) mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     // WAL + NORMAL: appendEvent fires once per streamed text_delta, and the

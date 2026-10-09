@@ -27,11 +27,18 @@ export const defaultGitExec: GitExec = (args, cwd) =>
     );
   });
 
+/** Per-file patch bound: keeps diff envelopes reviewable when an agent
+ *  generates a huge file. Truncated patches carry an explicit marker. */
+export const MAX_PATCH_CHARS = 100_000;
+
 /**
  * Per-file patches of the working tree vs HEAD (`git diff HEAD`) — what did
- * THIS execution change. Untracked files are included as synthetic new-file
- * patches (the most common outcome of "create a component"); their content
- * is not inlined (bounded envelopes), the path list is the review signal.
+ * THIS execution change. Untracked files (the most common outcome of
+ * "create a component") are included as real new-file patches via
+ * `git diff --no-index`, bounded per file — their content IS the review
+ * signal, a name-only stub is not (dogfood 2026-10-09: the UI showed
+ * "+0 -0 (content not inlined)" for exactly the files a human most needs
+ * to read).
  *
  * Returns null when the cwd is not a git work tree — callers skip the diff
  * envelope rather than fail the turn; returns [] for a clean tree.
@@ -50,10 +57,21 @@ export async function computeWorkspaceDiff(
   if (others.ok) {
     for (const line of others.stdout.split("\n")) {
       const path = line.trim();
-      if (path) patches.push({ path, patch: untrackedPatch(path) });
+      if (!path) continue;
+      // --no-index diffs one path against /dev/null: a genuine new-file
+      // unified patch (handles binary detection too). Exit code 1 just
+      // means "differences found" — the patch is in stdout either way.
+      const added = await exec(["--no-pager", "diff", "--no-index", "--", "/dev/null", path], cwd);
+      const patch = added.stdout.trim() ? added.stdout.trimEnd() + "\n" : untrackedPatch(path);
+      patches.push({ path, patch: boundPatch(patch) });
     }
   }
   return patches;
+}
+
+function boundPatch(patch: string): string {
+  if (patch.length <= MAX_PATCH_CHARS) return patch;
+  return `${patch.slice(0, MAX_PATCH_CHARS)}\n... (truncated at ${MAX_PATCH_CHARS} chars — read the file in the workspace)\n`;
 }
 
 /** Split `git diff` output into per-file unified patches. */

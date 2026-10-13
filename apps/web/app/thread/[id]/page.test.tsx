@@ -9,7 +9,7 @@ import ThreadPage from "./page.js";
 // identity.
 vi.mock("../../../components/auth-gate.js", () => ({
   AuthGate: (props: { children?: React.ReactNode }) => props.children ?? null,
-  useAppAuth: () => ({ getToken: h.mockGetToken, userId: "u1" }),
+  useAppAuth: () => ({ getToken: h.mockGetToken, userId: "u1", authResolved: true }),
 }));
 
 // Hoisted shared state: mutable navigation params (to exercise both the

@@ -73,7 +73,7 @@ function toErrorMessage(err: unknown): string {
 }
 
 function Desk() {
-  const { getToken, userId } = useAppAuth();
+  const { getToken, userId, authResolved } = useAppAuth();
   const router = useRouter();
   const toast = useToast();
   const { id } = useParams<{ id: string }>();
@@ -116,13 +116,21 @@ function Desk() {
   }, [signedIn, getToken]);
 
   const isNew = id === "new";
-  const threadState = useThread(isNew ? null : id, {
+  // No thread session until auth resolves: pre-resolution getToken() is null,
+  // so the stream would 401-churn against the gateway (openStream retries on
+  // its own schedule; getToken's identity doesn't change post-load, so the
+  // effect wouldn't re-run to pick the real token up). Null threadId keeps
+  // the stream closed until the auth decision is final.
+  const threadState = useThread(authResolved && !isNew ? id : null, {
     getToken,
     // #83 sidebar: live spec_status envelopes update the ACTIVE entry of the
     // list so its lamp matches the header's live lamp between refetches.
     onStatus: (status) => setThreads((ts) => ts.map((t) => (t.id === id ? { ...t, status } : t))),
   });
 
+  // Auth still resolving (Clerk hydration): neutral desk skeleton — NOT the
+  // sign-in gate, which would flash for signed-in users on every load.
+  if (!authResolved) return <LoadingDesk />;
   if (!signedIn) return <SignInPrompt />;
   if (!client) return <LoadingDesk />;
 

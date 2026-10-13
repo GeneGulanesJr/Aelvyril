@@ -7,6 +7,10 @@ import { AUTH_DISABLED, CLERK_CLIENT_USABLE, DEV_USER_ID } from "../lib/auth.js"
 export type AppAuth = {
   getToken: () => Promise<string | null>;
   userId: string | null;
+  /** False only while Clerk is still hydrating (Clerk mode) — consumers show
+   *  a neutral loading state instead of guessing sign-in state from a null
+   *  userId (which would flash the sign-in gate for signed-in users). */
+  authResolved: boolean;
 };
 
 const noopToken = async (): Promise<null> => null;
@@ -14,17 +18,20 @@ const noopToken = async (): Promise<null> => null;
 // The dev identity must be a stable module-level value: a fresh object per
 // render would tear down and re-run every effect that consumes the context
 // (SSE streams included) on each render.
-const DEV_AUTH: AppAuth = { getToken: async () => DEV_USER_ID, userId: DEV_USER_ID };
+const DEV_AUTH: AppAuth = { getToken: async () => DEV_USER_ID, userId: DEV_USER_ID, authResolved: true };
 
-const AuthContext = createContext<AppAuth>({ getToken: noopToken, userId: null });
+const AuthContext = createContext<AppAuth>({ getToken: noopToken, userId: null, authResolved: true });
 
 // Bridges Clerk's useAuth into the app-level auth context (Clerk mode only —
 // this component is only mounted under ClerkProvider).
 function ClerkBridge({ children }: { children: ReactNode }) {
-  const { getToken, userId } = useAuth();
+  const { getToken, userId, isLoaded } = useAuth();
   // Clerk types userId as string | null | undefined; normalize. Memoized so
   // consumers' effects don't churn on a fresh object every render.
-  const value = useMemo<AppAuth>(() => ({ getToken, userId: userId ?? null }), [getToken, userId]);
+  const value = useMemo<AppAuth>(
+    () => ({ getToken, userId: userId ?? null, authResolved: Boolean(isLoaded) }),
+    [getToken, userId, isLoaded],
+  );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
@@ -42,7 +49,7 @@ export function useAppAuth(): AppAuth {
 //    MissingPublishableKeyError / InvalidPublishableKeyError at render when
 //    it cannot work; e2e chat.spec pins the gate behavior).
 // 3. Otherwise — ClerkProvider as normal.
-const SIGNED_OUT: AppAuth = { getToken: noopToken, userId: null };
+const SIGNED_OUT: AppAuth = { getToken: noopToken, userId: null, authResolved: true };
 export function AuthGate({ children }: { children: ReactNode }) {
   if (AUTH_DISABLED) {
     return <AuthContext.Provider value={DEV_AUTH}>{children}</AuthContext.Provider>;

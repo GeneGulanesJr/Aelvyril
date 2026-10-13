@@ -2,7 +2,7 @@
 
 import { ClerkProvider, useAuth } from "@clerk/nextjs";
 import { createContext, useContext, useMemo, type ReactNode } from "react";
-import { AUTH_DISABLED, DEV_USER_ID } from "../lib/auth.js";
+import { AUTH_DISABLED, CLERK_CLIENT_USABLE, DEV_USER_ID } from "../lib/auth.js";
 
 export type AppAuth = {
   getToken: () => Promise<string | null>;
@@ -34,11 +34,21 @@ export function useAppAuth(): AppAuth {
   return useContext(AuthContext);
 }
 
-// Auth switch: ClerkProvider in normal operation; a fixed dev identity when
-// NEXT_PUBLIC_AUTH_DISABLED=1 (local testing without Clerk — see lib/auth.ts).
+// Auth switch, in order:
+// 1. NEXT_PUBLIC_AUTH_DISABLED=1 — fixed dev identity (local testing without
+//    Clerk — see lib/auth.ts).
+// 2. Clerk keys missing or malformed — signed-out state: pages render the
+//    defensive sign-in gate instead of 500ing (ClerkProvider throws
+//    MissingPublishableKeyError / InvalidPublishableKeyError at render when
+//    it cannot work; e2e chat.spec pins the gate behavior).
+// 3. Otherwise — ClerkProvider as normal.
+const SIGNED_OUT: AppAuth = { getToken: noopToken, userId: null };
 export function AuthGate({ children }: { children: ReactNode }) {
   if (AUTH_DISABLED) {
     return <AuthContext.Provider value={DEV_AUTH}>{children}</AuthContext.Provider>;
+  }
+  if (!CLERK_CLIENT_USABLE) {
+    return <AuthContext.Provider value={SIGNED_OUT}>{children}</AuthContext.Provider>;
   }
   return (
     <ClerkProvider>

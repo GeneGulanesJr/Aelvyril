@@ -1006,7 +1006,10 @@ describe("durable prompt queue (#83)", () => {
               .prepare("SELECT id, status, state FROM conversations WHERE id IN (?, ?)")
               .all(t1.id, t2.id) as Array<{ id: string; status: string; state: string }>;
             for (const r of rows) {
-              expect(r.status).toBe("running");
+              // Lifecycle fix: a settled no-workspace turn no longer sticks
+              // at 'running' — the pipeline's early exit settles the thread
+              // to 'reviewed' so it can be merged/abandoned.
+              expect(r.status).toBe("reviewed");
               expect(r.state).toBe("idle");
             }
           } finally {

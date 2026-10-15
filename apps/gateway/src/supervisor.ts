@@ -382,25 +382,50 @@ export class Supervisor {
    */
   async approveExecution(conversationId: string): Promise<boolean> {
     const spec = this.opts.store.getThreadSpecById(conversationId);
+    // Gate fix: approveExecution is the ONLY way to allow a parked gated
+    // action, so with no spec draft it still works — allow the pending
+    // gated classes and re-run the user's last prompt (the same shape as
+    // retryExecution's spec-less retry). With neither a spec nor a last
+    // prompt there is nothing to approve: return false BEFORE prepareTurn
+    // so no host spawns and the row never flips to streaming for a no-op.
+    if (!spec?.specDraft) {
+      const last = this.opts.store.getLastPromptById(conversationId);
+      if (!last) return false;
+      const handle = await this.prepareTurn(conversationId, this.namespaceEnv(conversationId), undefined);
+      handle.contract.allowPendingGated();
+      handle.contract.beginExecution();
+      await handle.rpc.send({ type: "prompt", message: last });
+      return true;
+    }
     const handle = await this.prepareTurn(conversationId, this.namespaceEnv(conversationId), undefined);
-    handle.contract.restoreDraft(spec?.specDraft ?? null);
+    handle.contract.restoreDraft(spec.specDraft);
     handle.contract.allowPendingGated();
     handle.contract.approveExecution();
     return true;
   }
 
+  /** Route helper (#81): whether a gated action is parked awaiting approve
+   *  — lets POST /approve accept a no-spec thread whose gate stop never
+   *  produced a draft. */
+  hasPendingGated(conversationId: string): boolean {
+    return this.handles.get(conversationId)?.contract.hasPendingGated() ?? false;
+  }
+
   /** #80 fix 3: retry re-executes against the same spec (or the original
-   *  prompt when the turn never had one). */
+   *  prompt when the turn never had one). Lifecycle fix: the "nothing to
+   *  retry" decision runs BEFORE prepareTurn — spawning a host and flipping
+   *  the row to streaming for a no-op used to leak state='streaming' with
+   *  no live turn (a dead cap slot that starves the queue runner). */
   async retryExecution(conversationId: string): Promise<boolean> {
     const spec = this.opts.store.getThreadSpecById(conversationId);
+    const last = spec?.specDraft ? null : this.opts.store.getLastPromptById(conversationId);
+    if (!spec?.specDraft && !last) return false;
     const handle = await this.prepareTurn(conversationId, this.namespaceEnv(conversationId), undefined);
     handle.contract.restoreDraft(spec?.specDraft ?? null);
     if (spec?.specDraft) {
       handle.contract.retryExecution();
       return true;
     }
-    const last = this.opts.store.getLastPromptById(conversationId);
-    if (!last) return false;
     handle.contract.beginExecution();
     await handle.rpc.send({ type: "prompt", message: last });
     return true;
@@ -425,9 +450,24 @@ export class Supervisor {
     handle.contract.submitSpecPatch(body);
   }
 
-  /** Abandon publishes the terminal status via the contract, then kills. */
+  /** Abandon publishes the terminal status via the contract, then kills.
+   *  Lifecycle fix: killChild forgets the handle BEFORE the child exits, so
+   *  the exit listener returns early and nothing settles the row — a
+   *  mid-turn abandon used to leak state='streaming' with no live turn,
+   *  permanently eating one of the user's running-host cap slots
+   *  (countStreaming also gates the queue runner). Land idle directly, with
+   *  or without a live handle, mirroring the kill-all route's state write. */
   abandonThread(conversationId: string): void {
     this.handles.get(conversationId)?.contract.abandon();
+    try {
+      const conv = this.opts.store.getConversationById(conversationId);
+      if (conv?.state === "streaming" || conv?.state === "blocked") {
+        this.opts.store.setConversationState(conversationId, "idle");
+        this.publish(conversationId, { kind: "session_state", payload: { state: "idle" } });
+      }
+    } catch {
+      // store closed (shutdown); best-effort, like the exit path
+    }
     this.killChild(conversationId);
   }
 
@@ -691,8 +731,19 @@ export class Supervisor {
     }
     // Best-effort: stop the turn BEFORE the irreversible action completes.
     // Real pi honors abort; if the child already ran it, the diff review is
-    // the backstop.
-    void this.abort(conversationId);
+    // the backstop. The send REJECTS on the rpc timeout or a child that died
+    // first (RpcClient.terminate rejects every pending send) — without this
+    // catch the unhandled rejection takes the whole gateway down.
+    void this.abort(conversationId).catch((err) => {
+      try {
+        this.opts.logger?.warn(
+          { err: err instanceof Error ? err : String(err), conversationId },
+          "gate-stop abort never reached the session host",
+        );
+      } catch {
+        // a broken logger must not break the gate path
+      }
+    });
   }
 
   /**
@@ -713,12 +764,26 @@ export class Supervisor {
     // pipeline can neither inject a verify-retry into the new turn nor mark
     // a live thread reviewed underneath it.
     const generation = handle.turnGeneration;
-    const stale = (): boolean => handle.turnGeneration !== generation;
+    // Lifecycle fix: killChild (abandon/delete/kill-all) and the idle reap do
+    // NOT bump turnGeneration, so the generation alone missed a host killed
+    // or reaped DURING the pipeline — markReviewed then overwrote the
+    // terminal abandoned/merged status, and the verify-retry prompt went into
+    // a dead child. A handle that is no longer the live one is stale.
+    const stale = (): boolean =>
+      handle.turnGeneration !== generation ||
+      this.handles.get(conversationId) !== handle ||
+      handle.exiting;
     try {
       const workspace = this.opts.store.getConversationById(conversationId)?.workspace ?? undefined;
-      if (!workspace) return;
+      if (!workspace) {
+        this.settleRunningThread(conversationId, stale);
+        return;
+      }
       const diff = await (this.opts.computeDiff ?? computeWorkspaceDiff)(workspace);
-      if (!diff || diff.length === 0) return;
+      if (!diff || diff.length === 0) {
+        this.settleRunningThread(conversationId, stale);
+        return;
+      }
 
       this.publish(conversationId, { kind: "diff", payload: { files: diff } });
 
@@ -773,9 +838,38 @@ export class Supervisor {
       });
       this.opts.store.setConversationState(conversationId, "streaming");
       this.publish(conversationId, { kind: "session_state", payload: { state: "streaming" } });
-      await handle.rpc.send({ type: "prompt", message: buildVerifyRetryPrompt(failure) });
+      // The host may die between the stale check and this send (killed,
+      // reaped, crashed). A failed retry send used to be swallowed by the
+      // outer catch with the row left 'streaming' forever — land the same
+      // degraded envelope a crash produces instead.
+      try {
+        const res = await handle.rpc.send({ type: "prompt", message: buildVerifyRetryPrompt(failure) });
+        if (!res.success) throw new Error(res.error ?? "verify retry rejected by the session host");
+      } catch {
+        try {
+          this.opts.store.setConversationState(conversationId, "degraded");
+          this.publish(conversationId, { kind: "session_state", payload: { state: "degraded" } });
+        } catch {
+          // store closed (shutdown); ignore
+        }
+      }
     } catch {
       // diff/verify infrastructure failed — fail soft, leave the turn done
+    }
+  }
+
+  /**
+   * Lifecycle fix: the pipeline's early exits (no workspace configured, cwd
+   * not a git repo / empty diff) used to strand the thread at status
+   * 'running' — the only way out was markReviewed deeper in the pipeline, so
+   * an approve/retry run without a diff could never be merged or abandoned.
+   * Settle a RUNNING thread to 'reviewed' here; any other status (draft,
+   * spec'ing, queued, terminal) is not ours to move.
+   */
+  private settleRunningThread(conversationId: string, stale: () => boolean): void {
+    if (stale()) return;
+    if (this.opts.store.getThreadStatusById(conversationId) === "running") {
+      this.markReviewed(conversationId);
     }
   }
 

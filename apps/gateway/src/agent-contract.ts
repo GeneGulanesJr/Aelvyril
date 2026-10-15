@@ -174,6 +174,12 @@ export class AgentContract {
     return this.allowedGated.has(reason);
   }
 
+  /** True when a gated action is parked awaiting POST /approve (#81) — the
+   *  route uses this to accept a no-spec approve (see Supervisor.approve). */
+  hasPendingGated(): boolean {
+    return this.pendingGated.size > 0;
+  }
+
   notePendingGated(reason: string): void {
     this.pendingGated.add(reason);
   }

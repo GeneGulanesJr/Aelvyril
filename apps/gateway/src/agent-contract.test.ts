@@ -197,6 +197,19 @@ describe("AgentContract lifecycle (#80)", () => {
       .map((e) => (e.payload as { status: string }).status);
     expect(statuses).toEqual(["abandoned"]);
   });
+
+  // Gate fix: the approve route needs to know whether a gated action is
+  // parked (a no-spec thread's only way forward is approveExecution).
+  it("hasPendingGated tracks the gate park across note/allow (#81)", () => {
+    const { io } = fakeIo();
+    const c = new AgentContract(io, { specMode: "force" });
+    expect(c.hasPendingGated()).toBe(false);
+    c.notePendingGated("install is irreversible by definition");
+    expect(c.hasPendingGated()).toBe(true);
+    c.allowPendingGated();
+    expect(c.hasPendingGated()).toBe(false);
+    expect(c.isActionAllowed("install is irreversible by definition")).toBe(true);
+  });
 });
 
 describe("prompt builders", () => {

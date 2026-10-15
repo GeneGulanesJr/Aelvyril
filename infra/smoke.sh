@@ -42,10 +42,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Preflight: at least one of these auth modes must be configured before
+# compose boots. Local dev uses NEXT_PUBLIC_AUTH_DISABLED=1 + PI_FAKE=1 in
+# infra/.env (no real keys needed); a real Clerk integration needs both
+# NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY (build-arg into web) and CLERK_SECRET_KEY
+# (runtime, web+gateway) — see the build args under the `web` service.
+# Previously the second path was unreachable — the preflight refused unless
+# the dev flags were set, regardless of Clerk keys.
 if [[ "${NEXT_PUBLIC_AUTH_DISABLED:-}" != "1" && "${PI_FAKE:-}" != "1" ]]; then
-  echo "smoke: set NEXT_PUBLIC_AUTH_DISABLED=1 + PI_FAKE=1 in infra/.env (local dev)," \
-       "or provide real Clerk keys in the env" >&2
-  exit 2
+  # Not in dev mode: require BOTH Clerk keys. Half-configured Clerk will
+  # fail inside the gateway/web container with a less actionable error.
+  if [[ -z "${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}" || -z "${CLERK_SECRET_KEY:-}" ]]; then
+    echo "smoke: configure one of:" >&2
+    echo "  - local dev: NEXT_PUBLIC_AUTH_DISABLED=1 + PI_FAKE=1 in infra/.env" >&2
+    echo "  - real Clerk: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY + CLERK_SECRET_KEY in the env" >&2
+    exit 2
+  fi
 fi
 
 # Compose binds GATEWAY_HOST="::" inside the container; the fake verifier
@@ -57,6 +69,16 @@ if [[ "${PI_FAKE:-}" == "1" && -z "${CLERK_SECRET_KEY:-}" && "${PI_FAKE_ALLOW_NO
        "(compose binds GATEWAY_HOST=:: inside the container)" >&2
   exit 2
 fi
+
+# Review 2026-10-15: create the workspaces host dir before `compose up`.
+# Docker creates missing bind-mount source dirs as root:root 0755, which the
+# uid-1001 gateway can't enter (EACCES on every git/file op). -p is a no-op
+# when the dir already exists; we don't chown — the operator is expected to
+# own an existing dir (see infra/README.md).
+# Compose resolves a relative path against infra/ (the compose file's dir).
+ws_host="${WORKSPACES_HOST_PATH:-./workspaces}"
+[[ "$ws_host" == /* ]] || ws_host="$COMPOSE_DIR/infra/$ws_host"
+mkdir -p "$ws_host"
 
 echo "smoke: booting compose (dev profile)..."
 docker compose -f infra/compose.yaml --profile dev up -d --build

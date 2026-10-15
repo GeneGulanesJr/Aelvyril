@@ -78,6 +78,7 @@ These patches live in the sibling repos — not in `infra/`:
 - **Sandd auth is file-only** (`~/.pisandboxed/token`, `0600`). The `sandd-token` volume is pre-seeded by the operator; the Dockerfile mounts it at `/token/token`.
 - **Layamcp healthcheck `start_period: 120s`** — cold model load is ~120s on first boot. Without that grace period, docker kills the container before models are resident.
 - **Caddy persists certs in `caddy-data` + `caddy-config` volumes** — restarts don't re-request Let's Encrypt.
+- **Workspaces bind mount on Linux** — `${WORKSPACES_HOST_PATH:-./workspaces}:/workspaces` creates the host dir as root:root 0755 when it doesn't exist, and the uid-1001 gateway then can't enter it (and modern git refuses as "dubious ownership"; the runtime image already marks `/workspaces` safe — see `docker/Dockerfile.gateway`). On Linux pre-create the dir and chown it to 1001:1001 (e.g. `sudo chown 1001:1001 infra/workspaces`), or point `WORKSPACES_HOST_PATH` at a dir the gateway already owns. `infra/smoke.sh` does the `mkdir -p` for you; ad-hoc `docker compose up` does not.
 
 ## Sibling-checkout layout
 
@@ -97,10 +98,12 @@ Prebuilt images replace the sibling-checkout builds once each backing service ha
 
 `infra/smoke.sh`:
 
-1. Preflight (before anything boots): requires `NEXT_PUBLIC_AUTH_DISABLED=1`
-   + `PI_FAKE=1` in `infra/.env` (or real Clerk keys in the env); with
-   `PI_FAKE=1` and no Clerk key it also requires
-   `PI_FAKE_ALLOW_NON_LOOPBACK=1`. Preflight failures exit 2.
+1. Preflight (before anything boots): requires EITHER the local dev flags
+   (`NEXT_PUBLIC_AUTH_DISABLED=1` + `PI_FAKE=1` in `infra/.env`) OR real
+   Clerk keys (`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` + `CLERK_SECRET_KEY`
+   non-empty in the env). With `PI_FAKE=1` and no Clerk key it also
+   requires `PI_FAKE_ALLOW_NON_LOOPBACK=1`. Preflight failures exit 2 with a
+   message naming the variables each path needs.
 2. Boots `docker compose --profile dev up -d --build`.
 3. Polls `http://127.0.0.1:8787/healthz` until the gateway responds 200
    (30 × 1s attempts).

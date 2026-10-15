@@ -47,4 +47,58 @@ describe("createWorkspaceAllowlist", () => {
     expect(set.has(resolve("/a"))).toBe(true);
     expect(set.has(resolve("/b"))).toBe(true);
   });
+
+  // Review 2026-10-15: canonical-input check (resolve(p) === p) — the
+  // old "!includes('/../')" check passed `<allowed>/<symlink>/..` because
+  // resolve() collapses `..` lexically, but the kernel then resolves it
+  // physically when used as a child cwd, landing outside the allowlist.
+  describe("canonical-path hardening (review 2026-10-15)", () => {
+    it("accepts a canonical allowlisted path", () => {
+      const wl = createWorkspaceAllowlist("/ws/repo");
+      expect(wl.isAllowed("/ws/repo")).toBe(true);
+      expect(wl.resolve("/ws/repo")).toBe(resolve("/ws/repo"));
+    });
+
+    it("rejects traversal segments (the symlink-.. escape)", () => {
+      const wl = createWorkspaceAllowlist("/ws/repo");
+      expect(wl.isAllowed("/ws/repo/link/..")).toBe(false);
+      expect(wl.resolve("/ws/repo/link/..")).toBeNull();
+    });
+
+    it("rejects `./` and `//` segments (resolve-normalizable input)", () => {
+      const wl = createWorkspaceAllowlist("/ws/repo");
+      expect(wl.isAllowed("/ws/repo/./")).toBe(false);
+      expect(wl.isAllowed("/ws//repo")).toBe(false);
+    });
+
+    it("rejects a trailing slash on the workspace (canonical mismatch)", () => {
+      const wl = createWorkspaceAllowlist("/ws/repo");
+      // resolve("/ws/repo/") === "/ws/repo", so the trailing slash makes
+      // the input non-canonical and is rejected — the caller is asked to
+      // pass the same form the operator configured.
+      expect(wl.isAllowed("/ws/repo/")).toBe(false);
+      expect(wl.resolve("/ws/repo/")).toBeNull();
+    });
+
+    it("rejects relative paths and NUL bytes", () => {
+      const wl = createWorkspaceAllowlist("/ws/repo");
+      expect(wl.isAllowed("relative/path")).toBe(false);
+      expect(wl.isAllowed("\0/escape")).toBe(false);
+    });
+
+    it("null/undefined workspaces stay allowed (platform-level chats)", () => {
+      const wl = createWorkspaceAllowlist("/ws/repo");
+      expect(wl.isAllowed(null)).toBe(true);
+      expect(wl.isAllowed(undefined)).toBe(true);
+    });
+
+    it("parseAllowlist still normalizes trailing slashes on operator config", () => {
+      // Operator-supplied allowlist entries are config, not chat input —
+      // /ws/repo and /ws/repo/ must produce the same canonical entry.
+      const a = parseAllowlist("/ws/repo");
+      const b = parseAllowlist("/ws/repo/");
+      expect(a.has(resolve("/ws/repo"))).toBe(true);
+      expect(b.has(resolve("/ws/repo"))).toBe(true);
+    });
+  });
 });

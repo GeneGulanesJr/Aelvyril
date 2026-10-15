@@ -61,6 +61,19 @@ describe("GatewayClient", () => {
     ).rejects.toThrow(/prompt failed: 402 cost_cap_reached \(cost 5\.01 > cap 5\)/);
   });
 
+  it("prompt returns the parsed 202 body — accepted, and queued when parked behind the host cap", async () => {
+    const { client } = makeClient();
+    mockFetchSequence([
+      { ok: true, status: 202, body: { accepted: true } },
+      { ok: true, status: 202, body: { accepted: true, queued: true } },
+    ]);
+    expect(await client.prompt("t1", { message: "a", specMode: "auto" })).toEqual({ accepted: true });
+    expect(await client.prompt("t1", { message: "b", specMode: "auto" })).toEqual({
+      accepted: true,
+      queued: true,
+    });
+  });
+
   it("patchSpec surfaces a plain error code (413 spec_too_large) and falls back to status-only for non-JSON bodies", async () => {
     const { client } = makeClient();
     mockFetchSequence([{ ok: false, status: 413, body: { error: "spec_too_large" } }]);

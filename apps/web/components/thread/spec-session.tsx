@@ -42,7 +42,11 @@ export function SpecSession({
   /** #81: keep the approve control reachable during a gated stop. */
   forceVisible?: boolean;
   onSubmitAnswers: (a: Record<string, string>) => void;
-  onEditSpec: (field: "goal" | "filesAffected" | "plan" | "risks", value: string | string[]) => void;
+  /** May resolve false (or reject) — a failed PATCH must not approve. */
+  onEditSpec: (
+    field: "goal" | "filesAffected" | "plan" | "risks",
+    value: string | string[],
+  ) => void | boolean | Promise<void | boolean>;
   onApprove: () => void;
   onCancel: () => void;
 }) {
@@ -59,19 +63,36 @@ export function SpecSession({
   // Text values last accepted by the server (via onEditSpec). An incoming
   // draft equal to these is just the echo of our own PATCH, not a re-draft.
   const lastSentRef = useRef<Record<SpecFieldKey, string>>(draft ? draftToText(draft) : EMPTY_TEXTS);
-  // Unsent edits (debounce window) — flushed by the timer or on blur.
+  // Unsent edits (debounce window) — flushed by the timer, on blur, or by
+  // Approve (which AWAITS the PATCHes first, see handleApprove).
   const pendingRef = useRef<Partial<Record<SpecFieldKey, string>>>({});
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // PATCH batches still in flight. Clicking Approve blurs the field first,
+  // so the blur flush is usually already sent (and pendingRef empty) by the
+  // time the click lands — Approve must wait for those too.
+  const inflightRef = useRef(new Set<Promise<boolean>>());
 
-  const flushPending = () => {
+  // Resolves whether every flushed PATCH succeeded. Synchronous handlers
+  // stay synchronous; only real promises are tracked as in flight.
+  const flushPending = (): boolean | Promise<boolean> => {
     const pending = pendingRef.current;
     pendingRef.current = {};
+    const sends: (void | boolean | Promise<void | boolean>)[] = [];
     for (const field of SPEC_FIELDS) {
       const text = pending[field];
       if (text === undefined) continue;
-      onEditSpec(field, textToValue(field, text));
+      sends.push(onEditSpec(field, textToValue(field, text)));
       lastSentRef.current[field] = text;
     }
+    if (!sends.some((r) => r instanceof Promise)) return sends.every((r) => r !== false);
+    // `false` (failed PATCH) or a rejection — the caller decides whether to
+    // proceed (Approve does not).
+    const batch = Promise.allSettled(sends).then((results) =>
+      results.every((r) => r.status === "fulfilled" && r.value !== false),
+    );
+    inflightRef.current.add(batch);
+    void batch.finally(() => inflightRef.current.delete(batch));
+    return batch;
   };
 
   // Reconcile from incoming spec_draft envelopes, but only where it's safe:
@@ -113,7 +134,7 @@ export function SpecSession({
     if (debounceRef.current !== null) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       debounceRef.current = null;
-      flushPending();
+      void flushPending();
     }, SPEC_PATCH_DEBOUNCE_MS);
   };
 
@@ -125,7 +146,25 @@ export function SpecSession({
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
-    flushPending();
+    void flushPending();
+  };
+
+  const handleApprove = () => {
+    if (debounceRef.current !== null) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    // Approve races the debounced PATCH: the old spec must not execute, so
+    // flush first and AWAIT every in-flight PATCH; a failed edit skips the
+    // approve.
+    if (flushPending() === false) return;
+    if (inflightRef.current.size === 0) {
+      onApprove();
+      return;
+    }
+    void Promise.all([...inflightRef.current]).then((oks) => {
+      if (oks.every(Boolean)) onApprove();
+    });
   };
 
   if (status !== "spec'ing" && !forceVisible) return null;
@@ -192,7 +231,7 @@ export function SpecSession({
             onChange={(v) => handleFieldChange("risks", v)}
             onFocus={() => { editingRef.current = "risks"; }} onBlur={handleFieldBlur} />
           <div className="flex gap-2 pt-1 md:col-span-2">
-            <button className="inline-flex items-center gap-1.5 rounded-md bg-go px-3.5 py-1.5 text-sm font-semibold text-go-ink transition-colors hover:bg-go/90" data-testid="approve" onClick={onApprove}>
+            <button className="inline-flex items-center gap-1.5 rounded-md bg-go px-3.5 py-1.5 text-sm font-semibold text-go-ink transition-colors hover:bg-go/90" data-testid="approve" onClick={handleApprove}>
               <Play aria-hidden className="size-3.5" />
               Approve &amp; run
             </button>

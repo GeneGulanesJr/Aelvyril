@@ -66,12 +66,18 @@ export class GatewayClient {
     };
   }
 
-  async prompt(id: string, body: PromptBodyInput): Promise<void> {
+  /** 202 {accepted:true[,queued:true]} — `queued` = parked behind the
+   *  running-host cap (no turn starts yet). The caller needs `queued` to
+   *  know whether a turn is about to run (Stop button). */
+  async prompt(id: string, body: PromptBodyInput): Promise<{ accepted: boolean; queued?: boolean }> {
     const res = await fetch(
       `${this.baseUrl}${ROUTES.conversationPrompt(id)}`,
       await this.authed({ method: "POST", body: JSON.stringify(body) }),
     );
     if (!res.ok) throw await apiError("prompt", res);
+    // The prompt WAS accepted (2xx) — an unreadable body must not turn that
+    // into a client-side failure.
+    return (await res.json().catch(() => ({ accepted: true }))) as { accepted: boolean; queued?: boolean };
   }
 
   async renameConversation(id: string, body: RenameConversationBody): Promise<Conversation> {

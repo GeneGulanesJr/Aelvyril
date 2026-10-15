@@ -49,6 +49,11 @@ export interface ThreadState {
   timeline: TimelineItem[];
   diff: { path: string; patch: string }[];
   error: string | null;
+  /** Where the current `error` came from: "turn" = an `error` envelope from
+   *  the thread's event stream (retryable via POST /retry), "client" = a
+   *  failed mutation/ask/stream-loss the hook itself raised. Only turn
+   *  errors offer "Retry turn"; only turn errors clear when the run moves on. */
+  errorSource: "turn" | "client" | null;
   /** Session host died mid-turn — next prompt respawns it (spec §10). */
   degraded: boolean;
   /** #84: needs-you escalation reason (drives the orange blocked banner).
@@ -82,6 +87,7 @@ const initialThreadState: ThreadState = {
   timeline: [],
   diff: [],
   error: null,
+  errorSource: null,
   degraded: false,
   blocked: null,
   waiting: false,
@@ -99,12 +105,12 @@ export function useThread(
   /** Resolves true when the prompt was accepted, false when it failed
    *  (the error banner is set) — callers use it to keep typed text alive. */
   ask: (prompt: string, specMode: "auto" | "force" | "off") => Promise<boolean>;
-  submitAnswers: (answers: Record<string, string>) => Promise<void>;
-  editSpec: (field: "goal" | "filesAffected" | "plan" | "risks", value: string | string[]) => Promise<void>;
-  approve: () => Promise<void>;
-  abandon: () => Promise<void>;
-  retry: () => Promise<void>;
-  merge: () => Promise<void>;
+  submitAnswers: (answers: Record<string, string>) => Promise<boolean>;
+  editSpec: (field: "goal" | "filesAffected" | "plan" | "risks", value: string | string[]) => Promise<boolean>;
+  approve: () => Promise<boolean>;
+  abandon: () => Promise<boolean>;
+  retry: () => Promise<boolean>;
+  merge: () => Promise<boolean>;
   stop: () => Promise<void>;
   dismissError: () => void;
 } {
@@ -153,6 +159,7 @@ export function useThread(
             reason === "not_found"
               ? "This thread no longer exists."
               : "Live updates stopped after repeated failures — reload to reconnect.",
+          errorSource: "client",
         })),
     );
     return () => {
@@ -166,15 +173,19 @@ export function useThread(
       if (!clientRef.current || !threadId) return false;
       // Spec §6: a send while a turn is mid-flight queues as a steer.
       const steer = state.waiting ? { streamingBehavior: "steer" as const } : {};
+      // Optimistic: Stop shows immediately. From here the server owns the
+      // flag — the gateway publishes session_state: streaming BEFORE the
+      // POST resolves, so clearing it in a finally would clobber the live
+      // turn and hide the Stop button for the whole run.
       setState((s) => ({ ...s, waiting: true }));
       try {
-        await clientRef.current.prompt(threadId, { message, specMode, ...steer });
+        const res = await clientRef.current.prompt(threadId, { message, specMode, ...steer });
+        // A queued prompt starts no turn — nothing to stop yet.
+        if (res.queued) setState((s) => ({ ...s, waiting: false }));
         return true;
       } catch (err) {
-        setState((s) => ({ ...s, error: toErrorMessage(err) }));
+        setState((s) => ({ ...s, error: toErrorMessage(err), errorSource: "client", waiting: false }));
         return false;
-      } finally {
-        setState((s) => ({ ...s, waiting: false }));
       }
     },
     [threadId, state.waiting],
@@ -182,69 +193,83 @@ export function useThread(
 
   // Mutations are fire-and-forget at the call sites, so a rejection must
   // land in the error banner instead of escaping as an unhandled rejection.
-  const run = useCallback(async (action: () => Promise<void>) => {
+  // The boolean result lets callers toast success only on real success.
+  const run = useCallback(async (action: () => Promise<unknown>): Promise<boolean> => {
     try {
       await action();
+      return true;
     } catch (err) {
-      setState((s) => ({ ...s, error: toErrorMessage(err) }));
+      setState((s) => ({ ...s, error: toErrorMessage(err), errorSource: "client" }));
+      return false;
     }
   }, []);
 
   const stop = useCallback(async () => {
     const client = clientRef.current;
     if (!client || !threadId) return;
-    await run(() => client.abortThread(threadId));
-    setState((s) => ({ ...s, waiting: false }));
+    // Only a successful abort may clear waiting — a failed one keeps the
+    // Stop button (the error band carries the failure).
+    const ok = await run(() => client.abortThread(threadId));
+    if (ok) setState((s) => ({ ...s, waiting: false }));
   }, [threadId, run]);
 
   const dismissError = useCallback(() => {
-    setState((s) => ({ ...s, error: null }));
+    setState((s) => ({ ...s, error: null, errorSource: null }));
   }, []);
 
   const submitAnswers = useCallback(
-    async (answers: Record<string, string>) => {
+    async (answers: Record<string, string>): Promise<boolean> => {
       const client = clientRef.current;
-      if (!client || !threadId) return;
-      await run(() => client.patchSpec(threadId, { kind: "answer", answers }));
+      if (!client || !threadId) return false;
+      return run(() => client.patchSpec(threadId, { kind: "answer", answers }));
     },
     [threadId, run],
   );
 
   const editSpec = useCallback(
-    async (field: "goal" | "filesAffected" | "plan" | "risks", value: string | string[]) => {
+    async (field: "goal" | "filesAffected" | "plan" | "risks", value: string | string[]): Promise<boolean> => {
       const client = clientRef.current;
-      if (!client || !threadId) return;
-      await run(() => client.patchSpec(threadId, { kind: "edit", field, value }));
+      if (!client || !threadId) return false;
+      return run(() => client.patchSpec(threadId, { kind: "edit", field, value }));
     },
     [threadId, run],
   );
 
-  const approve = useCallback(async () => {
+  const approve = useCallback(async (): Promise<boolean> => {
     const client = clientRef.current;
-    if (!client || !threadId) return;
-    await run(() => client.approveSpec(threadId));
+    if (!client || !threadId) return false;
+    return run(() => client.approveSpec(threadId));
   }, [threadId, run]);
 
-  const abandon = useCallback(async () => {
+  const abandon = useCallback(async (): Promise<boolean> => {
     const client = clientRef.current;
-    if (!client || !threadId) return;
-    await run(() => client.abandonThread(threadId));
+    if (!client || !threadId) return false;
+    return run(() => client.abandonThread(threadId));
   }, [threadId, run]);
 
-  const retry = useCallback(async () => {
+  const retry = useCallback(async (): Promise<boolean> => {
     const client = clientRef.current;
-    if (!client || !threadId) return;
-    await run(() => client.retryThread(threadId));
+    if (!client || !threadId) return false;
+    return run(() => client.retryThread(threadId));
   }, [threadId, run]);
 
   // #80: accept the reviewed diff (reviewed → merged).
-  const merge = useCallback(async () => {
+  const merge = useCallback(async (): Promise<boolean> => {
     const client = clientRef.current;
-    if (!client || !threadId) return;
-    await run(() => client.mergeThread(threadId));
+    if (!client || !threadId) return false;
+    return run(() => client.mergeThread(threadId));
   }, [threadId, run]);
 
   return { ...state, ask, submitAnswers, editSpec, approve, abandon, retry, merge, stop, dismissError };
+}
+
+/** The SSE stream replays the whole history on every visit — an old error
+ *  envelope must not haunt the banner once the run visibly moved on (a new
+ *  turn started, or the thread was merged/abandoned). Client-
+ *  sourced errors are NOT cleared here: nothing on the stream resolves them. */
+function clearStaleTurnError(s: ThreadState): ThreadState {
+  if (s.errorSource !== "turn") return s;
+  return { ...s, error: null, errorSource: null };
 }
 
 /** Close any open narration block so a new speaker/tool starts fresh. */
@@ -266,8 +291,14 @@ function appendNarration(timeline: TimelineItem[], id: string, ts: string, delta
 
 function applyEnvelope(s: ThreadState, e: EventEnvelope): ThreadState {
   switch (e.kind) {
-    case "spec_status":
-      return { ...s, status: e.payload.status, statusLive: true };
+    case "spec_status": {
+      const next = { ...s, status: e.payload.status, statusLive: true };
+      // merged/abandoned: the user closed the thread out, so a replayed turn
+      // error is history. NOT reviewed — the gateway publishes the
+      // verify_exhausted "needs your review" error right before reviewed.
+      const closed = e.payload.status === "merged" || e.payload.status === "abandoned";
+      return closed ? clearStaleTurnError(next) : next;
+    }
     case "spec_question":
       return { ...s, questions: e.payload.questions };
     case "spec_draft":
@@ -350,21 +381,24 @@ function applyEnvelope(s: ThreadState, e: EventEnvelope): ThreadState {
     case "diff":
       return { ...s, diff: e.payload.files };
     case "error":
-      return { ...s, error: e.payload.message };
+      return { ...s, error: e.payload.message, errorSource: "turn" };
     case "usage":
       // #84: cumulative cost/token accounting, harvested at turn settle.
       return { ...s, usage: e.payload };
-    case "session_state":
+    case "session_state": {
       // Spec §10: degraded means the host died mid-turn; the next prompt
       // respawns it. streaming/idle drive the waiting flag for Stop + steer.
       // #84: blocked is the needs-you escalation with a reason.
-      return {
+      const next = {
         ...s,
         degraded: e.payload.state === "degraded",
         blocked:
           e.payload.state === "blocked" ? (e.payload.reason ?? "dialog") : null,
         waiting: e.payload.state === "streaming",
       };
+      // A new turn starting means the replayed error predates real progress.
+      return e.payload.state === "streaming" ? clearStaleTurnError(next) : next;
+    }
     default:
       return s;
   }

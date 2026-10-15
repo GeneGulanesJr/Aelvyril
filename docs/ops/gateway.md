@@ -180,6 +180,7 @@ agent dialog instead of declining it.
 | `GATEWAY_MAX_RUNNING_HOSTS` | 2 | #83: per-user concurrent running hosts (the real cap) |
 | `GATEWAY_MAX_SESSION_HOSTS` | 100 | #83: global live-host ceiling |
 | `GATEWAY_QUEUE_INTERVAL_MS` | 2000 | #83: queue-runner tick |
+| `GATEWAY_HEALTH_OPTIONAL` | `layamcp` | Comma-separated `/healthz` probe names whose failure is reported (`ok:false` + `optional:true`) but never fails readiness; `none` = all required (empty = default) |
 
 Note: `GATEWAY_MAX_THREADS` / `GATEWAY_MAX_RUNNING_HOSTS` /
 `GATEWAY_MAX_SESSION_HOSTS` / `GATEWAY_QUEUE_INTERVAL_MS` are read in
@@ -288,9 +289,17 @@ docker logs ... 2>&1 | jq 'select(.reqId == "k3j9x1b7")'
 ### `/healthz` (liveness + readiness)
 
 Returns 200 when the gateway itself is healthy AND every configured
-backing service is reachable (TCP probe); returns 503 if any probe
-fails. Use this for K8s readiness checks so a deploy doesn't get
+backing service is reachable (TCP probe); returns 503 if a REQUIRED
+probe fails. Use this for K8s readiness checks so a deploy doesn't get
 traffic until `lapis` / `sandd` / `layamcp` are reachable.
+
+Optional probes (`GATEWAY_HEALTH_OPTIONAL`, comma-separated, default
+`layamcp`) are still probed and still reported — with `ok: false` and
+`optional: true` in the body — but they never fail readiness. The
+decision engine loads its model for ~120s cold, and compose sets
+`LAYAMCP_URL`, so a layamcp blip must not hold `web`
+(`depends_on gateway: service_healthy`) and Caddy down. Set the var
+to `none` to make every probe required (an empty value keeps the default).
 
 By default the probe set is empty — the endpoint just returns
 `{gateway: {ok: true, uptimeMs: N}, backing: {}}`. To probe specific
@@ -313,6 +322,10 @@ Response shape:
   }
 }
 ```
+
+A failing optional probe looks like
+`"layamcp": { "ok": false, "latencyMs": 2001, "optional": true }` —
+reported, but the endpoint still answers 200.
 
 The compose.yaml wires these env vars automatically in the prod profile.
 

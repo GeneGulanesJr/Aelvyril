@@ -47,6 +47,75 @@ describe("health", () => {
   });
 });
 
+// /healthz must not make the whole Docker stack depend on the optional
+// decision engine: compose sets LAYAMCP_URL, and layamcp's ~120s cold model
+// load used to fail the probe → the gateway answered 503 → `web`
+// (depends_on gateway: service_healthy) and Caddy never started.
+describe("health optional probes", () => {
+  const envBackup: Record<string, string | undefined> = {};
+  let app: App | undefined;
+
+  function setEnv(key: string, value: string): void {
+    if (!(key in envBackup)) envBackup[key] = process.env[key];
+    process.env[key] = value;
+  }
+
+  afterEach(async () => {
+    if (app) {
+      await app.close();
+      app = undefined;
+    }
+    for (const [key, value] of Object.entries(envBackup)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+      delete envBackup[key];
+    }
+  });
+
+  function makeHealthApp(optionalHealthProbes?: string[]) {
+    return buildApp({
+      dbPath: ":memory:",
+      childCommand: "node",
+      childArgs: [],
+      verifyToken: async () => null,
+      optionalHealthProbes,
+    });
+  }
+
+  it("a failing optional probe reports ok:false + optional:true but still 200s", async () => {
+    app = await makeHealthApp();
+    setEnv("LAYAMCP_URL", "http://127.0.0.1:1"); // closed port → refused instantly
+    const res = await app.inject({ method: "GET", url: "/healthz" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().backing.layamcp).toMatchObject({ ok: false, optional: true });
+  });
+
+  it("a failing required probe still fails readiness with 503", async () => {
+    app = await makeHealthApp();
+    setEnv("LAPIS_URL", "http://127.0.0.1:1");
+    const res = await app.inject({ method: "GET", url: "/healthz" });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().backing.lapis).toMatchObject({ ok: false });
+  });
+
+  it("GATEWAY_HEALTH_OPTIONAL overrides the default optional set", async () => {
+    app = await makeHealthApp(["lapis"]);
+    setEnv("LAPIS_URL", "http://127.0.0.1:1");
+    setEnv("LAYAMCP_URL", "http://127.0.0.1:1");
+    const res = await app.inject({ method: "GET", url: "/healthz" });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().backing.lapis).toMatchObject({ ok: false, optional: true });
+    expect(res.json().backing.layamcp).toMatchObject({ ok: false }); // now required
+  });
+
+  it("an empty optional set makes every probe required (documented off switch)", async () => {
+    app = await makeHealthApp([]);
+    setEnv("LAYAMCP_URL", "http://127.0.0.1:1");
+    const res = await app.inject({ method: "GET", url: "/healthz" });
+    expect(res.statusCode).toBe(503);
+  });
+});
+
 // Review P1: children must never inherit operator secrets — the spawn env
 // is an explicit allowlist now.
 describe("computeChildEnv allowlist", () => {

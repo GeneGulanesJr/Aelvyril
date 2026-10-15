@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AddressInfo } from "node:net";
+import { request as httpRequest } from "node:http";
 import { fileURLToPath } from "node:url";
-import { buildApp, type App } from "./app.js";
+import { buildApp, SSE_MAX_WRITE_BUFFER_BYTES, type App } from "./app.js";
 import { toUserNamespace, type EventEnvelope } from "@aelvyril/shared";
 import type { TokenVerifier } from "./auth.js";
 
@@ -119,6 +120,10 @@ describe("SSE end-to-end", () => {
   it("rejects unauthenticated event streams", async () => {
     const res = await fetch(`${baseUrl}/v1/threads`);
     expect(res.status).toBe(401);
+  });
+
+  it("exposes the 8MiB default SSE write-buffer cap", () => {
+    expect(SSE_MAX_WRITE_BUFFER_BYTES).toBe(8 * 1024 * 1024);
   });
 
   it("replays from Last-Event-ID on reconnect", async () => {
@@ -325,6 +330,142 @@ describe("SSE CORS on hijacked streams", () => {
       });
       expect(denied.headers.get("access-control-allow-origin")).toBeNull();
       await denied.body!.cancel();
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+// Lifecycle fix: a client that disconnects while auth (verifyToken) is
+// pending fires the socket's 'close' before the route ever attached its
+// cleanup, and writes to the dead socket fail silently — the stream slot,
+// the heartbeat interval and the bus subscription leaked until restart
+// (429 too_many_streams after maxSseStreamsPerUser such drops).
+describe("SSE teardown on client abort during auth", () => {
+  it("releases the stream slot and leaves no heartbeat interval behind", async () => {
+    const HEARTBEAT_MS = 77_777; // unique delay → identifiable in the spy
+    const intervalSpy = vi.spyOn(globalThis, "setInterval");
+    const clearSpy = vi.spyOn(globalThis, "clearInterval");
+    let app: App | undefined;
+    try {
+      app = await buildApp({
+        dbPath: ":memory:",
+        childCommand: process.execPath,
+        childArgs: [fakePi],
+        idleMs: 60_000,
+        // Slow verifier: the raw requests below abort WHILE auth is pending.
+        verifyToken: async (token) => {
+          await new Promise((r) => setTimeout(r, 50));
+          return token === "good" ? { userId: "user_test1" } : null;
+        },
+        maxSseStreamsPerUser: 2,
+        sseHeartbeatMs: HEARTBEAT_MS,
+      });
+      await app.listen({ port: 0, host: "127.0.0.1" });
+      const addr = app.server.address() as AddressInfo;
+      const base = `http://127.0.0.1:${addr.port}`;
+      const conv = (await (
+        await fetch(`${base}/v1/threads`, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...authHeaders },
+          body: JSON.stringify({}),
+        })
+      ).json()) as { id: string };
+
+      // Drop connections mid-auth: the socket closes before the route
+      // handler resumes past `await user(...)`, so nothing had attached a
+      // close listener yet.
+      for (let i = 0; i < 4; i++) {
+        const req = httpRequest({
+          host: addr.address,
+          port: addr.port,
+          path: `/v1/threads/${conv.id}/events`,
+          headers: authHeaders,
+        });
+        req.on("error", () => {}); // ECONNRESET from our own destroy
+        req.end();
+        await new Promise((r) => setTimeout(r, 5)); // still inside the 50ms verifier
+        req.destroy();
+      }
+
+      // Every dropped request released its slot: a normal stream still
+      // succeeds. Before the fix, drops 3+4 would have eaten the 2-slot cap
+      // and this connect would 429 too_many_streams.
+      let stream: Response | undefined;
+      await vi.waitFor(async () => {
+        stream = await fetch(`${base}/v1/threads/${conv.id}/events`, { headers: authHeaders });
+        expect(stream.status).toBe(200);
+      });
+      await stream!.body!.cancel();
+
+      // No interval left running: every heartbeat that was started has been
+      // cleared again — the aborted streams' intervals used to live forever.
+      // Delay comes from the call args: clearInterval mutates the Timeout's
+      // _idleTimeout, so it can't be read back from the handle afterwards.
+      await vi.waitFor(() => {
+        const cleared = new Set(clearSpy.mock.calls.map((c) => c[0]));
+        const heartbeats = intervalSpy.mock.calls
+          .map((call, i) => ({
+            delay: call[1] as number,
+            handle: intervalSpy.mock.results[i]!.value as NodeJS.Timeout,
+          }))
+          .filter((h) => h.delay === HEARTBEAT_MS);
+        expect(heartbeats.length).toBeGreaterThan(0); // the good stream had one
+        for (const { handle } of heartbeats) expect(cleared.has(handle)).toBe(true);
+      });
+    } finally {
+      intervalSpy.mockRestore();
+      clearSpy.mockRestore();
+      if (app) await app.close();
+    }
+  });
+});
+
+// Review: a client that keeps the socket open but stops reading made the
+// gateway buffer every event in memory without bound. Past the cap the
+// stream is dropped; the client reconnects with Last-Event-ID and dedups
+// by seq, so ending the connection is safe.
+describe("SSE backpressure cap", () => {
+  it("ends the stream once the buffered write exceeds the cap", async () => {
+    const app = await buildApp({
+      dbPath: ":memory:",
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      sseWriteBufferCapBytes: 8, // any envelope (~150B) already exceeds this
+    });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    try {
+      const addr = app.server.address() as AddressInfo;
+      const base = `http://127.0.0.1:${addr.port}`;
+      const conv = (await (
+        await fetch(`${base}/v1/threads`, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...authHeaders },
+          body: JSON.stringify({}),
+        })
+      ).json()) as { id: string };
+      await fetch(`${base}/v1/threads/${conv.id}/prompt`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeaders },
+        body: JSON.stringify({ message: "hi" }),
+      });
+      await vi.waitFor(async () => {
+        const one = await fetch(`${base}/v1/threads/${conv.id}`, { headers: authHeaders });
+        expect(((await one.json()) as { state: string }).state).toBe("idle");
+      });
+
+      const res = await fetch(`${base}/v1/threads/${conv.id}/events`, { headers: authHeaders });
+      expect(res.status).toBe(200);
+      const reader = res.body!.getReader();
+      // The replay's first envelope write already exceeds the 8-byte cap,
+      // so the stream must END on its own. Before the cap the stream stayed
+      // open on the heartbeat (the read below would hang until timeout).
+      await vi.waitFor(async () => {
+        const { done } = await reader.read();
+        expect(done).toBe(true);
+      });
     } finally {
       await app.close();
     }

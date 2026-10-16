@@ -55,7 +55,10 @@ async function safeResolve(host: string): Promise<string> {
 /** Result of the full health check. */
 export interface HealthCheckResult {
   gateway: { ok: boolean; uptimeMs: number };
-  backing: Record<string, { ok: boolean; latencyMs: number; error?: string }>;
+  backing: Record<
+    string,
+    { ok: boolean; latencyMs: number; error?: string; optional?: true }
+  >;
 }
 
 export interface HealthCheckOptions {
@@ -63,6 +66,10 @@ export interface HealthCheckOptions {
   serviceProbes?: () => Record<string, string>;
   /** Probe implementation override for tests. */
   probes?: BackingServiceProbes;
+  /** Probe names whose failure is reported (ok:false + optional:true) but
+   *  must not fail the overall check — e.g. layamcp's ~120s cold model load
+   *  must never block the compose stack (web waits on gateway: healthy). */
+  optional?: readonly string[];
 }
 
 export async function runHealthCheck(
@@ -71,6 +78,9 @@ export async function runHealthCheck(
 ): Promise<HealthCheckResult> {
   const probes = opts.probes ?? createProbes();
   const targets = opts.serviceProbes?.() ?? {};
+  // Optional probes are still probed + reported; only their VOTE on the
+  // overall result is dropped (the /healthz route skips optional failures).
+  const optional = new Set(opts.optional ?? []);
   const backing: HealthCheckResult["backing"] = {};
   await Promise.all(
     Object.entries(targets).map(async ([name, hp]) => {
@@ -79,13 +89,15 @@ export async function runHealthCheck(
       // original probe format was bare host:port.
       let host = hp.trim();
       let portStr = "";
+      const mark = (status: { ok: boolean; latencyMs: number; error?: string }) =>
+        optional.has(name) ? { ...status, optional: true as const } : status;
       if (/^https?:\/\//i.test(host)) {
         try {
           const u = new URL(host);
           host = u.hostname;
           portStr = u.port || (u.protocol === "https:" ? "443" : "80");
         } catch {
-          backing[name] = { ok: false, latencyMs: 0, error: `bad target ${hp}` };
+          backing[name] = mark({ ok: false, latencyMs: 0, error: `bad target ${hp}` });
           return;
         }
       } else {
@@ -96,16 +108,16 @@ export async function runHealthCheck(
       }
       const port = Number(portStr);
       if (!host || !port || Number.isNaN(port)) {
-        backing[name] = { ok: false, latencyMs: 0, error: `bad target ${hp}` };
+        backing[name] = mark({ ok: false, latencyMs: 0, error: `bad target ${hp}` });
         return;
       }
       const resolved = await safeResolve(host);
       const start = Date.now();
       try {
         const ok = await probes.tcp(resolved, port);
-        backing[name] = { ok, latencyMs: Date.now() - start };
+        backing[name] = mark({ ok, latencyMs: Date.now() - start });
       } catch (e) {
-        backing[name] = { ok: false, latencyMs: Date.now() - start, error: String(e) };
+        backing[name] = mark({ ok: false, latencyMs: Date.now() - start, error: String(e) });
       }
     }),
   );

@@ -33,7 +33,7 @@ vi.mock("./api.js", () => ({
           return () => {};
         },
       ),
-      prompt: vi.fn().mockResolvedValue(undefined),
+      prompt: vi.fn().mockResolvedValue({ accepted: true }),
       patchSpec: vi.fn().mockResolvedValue(undefined),
       approveSpec: vi.fn().mockResolvedValue(undefined),
       abandonThread: vi.fn().mockResolvedValue(undefined),
@@ -180,6 +180,59 @@ describe("useThread", () => {
     expect(result.current.waiting).toBe(false);
   });
 
+  it("the streaming envelope arrives BEFORE the prompt resolves — waiting stays true (Stop stays up)", async () => {
+    const { result, inst } = await renderThread();
+    let resolvePrompt!: (v: { accepted: boolean }) => void;
+    inst.prompt.mockImplementationOnce(
+      () => new Promise((r) => { resolvePrompt = r; }),
+    );
+    let ok: boolean | undefined;
+    await act(async () => {
+      const send = result.current.ask("hi", "auto").then((v) => {
+        ok = v;
+      });
+      // Gateway order: session_state: streaming is published before the
+      // prompt POST answers 202.
+      inst.onEnvelope!(env("session_state", { state: "streaming" }, 0));
+      resolvePrompt({ accepted: true });
+      await send;
+    });
+    expect(ok).toBe(true);
+    // The old finally-clobber dropped waiting here — Stop vanished for the
+    // whole turn.
+    expect(result.current.waiting).toBe(true);
+    await act(async () => {
+      inst.onEnvelope!(env("session_state", { state: "idle" }, 1));
+    });
+    expect(result.current.waiting).toBe(false);
+  });
+
+  it("a queued prompt drops the optimistic waiting — no turn is running", async () => {
+    const { result, inst } = await renderThread();
+    inst.prompt.mockResolvedValueOnce({ accepted: true, queued: true });
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.ask("hi", "auto");
+    });
+    expect(ok).toBe(true);
+    expect(result.current.waiting).toBe(false);
+  });
+
+  it("a failed stop keeps waiting — the error band carries the failure", async () => {
+    const { result, inst } = await renderThread();
+    await act(async () => {
+      inst.onEnvelope!(env("session_state", { state: "streaming" }, 0));
+    });
+    expect(result.current.waiting).toBe(true);
+    inst.abortThread.mockRejectedValueOnce(new Error("abort failed: 500"));
+    await act(async () => {
+      await result.current.stop();
+    });
+    expect(inst.abortThread).toHaveBeenCalledWith("t1");
+    expect(result.current.waiting).toBe(true);
+    expect(result.current.error).toBe("abort failed: 500");
+  });
+
   it("degraded session sets the flag; stop aborts and clears waiting", async () => {
     const { result, inst } = await renderThread();
     await act(async () => {
@@ -218,16 +271,84 @@ describe("useThread", () => {
     expect(result.current.blocked).toBe("gated");
   });
 
-  it("error envelopes set a dismissable error", async () => {
+  it("error envelopes set a dismissable, turn-sourced error", async () => {
     const { result, inst } = await renderThread();
     await act(async () => {
       inst.onEnvelope!(env("error", { message: "boom" }, 0));
     });
     expect(result.current.error).toBe("boom");
+    // Retry turn is only offered for turn-sourced errors.
+    expect(result.current.errorSource).toBe("turn");
     await act(async () => {
       result.current.dismissError();
     });
     expect(result.current.error).toBeNull();
+    expect(result.current.errorSource).toBeNull();
+  });
+
+  it("a later streaming envelope clears a replayed turn error (stale history)", async () => {
+    const { result, inst } = await renderThread();
+    await act(async () => {
+      inst.onEnvelope!(env("error", { message: "verification failed (attempt 1/2) — retrying automatically" }, 0));
+    });
+    expect(result.current.error).toBeTruthy();
+    // The replay continues and the run visibly moved on: the stale banner
+    // must not reappear on every load.
+    await act(async () => {
+      inst.onEnvelope!(env("session_state", { state: "streaming" }, 1));
+    });
+    expect(result.current.error).toBeNull();
+  });
+
+  it("an error AFTER streaming still shows — ordering matters", async () => {
+    const { result, inst } = await renderThread();
+    await act(async () => {
+      inst.onEnvelope!(env("session_state", { state: "streaming" }, 0));
+      inst.onEnvelope!(env("error", { message: "boom" }, 1));
+    });
+    expect(result.current.error).toBe("boom");
+    expect(result.current.errorSource).toBe("turn");
+  });
+
+  it("merged/abandoned spec_status clears a stale turn error", async () => {
+    for (const status of ["merged", "abandoned"] as const) {
+      const { result, inst } = await renderThread();
+      await act(async () => {
+        inst.onEnvelope!(env("error", { message: "old failure" }, 0));
+      });
+      expect(result.current.error).toBe("old failure");
+      await act(async () => {
+        inst.onEnvelope!(env("spec_status", { status }, 1));
+      });
+      expect(result.current.error).toBeNull();
+    }
+  });
+
+  it("reviewed keeps the verify_exhausted error published right before it", async () => {
+    const { result, inst } = await renderThread();
+    await act(async () => {
+      inst.onEnvelope!(env("error", { message: "auto-verify failed after 3 retries — needs your review", code: "verify_exhausted" }, 0));
+      inst.onEnvelope!(env("spec_status", { status: "reviewed" }, 1));
+    });
+    expect(result.current.error).toBe("auto-verify failed after 3 retries — needs your review");
+    expect(result.current.errorSource).toBe("turn");
+  });
+
+  it("client-sourced errors survive stream progress — only the user clears them", async () => {
+    const { result, inst } = await renderThread();
+    inst.prompt.mockRejectedValueOnce(new Error("prompt failed: 502"));
+    await act(async () => {
+      await result.current.ask("hi", "auto");
+    });
+    expect(result.current.error).toBe("prompt failed: 502");
+    expect(result.current.errorSource).toBe("client");
+    // A new turn starting must not wipe a client error the user hasn't seen
+    // resolved — nothing on the stream speaks for it.
+    await act(async () => {
+      inst.onEnvelope!(env("session_state", { state: "streaming" }, 0));
+      inst.onEnvelope!(env("spec_status", { status: "reviewed" }, 1));
+    });
+    expect(result.current.error).toBe("prompt failed: 502");
   });
 
   it("usage envelopes accumulate the cost/token signal (#84)", async () => {
@@ -310,6 +431,7 @@ describe("useThread", () => {
     inst.prompt.mockRejectedValueOnce(new Error("prompt failed: 500"));
     inst.approveSpec.mockRejectedValueOnce(new Error("approve failed: 403"));
     let ok: boolean | undefined;
+    let approved: boolean | undefined;
     await act(async () => {
       ok = await result.current.ask("hi", "auto");
     });
@@ -318,12 +440,27 @@ describe("useThread", () => {
     expect(result.current.error).toBe("prompt failed: 500");
     expect(result.current.waiting).toBe(false);
     await act(async () => {
-      await result.current.approve();
+      approved = await result.current.approve();
     });
+    expect(approved).toBe(false);
     expect(result.current.error).toBe("approve failed: 403");
+    expect(result.current.errorSource).toBe("client");
     await act(async () => {
       result.current.dismissError();
     });
+    expect(result.current.error).toBeNull();
+  });
+
+  it("successful mutations resolve true so callers can toast only on success", async () => {
+    const { result } = await renderThread();
+    let merged: boolean | undefined;
+    let abandoned: boolean | undefined;
+    await act(async () => {
+      merged = await result.current.merge();
+      abandoned = await result.current.abandon();
+    });
+    expect(merged).toBe(true);
+    expect(abandoned).toBe(true);
     expect(result.current.error).toBeNull();
   });
 

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, fireEvent } from "@testing-library/react";
+import { cleanup, render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { SpecSession } from "./spec-session.js";
 import type { SpecDraft, SpecQuestion } from "@aelvyril/shared";
@@ -141,5 +141,92 @@ describe("SpecSession", () => {
     view.rerender(<SpecSession {...props} draft={{ ...emptyDraft, goal: "my edit" }} />);
     expect(goalValue()).toBe("my edit");
     expect(onEditSpec).toHaveBeenCalledTimes(1);
+  });
+
+  it("approve inside the debounce window flushes the pending edit and AWAITS it before approving", async () => {
+    let resolveEdit!: (v: boolean) => void;
+    const onEditSpec = vi.fn(
+      () => new Promise<boolean>((r) => { resolveEdit = r; }),
+    );
+    const onApprove = vi.fn();
+    render(
+      <SpecSession
+        questions={[]}
+        draft={{ ...emptyDraft, goal: "add RBAC" }}
+        status="spec'ing"
+        onSubmitAnswers={vi.fn()}
+        onEditSpec={onEditSpec}
+        onApprove={onApprove}
+        onCancel={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("spec-goal"), { target: { value: "rushed goal" } });
+    // Approve lands inside the 400ms debounce window.
+    fireEvent.click(screen.getByTestId("approve"));
+    // The PATCH went out immediately, but approve waits for it.
+    expect(onEditSpec).toHaveBeenCalledWith("goal", "rushed goal");
+    expect(onApprove).not.toHaveBeenCalled();
+    resolveEdit(true);
+    await waitFor(() => expect(onApprove).toHaveBeenCalledTimes(1));
+  });
+
+  it("approve is skipped when the flushed edit PATCH fails", async () => {
+    let rejectEdit!: (err: Error) => void;
+    const onEditSpec = vi.fn(
+      () => new Promise<boolean>((_, reject) => { rejectEdit = reject; }),
+    );
+    const onApprove = vi.fn();
+    render(
+      <SpecSession
+        questions={[]}
+        draft={{ ...emptyDraft, goal: "add RBAC" }}
+        status="spec'ing"
+        onSubmitAnswers={vi.fn()}
+        onEditSpec={onEditSpec}
+        onApprove={onApprove}
+        onCancel={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("spec-goal"), { target: { value: "doomed goal" } });
+    fireEvent.click(screen.getByTestId("approve"));
+    expect(onEditSpec).toHaveBeenCalled();
+    rejectEdit(new Error("patch spec failed: 409"));
+    await act(async () => {});
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+
+  it("approve after the blur flush waits for the PATCH already in flight", async () => {
+    let resolveEdit!: (v: boolean) => void;
+    const onEditSpec = vi.fn(
+      () => new Promise<boolean>((r) => { resolveEdit = r; }),
+    );
+    const onApprove = vi.fn();
+    render(
+      <SpecSession
+        questions={[]}
+        draft={{ ...emptyDraft, goal: "add RBAC" }}
+        status="spec'ing"
+        onSubmitAnswers={vi.fn()}
+        onEditSpec={onEditSpec}
+        onApprove={onApprove}
+        onCancel={vi.fn()}
+      />,
+    );
+    const goal = screen.getByTestId("spec-goal");
+    fireEvent.change(goal, { target: { value: "edited goal" } });
+    // A real click blurs the field first: the blur flush sends the PATCH.
+    fireEvent.blur(goal);
+    expect(onEditSpec).toHaveBeenCalledWith("goal", "edited goal");
+    fireEvent.click(screen.getByTestId("approve"));
+    expect(onApprove).not.toHaveBeenCalled();
+    resolveEdit(true);
+    await waitFor(() => expect(onApprove).toHaveBeenCalledTimes(1));
+    expect(onEditSpec).toHaveBeenCalledTimes(1);
+  });
+
+  it("approve with no pending edits fires immediately (no async detour)", () => {
+    const { onApprove } = setup();
+    fireEvent.click(screen.getByTestId("approve"));
+    expect(onApprove).toHaveBeenCalled();
   });
 });

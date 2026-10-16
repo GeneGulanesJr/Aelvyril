@@ -27,6 +27,19 @@ const specMaxRounds = readPositiveInt("GATEWAY_SPEC_MAX_ROUNDS");
 const trustThreshold = readNonNegativeInt("GATEWAY_TRUST_THRESHOLD"); // 0 disables
 const verifyTimeoutMs = readPositiveInt("GATEWAY_VERIFY_TIMEOUT_MS");
 const verifyRetries = readNonNegativeInt("GATEWAY_VERIFY_RETRIES");
+// Comma-separated /healthz probe names whose failure must not fail the
+// gateway. Unset or "" = default "layamcp" (same "" = absent convention as
+// the other GATEWAY_* vars); "none" = every probe required. Compose sets
+// LAYAMCP_URL and the decision engine's ~120s cold model load must never
+// block the stack — web waits on gateway: service_healthy, so an unhealthy
+// gateway holds web + Caddy down with it.
+const healthOptionalRaw = process.env.GATEWAY_HEALTH_OPTIONAL?.trim();
+const healthOptionalProbes = healthOptionalRaw
+  ? healthOptionalRaw
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s && s !== "none")
+  : undefined;
 
 // Review P3: the effective caps are logged once at startup so operators can
 // verify what the process is actually enforcing (env vs defaults).
@@ -44,6 +57,7 @@ console.log(
     maxSessionHosts: maxSessionHosts ?? 100,
     queueIntervalMs: queueIntervalMs ?? 2_000,
     rateLimitPerMin: rateLimitPerMin ?? 20,
+    healthOptionalProbes: healthOptionalProbes ?? ["layamcp"],
     specMaxRounds: specMaxRounds ?? 3,
     trustThreshold: trustThreshold ?? 5,
     verifyTimeoutMs: verifyTimeoutMs ?? null,
@@ -173,6 +187,10 @@ const app = await buildApp({
   maxRunningHostsPerUser,
   maxSessionHosts,
   queueIntervalMs,
+  // /healthz optional probes (GATEWAY_HEALTH_OPTIONAL): failures are
+  // reported (ok:false + optional:true) but never fail readiness. Default
+  // layamcp — the decision engine's ~120s cold load must not block compose.
+  optionalHealthProbes: healthOptionalProbes,
   // Review P3: per-user prompt rate limit (requests/minute).
   rateLimitPerMin,
   // #76: who may call /v1/admin/* (update status/apply). Empty/unset = deny all.

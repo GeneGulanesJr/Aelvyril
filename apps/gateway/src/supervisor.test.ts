@@ -1144,6 +1144,450 @@ describe("Supervisor", () => {
     expect((warns[0]!.obj as { err: Error }).err).toBeInstanceOf(Error);
     await supervisor.disposeAll(50);
   });
+
+  // Crash fix: escalateGate's fire-and-forget abort used to reject UNHANDLED
+  // when the child exited before answering (RpcClient.terminate rejects every
+  // pending send) — Node's default on an unhandled rejection terminates the
+  // whole gateway.
+  it("a gate-stop abort that never gets answered does not surface as an unhandled rejection", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (err: unknown) => unhandled.push(err);
+    process.on("unhandledRejection", onUnhandled);
+    const warns: Array<{ obj: unknown; msg: string }> = [];
+    try {
+      const child = fakeRpcChild();
+      const rawWrite = child.stdin.write.bind(child.stdin);
+      child.stdin.write = (buf: string) => {
+        const cmd = JSON.parse(buf) as { id?: string; type: string };
+        if (cmd.type === "prompt") {
+          setImmediate(() => {
+            if (typeof cmd.id === "string") {
+              child.stdout.emit(
+                "data",
+                Buffer.from(JSON.stringify({ id: cmd.id, type: "response", command: "prompt", success: true }) + "\n"),
+              );
+            }
+            // Turn 1 fires a GATED action; the settle it triggers is dropped
+            // (gateStopped), so nothing else moves the row.
+            child.stdout.emit(
+              "data",
+              Buffer.from(
+                JSON.stringify({
+                  type: "tool_execution_start",
+                  toolCallId: "call_gated",
+                  toolName: "bash",
+                  args: { command: "rm -rf ./build-output" },
+                }) + "\n",
+              ),
+            );
+            child.stdout.emit("data", Buffer.from(JSON.stringify({ type: "agent_settled" }) + "\n"));
+          });
+          return true;
+        }
+        if (cmd.type === "abort") {
+          // NEVER answered: the abort send stays pending until the child's
+          // exit rejects it — that rejection is the crash under test.
+          return true;
+        }
+        return rawWrite(buf);
+      };
+      const { store, supervisor } = makeFakeSupervisor({
+        spawnChild: () => child as unknown as ChildProcess,
+        killGraceMs: 60,
+        logger: { warn: (obj: object, msg?: string) => warns.push({ obj, msg: String(msg) }) },
+      });
+      s = supervisor;
+      const conv = store.createConversation({ namespace: "platform" });
+      expect(await supervisor.prompt(conv.id, "hi")).toBe(true);
+      await vi.waitFor(() => {
+        expect(store.getConversation(conv.id, "platform")?.state).toBe("blocked");
+      });
+      // killChild → SIGKILL escalation → exit → RpcClient.terminate rejects
+      // the pending abort send. With the fix it is caught and logged; without
+      // it Node fires unhandledRejection (and the run dies).
+      supervisor.killChild(conv.id);
+      await vi.waitFor(() => expect(child.signalCode).toBe("SIGKILL"));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(unhandled).toEqual([]);
+      expect(warns.some((w) => w.msg.includes("abort"))).toBe(true);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  // Lifecycle fix: abandon mid-turn used to leak state='streaming' — killChild
+  // forgets the handle BEFORE the child exits, so the exit listener returns
+  // early and nothing settled the row (a dead cap slot: countStreaming gates
+  // the running-host cap and the queue runner).
+  it("abandonThread settles a mid-turn thread to idle so no streaming slot leaks", async () => {
+    const { store, bus, supervisor } = makeFakeSupervisor({
+      killGraceMs: 50,
+      spawnChild: () => {
+        const child = fakeRpcChild();
+        // An OPEN turn: answers the prompt RPC but never settles — exactly
+        // what a hung tool call looks like.
+        const stdin = new EventEmitter() as FakeChild["stdin"];
+        stdin.write = (buf: string) => {
+          const cmd = JSON.parse(buf) as { id?: string };
+          setImmediate(() => {
+            if (typeof cmd.id === "string") {
+              child.stdout.emit(
+                "data",
+                Buffer.from(JSON.stringify({ id: cmd.id, type: "response", command: "prompt", success: true }) + "\n"),
+              );
+            }
+          });
+          return true;
+        };
+        child.stdin = stdin;
+        return child as unknown as ChildProcess;
+      },
+    });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    const states: string[] = [];
+    bus.subscribe(conv.id, (e) => {
+      if (e.kind === "session_state") states.push((e.payload as { state: string }).state);
+    });
+    expect(await supervisor.prompt(conv.id, "long turn")).toBe(true);
+    expect(store.getConversation(conv.id, "platform")?.state).toBe("streaming");
+    expect(store.countStreaming("platform")).toBe(1);
+    supervisor.abandonThread(conv.id);
+    // Settled synchronously — no dependence on the child's exit event.
+    expect(store.countStreaming("platform")).toBe(0);
+    expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
+    expect(states.at(-1)).toBe("idle");
+    await supervisor.disposeAll(50);
+  });
+
+  it("abandonThread settles the row even with no live handle (stale streaming/blocked)", () => {
+    const { store, supervisor } = makeFakeSupervisor();
+    s = supervisor;
+    const a = store.createConversation({ namespace: "platform" });
+    const b = store.createConversation({ namespace: "platform" });
+    store.setConversationState(a.id, "streaming"); // host long gone, row leaked
+    store.setConversationState(b.id, "blocked"); // gate stop with no host
+    supervisor.abandonThread(a.id);
+    supervisor.abandonThread(b.id);
+    expect(store.countStreaming("platform")).toBe(0);
+    expect(store.getConversation(a.id, "platform")?.state).toBe("idle");
+    expect(store.getConversation(b.id, "platform")?.state).toBe("idle");
+  });
+
+  // Lifecycle fix: killChild does not bump turnGeneration, so a pipeline that
+  // was mid-verify when the user abandoned used to mark the terminal thread
+  // 'reviewed' afterwards (the store-side terminal guard is the second layer).
+  it("a pipeline finishing after abandon does not overwrite the abandoned status", async () => {
+    let releaseVerify: ((ok: boolean) => void) | undefined;
+    const { store, supervisor } = makeFakeSupervisor({
+      killGraceMs: 50,
+      computeDiff: async () => [{ path: "a.ts", patch: "+x" }],
+      verify: {
+        commandsOverride: "pnpm test",
+        retries: 3,
+        exec: (command) =>
+          new Promise((resolve) => {
+            releaseVerify = (ok) =>
+              resolve({ command: command.join(" "), ok, output: ok ? "green" : "42 failing" });
+          }),
+      },
+    });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform", workspace: "/tmp/ws-abandon" });
+    expect(await supervisor.prompt(conv.id, "hi")).toBe(true);
+    await vi.waitFor(() => expect(releaseVerify).toBeDefined()); // parked mid-verify
+    // The user abandons while verification runs (route semantics).
+    store.updateThreadStatus(conv.id, "platform", "abandoned");
+    supervisor.abandonThread(conv.id);
+    releaseVerify!(true);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(store.getThreadStatus(conv.id, "platform")).toBe("abandoned");
+    await supervisor.disposeAll(50);
+  });
+
+  // Lifecycle fix: a verify failure after the host was killed must not send
+  // the retry prompt into the dead child — the stale check now covers handle
+  // liveness, so no 'streaming' write with no live turn.
+  it("verify failing after killChild sends no retry prompt and never lands streaming", async () => {
+    let releaseVerify: ((ok: boolean) => void) | undefined;
+    const writesAfterKill: string[] = [];
+    const { store, supervisor, children } = makeFakeSupervisor({
+      killGraceMs: 50,
+      computeDiff: async () => [{ path: "a.ts", patch: "+x" }],
+      verify: {
+        commandsOverride: "pnpm test",
+        retries: 3,
+        exec: (command) =>
+          new Promise((resolve) => {
+            releaseVerify = (ok) =>
+              resolve({ command: command.join(" "), ok, output: ok ? "green" : "42 failing" });
+          }),
+      },
+    });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform", workspace: "/tmp/ws-killed" });
+    expect(await supervisor.prompt(conv.id, "hi")).toBe(true);
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("idle"); // settled; pipeline parked mid-verify
+    });
+    await vi.waitFor(() => expect(releaseVerify).toBeDefined());
+    const child = children[0]!;
+    const rawWrite = child.stdin.write.bind(child.stdin);
+    child.stdin.write = (buf: string) => {
+      writesAfterKill.push(buf);
+      return rawWrite(buf);
+    };
+    supervisor.killChild(conv.id);
+    releaseVerify!(false);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(writesAfterKill).toEqual([]); // no verify-retry prompt into the dead host
+    expect(store.getConversation(conv.id, "platform")?.state).not.toBe("streaming");
+    await supervisor.disposeAll(50);
+  });
+
+  // Lifecycle fix: a verify-retry send to a host that dies mid-send used to
+  // be swallowed with the row left 'streaming' forever — land the degraded
+  // envelope a crash produces instead.
+  it("a verify-retry send to a dying host lands the thread degraded, not stuck streaming", async () => {
+    const { store, bus, supervisor } = makeFakeSupervisor({
+      killGraceMs: 50,
+      computeDiff: async () => [{ path: "a.ts", patch: "+x" }],
+      verify: {
+        commandsOverride: "pnpm test",
+        retries: 3,
+        exec: async () => ({ command: "pnpm test", ok: false, output: "42 failing" }),
+      },
+      spawnChild: () => {
+        const child = fakeRpcChild();
+        const rawWrite = child.stdin.write.bind(child.stdin);
+        child.stdin.write = (buf: string) => {
+          const cmd = JSON.parse(buf) as { id?: string; type: string; message?: string };
+          if (cmd.type === "prompt" && String(cmd.message ?? "").startsWith("Your changes FAILED")) {
+            // The host dies the moment the verify-retry prompt lands — no
+            // answer, no settle. RpcClient.terminate must reject the pending
+            // send; a dying host never responds.
+            setImmediate(() => child.emit("exit", 1));
+            return true;
+          }
+          return rawWrite(buf);
+        };
+        return child as unknown as ChildProcess;
+      },
+    });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform", workspace: "/tmp/ws-dying" });
+    const states: string[] = [];
+    bus.subscribe(conv.id, (e) => {
+      if (e.kind === "session_state") states.push((e.payload as { state: string }).state);
+    });
+    expect(await supervisor.prompt(conv.id, "hi")).toBe(true);
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("degraded");
+    });
+    expect(states.at(-1)).toBe("degraded");
+    await supervisor.disposeAll(50);
+  });
+
+  // Lifecycle fix: retryExecution used to prepareTurn (spawn a host + flip
+  // the row to streaming) BEFORE deciding there was nothing to retry — a
+  // dead cap slot for a no-op.
+  it("retryExecution with nothing to retry returns false with no side effects", async () => {
+    const { store, supervisor, children } = makeFakeSupervisor();
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    expect(await supervisor.retryExecution(conv.id)).toBe(false);
+    expect(children).toHaveLength(0); // no host spawned
+    expect(supervisor.has(conv.id)).toBe(false);
+    expect(store.getConversation(conv.id, "platform")?.state).toBe("idle"); // unchanged
+    expect(store.countStreaming("platform")).toBe(0);
+  });
+
+  it("retryExecution still re-sends the last prompt when there is no spec", async () => {
+    const { store, supervisor, children } = makeFakeSupervisor();
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    store.setLastPromptById(conv.id, "the original ask");
+    expect(await supervisor.retryExecution(conv.id)).toBe(true);
+    expect(children).toHaveLength(1); // the re-send really happened
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
+    });
+    await supervisor.disposeAll(50);
+  });
+
+  // Lifecycle fix: the pipeline's early exits (no workspace / no diff) used
+  // to strand the thread at status 'running' — merge/abandon need 'reviewed'.
+  it("a running thread settles to reviewed when the pipeline exits early with no workspace", async () => {
+    const { store, supervisor } = makeFakeSupervisor();
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" }); // no workspace
+    store.setSpecDraftById(conv.id, {
+      goal: "g",
+      filesAffected: [],
+      plan: ["edit a"],
+      risks: [],
+      questions: [],
+      answers: {},
+    });
+    store.updateThreadStatus(conv.id, "platform", "running");
+    // Approve-style run: the execution prompt settles, the pipeline finds no
+    // workspace and returns early.
+    expect(await supervisor.approveExecution(conv.id)).toBe(true);
+    await vi.waitFor(() => {
+      expect(store.getThreadStatus(conv.id, "platform")).toBe("reviewed");
+    });
+    await supervisor.disposeAll(50);
+  });
+
+  it("a running thread settles to reviewed when the computed diff is empty", async () => {
+    const { store, supervisor } = makeFakeSupervisor({ computeDiff: async () => [] });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform", workspace: "/tmp/ws-empty-diff" });
+    store.setSpecDraftById(conv.id, {
+      goal: "g",
+      filesAffected: [],
+      plan: ["edit a"],
+      risks: [],
+      questions: [],
+      answers: {},
+    });
+    store.updateThreadStatus(conv.id, "platform", "running");
+    expect(await supervisor.approveExecution(conv.id)).toBe(true);
+    await vi.waitFor(() => {
+      expect(store.getThreadStatus(conv.id, "platform")).toBe("reviewed");
+    });
+    await supervisor.disposeAll(50);
+  });
+
+  it("the early-exit settle only touches threads whose status is 'running'", async () => {
+    const { store, supervisor } = makeFakeSupervisor();
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" }); // no workspace
+    store.setSpecDraftById(conv.id, {
+      goal: "g",
+      filesAffected: [],
+      plan: ["edit a"],
+      risks: [],
+      questions: [],
+      answers: {},
+    });
+    // Status stays 'draft' — not ours to move.
+    expect(await supervisor.approveExecution(conv.id)).toBe(true);
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
+    });
+    expect(store.getThreadStatus(conv.id, "platform")).toBe("draft");
+    await supervisor.disposeAll(50);
+  });
+
+  // Gate fix: with no spec draft, approveExecution is still the only way to
+  // allow a parked gated action — it must allow the pending class and re-run
+  // the user's last prompt.
+  it("approveExecution without a spec allows the gated action and re-sends the last prompt", async () => {
+    const child = fakeRpcChild();
+    const writes: string[] = [];
+    const rawWrite = child.stdin.write.bind(child.stdin);
+    child.stdin.write = (buf: string) => {
+      writes.push(buf);
+      const cmd = JSON.parse(buf) as { id?: string; type: string };
+      if (cmd.type === "prompt") {
+        setImmediate(() => {
+          if (typeof cmd.id === "string") {
+            child.stdout.emit(
+              "data",
+              Buffer.from(JSON.stringify({ id: cmd.id, type: "response", command: "prompt", success: true }) + "\n"),
+            );
+          }
+          // The gated tool fires on EVERY turn; after approve it must be
+          // allowed (no second escalation).
+          child.stdout.emit(
+            "data",
+            Buffer.from(
+              JSON.stringify({
+                type: "tool_execution_start",
+                toolCallId: `call_${writes.length}`,
+                toolName: "bash",
+                args: { command: "rm -rf ./build-output" },
+              }) + "\n",
+            ),
+          );
+          child.stdout.emit("data", Buffer.from(JSON.stringify({ type: "agent_settled" }) + "\n"));
+        });
+        return true;
+      }
+      if (cmd.type === "abort") {
+        // Real pi settles the aborted turn; gateStopped drops that settle.
+        setImmediate(() => {
+          if (typeof cmd.id === "string") {
+            child.stdout.emit(
+              "data",
+              Buffer.from(JSON.stringify({ id: cmd.id, type: "response", command: "abort", success: true }) + "\n"),
+            );
+          }
+          child.stdout.emit("data", Buffer.from(JSON.stringify({ type: "agent_settled" }) + "\n"));
+        });
+        return true;
+      }
+      return rawWrite(buf);
+    };
+    const { store, bus, supervisor } = makeFakeSupervisor({
+      spawnChild: () => child as unknown as ChildProcess,
+    });
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    const seen: EventEnvelope[] = [];
+    bus.subscribe(conv.id, (e) => seen.push(e));
+
+    // Plain prompt → gated block.
+    expect(await supervisor.prompt(conv.id, "clean the build dir")).toBe(true);
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("blocked");
+    });
+    expect(supervisor.hasPendingGated(conv.id)).toBe(true);
+    expect(
+      seen.some(
+        (e) =>
+          e.kind === "laya_verdict" &&
+          (e.payload as { verdict?: { allowed?: boolean } }).verdict?.allowed === false,
+      ),
+    ).toBe(true);
+
+    // No spec draft anywhere — approve must still work.
+    expect(store.getThreadSpecById(conv.id)?.specDraft).toBeNull();
+    expect(await supervisor.approveExecution(conv.id)).toBe(true);
+    expect(supervisor.hasPendingGated(conv.id)).toBe(false);
+    // The last user prompt was re-sent verbatim (the original turn's prompt
+    // carries the spec-protocol wrap; only the re-send is raw).
+    const prompts = writes
+      .map((w) => JSON.parse(w) as { type: string; message?: string })
+      .filter((m) => m.type === "prompt");
+    expect(prompts.filter((p) => p.message === "clean the build dir")).toHaveLength(1);
+    // The re-fired gated action is allowed now: no second escalation, and
+    // the re-sent turn settles normally.
+    await vi.waitFor(() => {
+      expect(store.getConversation(conv.id, "platform")?.state).toBe("idle");
+    });
+    expect(
+      seen.filter((e) => e.kind === "error" && (e.payload as { code?: string }).code === "gated_action"),
+    ).toHaveLength(1);
+    expect(
+      seen.some(
+        (e) =>
+          e.kind === "laya_verdict" &&
+          (e.payload as { verdict?: { allowed?: boolean } }).verdict?.allowed === true,
+      ),
+    ).toBe(true);
+    await supervisor.disposeAll(50);
+  });
+
+  it("approveExecution with neither a spec nor a last prompt returns false with no side effects", async () => {
+    const { store, supervisor, children } = makeFakeSupervisor();
+    s = supervisor;
+    const conv = store.createConversation({ namespace: "platform" });
+    expect(await supervisor.approveExecution(conv.id)).toBe(false);
+    expect(children).toHaveLength(0); // no host spawned
+    expect(store.getConversation(conv.id, "platform")?.state).toBe("idle"); // unchanged
+  });
 });
 
 describe("extractSpecSignals", () => {

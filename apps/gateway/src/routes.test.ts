@@ -856,6 +856,125 @@ describe("thread lifecycle routes", () => {
     expect(res.json().error).toBe("nothing_to_retry");
   });
 
+  // Lifecycle fix: the retry route used to write 'running' up front and
+  // 'reviewed' on a no-op — a thread that never ran got a Merge button, and
+  // a 'running' spec_status envelope preceded the 409.
+  it("a no-op retry leaves the status untouched and publishes no running envelope", async () => {
+    app = await makeAppWithDb();
+    const t = (await (await authed(app, "good").post("/v1/threads", {})).json()) as { id: string };
+    expect(threadStatus(t.id)).toBe("draft"); // fresh thread: no spec, no prompt
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${t.id}/retry`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("nothing_to_retry");
+    expect(threadStatus(t.id)).toBe("draft");
+    expect(eventPayloads(dbPath!, t.id, "spec_status")).toEqual([]);
+  });
+
+  // Review: the spec-less retry awaits the prompt ack, and pi can ack AND
+  // settle in the same stdout chunk — the turn is over before that await
+  // returns. A 'running' write after the supervisor call then stranded the
+  // thread at 'running'; the route must write it before the call.
+  it("a spec-less retry whose turn settles with the ack still ends reviewed, not running", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "aelvyril-fastpi-"));
+    const fastPi = join(dir, "fast-pi.mjs");
+    writeFileSync(
+      fastPi,
+      [
+        'import readline from "node:readline";',
+        "const rl = readline.createInterface({ input: process.stdin });",
+        'rl.on("line", (l) => {',
+        "  const cmd = JSON.parse(l);",
+        '  const res = JSON.stringify({ id: cmd.id, type: "response", command: cmd.type, success: true });',
+        '  if (cmd.type === "prompt") process.stdout.write(res + "\\n" + JSON.stringify({ type: "agent_settled" }) + "\\n");',
+        '  else if (cmd.id) process.stdout.write(res + "\\n");',
+        "});",
+      ].join("\n"),
+    );
+    dbPath = join(tmpdir(), `aelvyril-life-${randomUUID()}.db`);
+    app = await buildApp({
+      dbPath,
+      childCommand: process.execPath,
+      childArgs: [fastPi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+    });
+    try {
+      const u = authed(app, "good");
+      const t = (await (await u.post("/v1/threads", {})).json()) as { id: string };
+      expect((await u.post(`/v1/threads/${t.id}/prompt`, { message: "hello" })).statusCode).toBe(202);
+      const res = await u.post(`/v1/threads/${t.id}/retry`);
+      expect(res.statusCode).toBe(200);
+      // No workspace: the settle's pipeline exit moves 'running' to 'reviewed'.
+      await vi.waitFor(() => expect(threadStatus(t.id)).toBe("reviewed"), { timeout: 2_000 });
+      expect(eventPayloads(dbPath!, t.id, "spec_status").at(-1)).toMatchObject({ status: "reviewed" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Review: failure paths used to write reviewed/degraded WITHOUT publishing
+  // — the web client trusts the last replayed spec_status envelope, so the
+  // UI showed RUNNING forever.
+  it("a failed approve publishes the status it wrote (spec_status reviewed + session_state degraded)", async () => {
+    app = await makeAppWithDb();
+    const t = (await (await authed(app, "good").post("/v1/threads", {})).json()) as { id: string };
+    seedStatus(t.id, "spec'ing");
+    seedSpecDraft(t.id);
+    // Fail-closed scratch mkdir (same rig as the dequeued-prompt test):
+    // prepareTurn throws before any child exists, so the route's catch runs.
+    const blocker = join(tmpdir(), "aelvyril-sessions", t.id);
+    writeFileSync(blocker, "not a directory");
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/v1/threads/${t.id}/approve`,
+        headers: { authorization: "Bearer good" },
+      });
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toEqual({ error: "agent_rejected" });
+      expect(threadStatus(t.id)).toBe("reviewed");
+      expect(eventPayloads(dbPath!, t.id, "spec_status").at(-1)).toMatchObject({
+        status: "reviewed",
+      });
+      expect(
+        eventPayloads(dbPath!, t.id, "session_state").some(
+          (p) => (p as { state: string }).state === "degraded",
+        ),
+      ).toBe(true);
+    } finally {
+      rmSync(blocker, { force: true });
+    }
+  });
+
+  it("a failed retry publishes spec_status reviewed + session_state degraded", async () => {
+    app = await buildApp({
+      dbPath: (dbPath = join(tmpdir(), `aelvyril-retry-fail-${randomUUID()}.db`)),
+      childCommand: process.execPath,
+      childArgs: ["-e", "process.exit(1)"], // host dies instantly
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+    });
+    const u1 = authed(app, "good");
+    const t = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    // A failed prompt still persisted lastPrompt — retry has something to
+    // re-send, then dies at the RPC layer.
+    expect((await u1.post(`/v1/threads/${t.id}/prompt`, { message: "hi" })).statusCode).toBe(502);
+    const retry = await u1.post(`/v1/threads/${t.id}/retry`);
+    expect(retry.statusCode).toBe(502);
+    expect(eventPayloads(dbPath!, t.id, "spec_status").at(-1)).toMatchObject({
+      status: "reviewed",
+    });
+    expect(
+      eventPayloads(dbPath!, t.id, "session_state").some(
+        (p) => (p as { state: string }).state === "degraded",
+      ),
+    ).toBe(true);
+  });
+
   // #80 fix 5: the merged producer + trust escalation (#81.3).
   it("POST /merge transitions reviewed -> merged and records trust", async () => {
     app = await makeAppWithDb();
@@ -937,6 +1056,233 @@ describe("thread lifecycle routes", () => {
   });
 });
 
+// Review: approve/retry start LLM turns and can spawn session hosts, and
+// PATCH /spec forwards a prompt to a live host — the abuse guards used to
+// live only in promptThread, so a user could run 30 hosts at once (vs
+// GATEWAY_MAX_RUNNING_HOSTS=2), bypass 20 req/min, or keep a cost-capped
+// thread spending via /retry.
+describe("lifecycle route abuse guards (review)", () => {
+  let app: App | undefined;
+  let dbPath: string | undefined;
+  afterEach(async () => {
+    if (app) await app.close();
+    if (dbPath) {
+      try {
+        rmSync(dbPath, { force: true });
+      } catch {
+        // Windows can briefly hold the file handle after close
+      }
+    }
+    app = undefined;
+    dbPath = undefined;
+  });
+
+  function makeGuardAppWithDb(build: {
+    maxRunningHostsPerUser?: number;
+    maxSessionHosts?: number;
+    rateLimiter?: { consume: (userId: string) => number; reset: (userId: string) => void; size: () => number };
+  }) {
+    dbPath = join(tmpdir(), `aelvyril-guard-${randomUUID()}.db`);
+    return buildApp({
+      dbPath,
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      metricsPublic: true,
+      maxRunningHostsPerUser: build.maxRunningHostsPerUser,
+      maxSessionHosts: build.maxSessionHosts,
+      // Runner off — at-cap requests must fail fast, never queue.
+      queueIntervalMs: 3_600_000,
+      rateLimiter: build.rateLimiter,
+    });
+  }
+
+  function seedStatus(id: string, status: string): void {
+    const db = new Database(dbPath!);
+    try {
+      db.prepare("UPDATE conversations SET status = ? WHERE id = ?").run(status, id);
+    } finally {
+      db.close();
+    }
+  }
+
+  function seedSpecDraft(id: string): void {
+    const draft = {
+      goal: "seeded",
+      filesAffected: [],
+      plan: ["edit src/a.ts"],
+      risks: [],
+      questions: [],
+      answers: {},
+    };
+    const db = new Database(dbPath!);
+    try {
+      db.prepare("UPDATE conversations SET spec_draft = ? WHERE id = ?").run(JSON.stringify(draft), id);
+    } finally {
+      db.close();
+    }
+  }
+
+  function threadStatus(id: string): string {
+    const db = new Database(dbPath!);
+    try {
+      return (
+        db.prepare("SELECT status FROM conversations WHERE id = ?").get(id) as { status: string }
+      ).status;
+    } finally {
+      db.close();
+    }
+  }
+
+  it("rate-limits approve/retry/spec like /prompt (429 + retry-after, before any state change)", async () => {
+    app = await makeGuardAppWithDb({
+      rateLimiter: { consume: () => -1, reset: () => {}, size: () => 0 },
+    });
+    const t = (await (await authed(app, "good").post("/v1/threads", {})).json()) as { id: string };
+    seedStatus(t.id, "spec'ing");
+    seedSpecDraft(t.id);
+    const approve = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${t.id}/approve`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(approve.statusCode).toBe(429);
+    expect(approve.headers["retry-after"]).toBe("60");
+    expect(approve.json()).toEqual({ error: "rate_limited" });
+    const retry = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${t.id}/retry`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(retry.statusCode).toBe(429);
+    expect(retry.headers["retry-after"]).toBe("60");
+    expect(retry.json()).toEqual({ error: "rate_limited" });
+    const spec = await app.inject({
+      method: "PATCH",
+      url: `/v1/threads/${t.id}/spec`,
+      headers: { authorization: "Bearer good" },
+      payload: { kind: "edit", field: "goal", value: "x" },
+    });
+    expect(spec.statusCode).toBe(429);
+    expect(spec.headers["retry-after"]).toBe("60");
+    expect(spec.json()).toEqual({ error: "rate_limited" });
+    // Guards ran before any state mutation: status untouched, no host.
+    expect(threadStatus(t.id)).toBe("spec'ing");
+    const m = await app.inject({ method: "GET", url: "/metrics" });
+    expect(m.body).toMatch(/aelvyril_rate_limited_total\s+3/);
+    expect(m.body).not.toMatch(/aelvyril_active_session_hosts\s+[1-9]/);
+  });
+
+  it("refuses approve/retry/spec on a cost-capped thread with 403 (#84)", async () => {
+    dbPath = join(tmpdir(), `aelvyril-guard-cost-${randomUUID()}.db`);
+    app = await buildApp({
+      dbPath,
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      metricsPublic: true,
+      maxCostPerThreadUsd: 0.001, // fake-pi reports 0.0042 → capped
+    });
+    const u1 = authed(app, "good");
+    const t = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    expect((await u1.post(`/v1/threads/${t.id}/prompt`, { message: "hi" })).statusCode).toBe(202);
+    await vi.waitFor(async () => {
+      const one = await u1.get(`/v1/threads/${t.id}`);
+      expect((one.json() as { state: string }).state).toBe("blocked");
+    });
+    const statusBefore = (
+      (await u1.get(`/v1/threads/${t.id}`)).json() as { status: string }
+    ).status;
+    const approve = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${t.id}/approve`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(approve.statusCode).toBe(403);
+    expect(approve.json().error).toBe("cost_cap_reached");
+    const retry = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${t.id}/retry`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(retry.statusCode).toBe(403);
+    expect(retry.json().error).toBe("cost_cap_reached");
+    const spec = await app.inject({
+      method: "PATCH",
+      url: `/v1/threads/${t.id}/spec`,
+      headers: { authorization: "Bearer good" },
+      payload: { kind: "edit", field: "goal", value: "spend more" },
+    });
+    expect(spec.statusCode).toBe(403);
+    expect(spec.json().error).toBe("cost_cap_reached");
+    // Same counter the prompt route increments, one per refused route.
+    const m = await app.inject({ method: "GET", url: "/metrics" });
+    expect(m.body).toMatch(/aelvyril_cost_cap_rejections_total\s+3/);
+    const one = await u1.get(`/v1/threads/${t.id}`);
+    expect((one.json() as { status: string }).status).toBe(statusBefore);
+  });
+
+  it("429s running_host_limit for approve/retry at the user cap with no live host — no queue, no host", async () => {
+    app = await makeGuardAppWithDb({ maxRunningHostsPerUser: 0 });
+    const t = (await (await authed(app, "good").post("/v1/threads", {})).json()) as { id: string };
+    seedStatus(t.id, "spec'ing");
+    seedSpecDraft(t.id); // approve would run if it got past the cap
+    const approve = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${t.id}/approve`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(approve.statusCode).toBe(429);
+    expect(approve.json()).toEqual({ error: "running_host_limit", limit: 0 });
+    expect(threadStatus(t.id)).toBe("spec'ing");
+    // Same fast-fail on retry of a fresh thread — status untouched.
+    const t2 = (await (await authed(app, "good").post("/v1/threads", {})).json()) as { id: string };
+    const retry = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${t2.id}/retry`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(retry.statusCode).toBe(429);
+    expect(retry.json()).toEqual({ error: "running_host_limit", limit: 0 });
+    expect(threadStatus(t2.id)).toBe("draft");
+    // No host spawned, nothing queued (the queue carries plain prompts only).
+    const m = await app.inject({ method: "GET", url: "/metrics" });
+    expect(m.body).not.toMatch(/aelvyril_active_session_hosts\s+[1-9]/);
+    expect(m.body).not.toMatch(/aelvyril_queued_prompts_total\s+[1-9]/);
+  });
+
+  it("enforces the GLOBAL host ceiling on approve too", async () => {
+    app = await makeGuardAppWithDb({ maxSessionHosts: 0 });
+    const t = (await (await authed(app, "good").post("/v1/threads", {})).json()) as { id: string };
+    seedStatus(t.id, "spec'ing");
+    seedSpecDraft(t.id);
+    const approve = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${t.id}/approve`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(approve.statusCode).toBe(429);
+    expect(approve.json()).toEqual({ error: "running_host_limit", limit: 0 });
+    expect(threadStatus(t.id)).toBe("spec'ing");
+  });
+
+  it("PATCH /spec pays no running-host cap (it never spawns a host)", async () => {
+    app = await makeGuardAppWithDb({ maxRunningHostsPerUser: 0 });
+    const t = (await (await authed(app, "good").post("/v1/threads", {})).json()) as { id: string };
+    seedSpecDraft(t.id);
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/v1/threads/${t.id}/spec`,
+      headers: { authorization: "Bearer good" },
+      payload: { kind: "edit", field: "goal", value: "add RBAC" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+  });
+});
+
 describe("durable prompt queue (#83)", () => {
   let app: App | undefined;
   afterEach(async () => app && (await app.close()));
@@ -1006,7 +1352,10 @@ describe("durable prompt queue (#83)", () => {
               .prepare("SELECT id, status, state FROM conversations WHERE id IN (?, ?)")
               .all(t1.id, t2.id) as Array<{ id: string; status: string; state: string }>;
             for (const r of rows) {
-              expect(r.status).toBe("running");
+              // Lifecycle fix: a settled no-workspace turn no longer sticks
+              // at 'running' — the pipeline's early exit settles the thread
+              // to 'reviewed' so it can be merged/abandoned.
+              expect(r.status).toBe("reviewed");
               expect(r.state).toBe("idle");
             }
           } finally {
@@ -1091,6 +1440,67 @@ describe("durable prompt queue (#83)", () => {
       }
     }
   });
+
+  // Review: the dequeued failure path used to publish only an error
+  // envelope — the web client trusts the last replayed spec_status, so the
+  // UI showed RUNNING forever.
+  it("a failed dequeued prompt also publishes spec_status reviewed + session_state degraded", async () => {
+    const dbFile = join(tmpdir(), `aelvyril-queue-envelope-${randomUUID()}.db`);
+    // File-backed so the envelopes are readable below.
+    app = await buildApp({
+      dbPath: dbFile,
+      childCommand: process.execPath,
+      childArgs: [fakePi],
+      idleMs: 60_000,
+      verifyToken: testVerifier,
+      maxRunningHostsPerUser: 1,
+      queueIntervalMs: 10,
+    });
+    const u1 = authed(app, "good");
+    const holder = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    const queued = (await (await u1.post("/v1/threads", {})).json()) as { id: string };
+    // Occupy the user's single running slot (DB-only, no child spawned).
+    const db = new Database(dbFile);
+    try {
+      db.prepare("UPDATE conversations SET state = 'streaming' WHERE id = ?").run(holder.id);
+    } finally {
+      db.close();
+    }
+    const res = await u1.post(`/v1/threads/${queued.id}/prompt`, { message: "queued work" });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ accepted: true, queued: true });
+    // Rig the scratch mkdir to fail fail-closed: a FILE where the dequeue's
+    // spawn directory must be (same mechanism as the steer-path test).
+    const blocker = join(tmpdir(), "aelvyril-sessions", queued.id);
+    writeFileSync(blocker, "not a directory");
+    try {
+      // Free the slot → the runner dequeues → supervisor.prompt throws →
+      // failDequeuedPrompt writes reviewed/degraded AND must publish them.
+      const db2 = new Database(dbFile);
+      try {
+        db2.prepare("UPDATE conversations SET state = 'idle' WHERE id = ?").run(holder.id);
+      } finally {
+        db2.close();
+      }
+      await vi.waitFor(
+        async () => {
+          const one = await u1.get(`/v1/threads/${queued.id}`);
+          expect(one.json()).toMatchObject({ state: "degraded", status: "reviewed" });
+        },
+        { timeout: 10_000 },
+      );
+      expect(eventPayloads(dbFile, queued.id, "spec_status").at(-1)).toMatchObject({
+        status: "reviewed",
+      });
+      expect(
+        eventPayloads(dbFile, queued.id, "session_state").some(
+          (p) => (p as { state: string }).state === "degraded",
+        ),
+      ).toBe(true);
+    } finally {
+      rmSync(blocker, { force: true });
+    }
+  }, 20_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -1362,6 +1772,41 @@ describe("wired core loop (#80 #81 #82)", () => {
       (p) => (p as { verdict: { stage: string; allowed?: boolean } }).verdict.stage === "tool",
     ) as Array<{ verdict: { allowed: boolean } }>;
     expect(allowedVerdicts.some((v) => v.verdict.allowed)).toBe(true);
+  });
+
+  // Gate fix: a plain-prompt thread blocked on a gated action has no spec
+  // draft — the old no_spec check made the parked action unapprovable.
+  it("a gated block on a plain (no-spec) prompt is approvable", async () => {
+    setEnv("FAKE_GATED_TOOL", "1");
+    await makeLoopApp();
+    const u1 = authed(app!, "good");
+    const t = await createAndPrompt("rm -rf the build output", "off");
+    // The gated bash tool stops the run mid-turn: blocked/gated, and no
+    // spec draft exists (specMode off never interviewed).
+    await vi.waitFor(() => {
+      const blocked = eventPayloads(dbPath!, t.id, "session_state").some(
+        (p) =>
+          (p as { state: string; reason?: string }).state === "blocked" &&
+          (p as { state: string; reason?: string }).reason === "gated",
+      );
+      expect(blocked).toBe(true);
+    });
+    const approve = await app!.inject({
+      method: "POST",
+      url: `/v1/threads/${t.id}/approve`,
+      headers: { authorization: "Bearer good" },
+    });
+    expect(approve.statusCode).toBe(200);
+    // Approve re-sent the last prompt (the gated action is allowed now, and
+    // the fixture fires its gate once per process): the turn runs to
+    // completion — settled idle with harvested usage (the aborted gate turn
+    // harvested nothing).
+    await vi.waitFor(async () => {
+      const one = await u1.get(`/v1/threads/${t.id}`);
+      const body = one.json() as { state: string; usage: { cost: number } | null };
+      expect(body.state).toBe("idle");
+      expect(body.usage).not.toBeNull();
+    });
   });
 
   it("auto-verify feeds failures back with a bounded budget (#82)", async () => {

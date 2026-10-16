@@ -59,6 +59,13 @@
         # CSP_CLERK_ORIGINS (compose env) adds the Clerk Frontend API
         # origins used by sign-in (script + connect); empty = self-only,
         # which blocks Clerk until the operator sets it.
-        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' {$CSP_CLERK_ORIGINS:}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' {$CSP_CLERK_ORIGINS:}; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+        # Review 2026-10-15: frame-src + img-src + Clerk Turnstile hosts per
+        # Clerk's documented CSP — without frame-src Clerk's bot-protection
+        # iframe (challenges.cloudflare.com) is blocked (falls back to
+        # default-src 'self'), and https://img.clerk.com avatars are
+        # blocked from img-src. frame-ancestors 'none' (above) is unchanged;
+        # that controls who may frame US — frame-src controls what WE may
+        # frame.
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' {$CSP_CLERK_ORIGINS:}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://img.clerk.com; font-src 'self' data:; connect-src 'self' {$CSP_CLERK_ORIGINS:}; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'self' https://challenges.cloudflare.com {$CSP_CLERK_ORIGINS:}; frame-ancestors 'none'"
     }
 }

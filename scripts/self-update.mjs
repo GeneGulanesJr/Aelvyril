@@ -318,7 +318,10 @@ function killTree(pid) {
   });
 }
 
-function spawnDetached(cmd, args, cwd, logFile) {
+// `shell` is only true for the SELF_UPDATE_*_CMD overrides (documented as
+// shell commands); the default launches are absolute argv and stay
+// shell-less.
+function spawnDetached(cmd, args, cwd, logFile, shell = false) {
   rotateIfNeeded(logFile);
   const out = openSync(logFile, "a");
   appendFileSync(
@@ -329,6 +332,7 @@ function spawnDetached(cmd, args, cwd, logFile) {
     cwd,
     detached: true, // DETACHED_PROCESS on win32 — survives this keeper's exit
     windowsHide: true,
+    shell,
     stdio: ["ignore", out, out],
   });
   child.once("error", (e) => log(`spawn error (${cmd}): ${e.message}`));
@@ -340,7 +344,11 @@ function spawnDetached(cmd, args, cwd, logFile) {
 function launchGateway() {
   const cwd = resolve(ROOT, "apps/gateway");
   if (CONFIG.gatewayCmd) {
-    return spawnDetached(CONFIG.gatewayCmd, [], cwd, resolve(CONFIG.stateDir, "gateway.log"));
+    // Review 2026-10-15: SELF_UPDATE_GATEWAY_CMD is a shell command
+    // (docs/ops/self-update.md). Spawned without a shell, a command line
+    // like `pnpm --filter @aelvyril/gateway start` is looked up as one
+    // executable name and fails with ENOENT after the old process is gone.
+    return spawnDetached(CONFIG.gatewayCmd, [], cwd, resolve(CONFIG.stateDir, "gateway.log"), true);
   }
   return spawnDetached(
     process.execPath,
@@ -356,7 +364,8 @@ function launchGateway() {
 function launchWeb() {
   const cwd = resolve(ROOT, "apps/web");
   if (CONFIG.webCmd) {
-    return spawnDetached(CONFIG.webCmd, [], cwd, resolve(CONFIG.stateDir, "web.log"));
+    // shell:true — see launchGateway comment.
+    return spawnDetached(CONFIG.webCmd, [], cwd, resolve(CONFIG.stateDir, "web.log"), true);
   }
   const nextBin = resolve(cwd, "node_modules/next/dist/bin/next");
   if (!existsSync(nextBin)) {
@@ -370,23 +379,52 @@ function launchWeb() {
   );
 }
 
+/** Pids that were listening before taskkill and still are. */
+function survivingPids(before, after) {
+  return after.filter((p) => before.includes(p));
+}
+
 /** Kill whatever listens on the ports, then relaunch fresh. */
 async function restartServices(services) {
+  const oldPids = { gateway: [], web: [] };
   const kills = [];
   if (services.gateway) {
-    for (const pid of await listenersOn(CONFIG.gatewayPort)) {
+    oldPids.gateway = await listenersOn(CONFIG.gatewayPort);
+    for (const pid of oldPids.gateway) {
       log(`gateway: killing pid ${pid}`);
       kills.push(killTree(pid));
     }
   }
   if (services.web) {
-    for (const pid of await listenersOn(CONFIG.webPort)) {
+    oldPids.web = await listenersOn(CONFIG.webPort);
+    for (const pid of oldPids.web) {
       log(`web: killing pid ${pid}`);
       kills.push(killTree(pid));
     }
   }
   await Promise.all(kills);
   await sleep(1_000); // let the ports release
+  // Review 2026-10-15: taskkill's result is ignored and it can fail (Access
+  // denied when the gateway runs elevated). A survivor keeps the port, the
+  // relaunch dies with EADDRINUSE, and the health check then passes against
+  // the OLD process — "applied-ok" for a commit that never ran. Throw so
+  // runCycle rolls back.
+  if (services.gateway) {
+    const survivors = survivingPids(oldPids.gateway, await listenersOn(CONFIG.gatewayPort));
+    if (survivors.length) {
+      throw new Error(
+        `gateway port ${CONFIG.gatewayPort} still held by pid ${survivors.join(",")} after taskkill`,
+      );
+    }
+  }
+  if (services.web) {
+    const survivors = survivingPids(oldPids.web, await listenersOn(CONFIG.webPort));
+    if (survivors.length) {
+      throw new Error(
+        `web port ${CONFIG.webPort} still held by pid ${survivors.join(",")} after taskkill`,
+      );
+    }
+  }
   const pids = {};
   if (services.gateway) pids.gateway = launchGateway();
   if (services.web) pids.web = launchWeb();
@@ -567,7 +605,21 @@ async function runCycle({ force = false } = {}) {
 
   // Verify: restart only what changed, then demand a healthy stack.
   if (plan.gateway || plan.web) {
-    await restartServices(plan);
+    // Review 2026-10-15: a throw here (netstat failure, a surviving pid,
+    // launchWeb's "next CLI not found") used to escape runCycle with HEAD
+    // already merged — no rollback, no history entry, and the next cycle
+    // saw head === target and logged "up to date". Roll back instead.
+    try {
+      await restartServices(plan);
+    } catch (e) {
+      log(`restart failed: ${e.message}`);
+      return rollback({
+        prevSha,
+        services: plan,
+        state,
+        reason: `restart failed: ${e.message}`,
+      });
+    }
     const post = await waitForHealth(CONFIG.healthTimeoutS);
     if (!post?.healthy) {
       log(`post-update verification FAILED (${post?.detail ?? "timeout"})`);
@@ -767,6 +819,10 @@ async function main() {
   const force = args.includes("--force") || envFlag("SELF_UPDATE_FORCE", false);
   mkdirSync(CONFIG.stateDir, { recursive: true });
 
+  // --status only reads state, so it must work while --loop holds the lock;
+  // every mutating subcommand still serializes behind it.
+  if (args.includes("--status")) return cmdStatus();
+
   const held = acquireLock();
   if (held) {
     console.error(`self-update: ${held}`);
@@ -775,7 +831,6 @@ async function main() {
   process.on("exit", releaseLock);
   process.on("SIGINT", () => process.exit(130));
 
-  if (args.includes("--status")) return cmdStatus();
   if (args.includes("--reset")) return cmdReset();
   if (args.includes("--restart")) return cmdRestart();
   const rbIdx = args.indexOf("--rollback");

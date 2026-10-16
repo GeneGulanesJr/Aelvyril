@@ -4,6 +4,7 @@
 // Injectable exec keeps tests hermetic; the default shells out to git.
 
 import { execFile } from "node:child_process";
+import { computeChildEnv } from "./child-env.js";
 
 export interface FilePatch {
   path: string;
@@ -15,17 +16,31 @@ export type GitExec = (
   cwd: string,
 ) => Promise<{ ok: boolean; stdout: string }>;
 
+// Review 2026-10-15: git runs inside the agent-writable workspace, so it
+// gets the same computeChildEnv boundary verify.ts uses (CLERK_* / GATEWAY_*
+// secrets never reach anything git spawns), and computeWorkspaceDiff
+// disables repo-config command execution (REPO_NEUTRAL_FLAGS below).
 export const defaultGitExec: GitExec = (args, cwd) =>
   new Promise((resolve) => {
     execFile(
       "git",
       args,
-      { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024 },
+      { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024, env: computeChildEnv({}) },
       (err, stdout) => {
         resolve({ ok: !err, stdout: String(stdout ?? "") });
       },
     );
   });
+
+/** Prepended to every git invocation in this file: command-line config
+ *  wins over repo-local `.git/config`, so a planted fsmonitor hook or
+ *  external diff command never runs. */
+const REPO_NEUTRAL_FLAGS = ["-c", "core.fsmonitor=false", "-c", "diff.external="];
+
+/** Appended to `diff` invocations: per-driver `diff.<name>.command` and
+ *  `diff.<name>.textconv` (selected via .gitattributes) can't be cleared
+ *  by name up front, so disable external drivers and textconv outright. */
+const DIFF_NO_TRUST = ["--no-ext-diff", "--no-textconv"];
 
 /** Per-file patch bound: keeps diff envelopes reviewable when an agent
  *  generates a huge file. Truncated patches carry an explicit marker. */
@@ -47,13 +62,13 @@ export async function computeWorkspaceDiff(
   cwd: string,
   exec: GitExec = defaultGitExec,
 ): Promise<FilePatch[] | null> {
-  const probe = await exec(["rev-parse", "--is-inside-work-tree"], cwd);
+  const probe = await exec([...REPO_NEUTRAL_FLAGS, "rev-parse", "--is-inside-work-tree"], cwd);
   if (!probe.ok || probe.stdout.trim() !== "true") return null;
 
-  const head = await exec(["--no-pager", "diff", "HEAD"], cwd);
+  const head = await exec(["--no-pager", ...REPO_NEUTRAL_FLAGS, "diff", ...DIFF_NO_TRUST, "HEAD"], cwd);
   const patches = splitUnifiedDiff(head.stdout);
 
-  const others = await exec(["ls-files", "--others", "--exclude-standard"], cwd);
+  const others = await exec([...REPO_NEUTRAL_FLAGS, "ls-files", "--others", "--exclude-standard"], cwd);
   if (others.ok) {
     for (const line of others.stdout.split("\n")) {
       const path = line.trim();
@@ -61,7 +76,10 @@ export async function computeWorkspaceDiff(
       // --no-index diffs one path against /dev/null: a genuine new-file
       // unified patch (handles binary detection too). Exit code 1 just
       // means "differences found" — the patch is in stdout either way.
-      const added = await exec(["--no-pager", "diff", "--no-index", "--", "/dev/null", path], cwd);
+      const added = await exec(
+        ["--no-pager", ...REPO_NEUTRAL_FLAGS, "diff", ...DIFF_NO_TRUST, "--no-index", "--", "/dev/null", path],
+        cwd,
+      );
       const patch = added.stdout.trim() ? added.stdout.trimEnd() + "\n" : untrackedPatch(path);
       patches.push({ path, patch: boundPatch(patch) });
     }

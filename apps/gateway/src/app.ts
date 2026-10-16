@@ -12,6 +12,7 @@ import {
   PatchSpecBody,
   PromptBody,
   RenameConversationBody,
+  ThreadStatus,
   toUserNamespace,
   type EventEnvelope,
 } from "@aelvyril/shared";
@@ -105,6 +106,18 @@ export interface AppOptions {
   verify?: SupervisorVerifyOptions | null;
   /** #80: diff-producer override for tests. Default runs real git. */
   computeDiff?: (cwd: string) => Promise<{ path: string; patch: string }[] | null>;
+  /** Backing-probe names whose failure must NOT fail /healthz (still
+   *  reported in the body with ok:false + optional:true). Default
+   *  ["layamcp"]: compose sets LAYAMCP_URL and the decision engine's ~120s
+   *  cold model load must never block the stack (web waits on
+   *  gateway: service_healthy, so an unhealthy gateway holds web + Caddy). */
+  optionalHealthProbes?: string[];
+  /** Review: per-stream cap on buffered-but-unacked SSE bytes. A client
+   *  that keeps the socket open but stops reading otherwise makes the
+   *  gateway buffer every event without bound; past the cap the stream is
+   *  dropped and the client reconnects with Last-Event-ID (dedup by seq).
+   *  Tests shrink it. */
+  sseWriteBufferCapBytes?: number;
 }
 
 export type App = FastifyInstance;
@@ -116,6 +129,11 @@ export type App = FastifyInstance;
  * them with "reviewed"/degraded.
  */
 const TERMINAL_THREAD_STATUSES: ReadonlySet<string> = new Set(["abandoned", "merged"]);
+
+/** Review: SSE clients that keep the socket open but stop reading must not
+ *  make the gateway buffer events without bound — past this cap the stream
+ *  is dropped; the web client reconnects with Last-Event-ID, dedups by seq. */
+export const SSE_MAX_WRITE_BUFFER_BYTES = 8 * 1024 * 1024;
 
 // Re-exported for the allowlist unit test (app.test.ts); the implementation
 // lives in child-env.ts so non-app paths (auto-verify exec) share the boundary.
@@ -192,6 +210,8 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   // so the preClose hook below can tear them down and let shutdown finish.
   const sseReplies = new Set<ServerResponse>();
   const sseReplayPageSize = opts.sseReplayPageSize ?? 500;
+  // Review: per-stream write-buffer cap (see AppOptions.sseWriteBufferCapBytes).
+  const sseWriteBufferCapBytes = opts.sseWriteBufferCapBytes ?? SSE_MAX_WRITE_BUFFER_BYTES;
   const metrics = opts.metrics ?? createMetrics();
   const supervisor = new Supervisor({
     bus,
@@ -240,6 +260,72 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       return void reply.code(403).send({ error: "forbidden" });
     }
     return userId;
+  }
+
+  // Review: the abuse guards used to live only in promptThread — approve and
+  // retry also start LLM turns (and can spawn session hosts), and PATCH
+  // /spec forwards a prompt to a live host. Each helper sends the error
+  // response itself and returns true when the request must stop, so routes
+  // call them BEFORE any state mutation (status writes, bus publishes).
+  function rateLimited(userId: string, reply: FastifyReply): boolean {
+    const remaining = rateLimiter.consume(userId);
+    if (remaining < 0) {
+      metrics.rateLimitedTotal.inc();
+      reply.code(429).header("retry-after", "60").send({ error: "rate_limited" });
+      return true;
+    }
+    return false;
+  }
+  function costCapped(conv: { usage?: { cost: number } | null }, reply: FastifyReply): boolean {
+    if (
+      opts.maxCostPerThreadUsd !== undefined &&
+      conv.usage &&
+      conv.usage.cost >= opts.maxCostPerThreadUsd
+    ) {
+      metrics.costCapRejections.inc();
+      reply.code(403).send({
+        error: "cost_cap_reached",
+        cost: conv.usage.cost,
+        cap: opts.maxCostPerThreadUsd,
+      });
+      return true;
+    }
+    return false;
+  }
+  function hostCapExceeded(id: string, namespace: string, reply: FastifyReply): boolean {
+    // Only a NEW host needs a slot: with a live host the turn passes
+    // through to it (steer semantics). The queue carries plain prompts
+    // only — approve/retry at cap fail fast here, status untouched.
+    if (supervisor.has(id)) return false;
+    const atUserCap = store.countStreaming(namespace) >= maxRunningHostsPerUser;
+    const atGlobalCap = supervisor.runningCount() >= maxSessionHosts;
+    if (atUserCap || atGlobalCap) {
+      reply.code(429).send({
+        error: "running_host_limit",
+        limit: atUserCap ? maxRunningHostsPerUser : maxSessionHosts,
+      });
+      return true;
+    }
+    return false;
+  }
+
+  // Approve/retry write 'running' BEFORE the supervisor call: a spec-less
+  // run awaits the prompt ack, and a fast turn can settle (→ reviewed)
+  // before that await returns — a later 'running' write would strand it.
+  // So the no-op case is decided up front, and the rare late "nothing to
+  // run" puts back the status it found.
+  function hasRunnableTurn(id: string, specDraft: unknown): boolean {
+    return Boolean(specDraft) || store.getLastPromptById(id) !== null;
+  }
+  function publishStatus(id: string, status: string): void {
+    const parsed = ThreadStatus.safeParse(status);
+    if (!parsed.success) return;
+    bus.publish({
+      conversationId: id,
+      ts: new Date().toISOString(),
+      kind: "spec_status",
+      payload: { status: parsed.data },
+    });
   }
 
   // CORS before routes so preflight/headers apply to every /v1 handler.
@@ -299,18 +385,26 @@ export async function buildApp(opts: AppOptions): Promise<App> {
 
   // Spec §9 + §11: probe backing services so K8s readiness reflects real
   // dependency state. Defaults to no probes (env opt-in); tests override
-  // via opts.probes. Returns 503 if any probe fails — readiness check fails
-  // until the dep is reachable.
+  // via opts.probes. Returns 503 only when a REQUIRED probe fails —
+  // readiness stays red until the dep is reachable. Optional probes
+  // (default: layamcp) are still reported (ok:false + optional:true) but
+  // must not fail the gateway: compose sets LAYAMCP_URL, and the decision
+  // engine's ~120s cold model load would otherwise hold `web`
+  // (depends_on gateway: service_healthy) and Caddy down with it.
   const startedAt = opts.startedAt ?? Date.now();
+  const optionalHealthProbes = opts.optionalHealthProbes ?? ["layamcp"];
   app.get("/healthz", async (_req, reply) => {
     const result = await runHealthCheck(
       {
         probes: opts.probes,
         serviceProbes: opts.probes ? () => ({}) : defaultServiceProbes,
+        optional: optionalHealthProbes,
       },
       startedAt,
     );
-    const allOk = result.gateway.ok && Object.values(result.backing).every((s) => s.ok);
+    const allOk =
+      result.gateway.ok &&
+      Object.values(result.backing).every((s) => s.ok || s.optional === true);
     return reply.code(allOk ? 200 : 503).send(result);
   });
 
@@ -458,31 +552,13 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     if (!userId) return;
     const namespace = toUserNamespace(userId);
     // Spec §10: per-user rate limit. 429 with a Retry-After header.
-    const remaining = rateLimiter.consume(userId);
-    if (remaining < 0) {
-      metrics.rateLimitedTotal.inc();
-      return reply
-        .code(429)
-        .header("retry-after", "60")
-        .send({ error: "rate_limited" });
-    }
+    if (rateLimited(userId, reply)) return;
     const { id } = req.params as { id: string };
     const conv = store.getConversation(id, namespace);
     if (!conv) return reply.code(404).send({ error: "not_found" });
     // #84: budget enforcement — a thread at its cost cap needs explicit
     // operator action (raise GATEWAY_MAX_THREAD_COST_USD or abandon it).
-    if (
-      opts.maxCostPerThreadUsd !== undefined &&
-      conv.usage &&
-      conv.usage.cost >= opts.maxCostPerThreadUsd
-    ) {
-      metrics.costCapRejections.inc();
-      return reply.code(403).send({
-        error: "cost_cap_reached",
-        cost: conv.usage.cost,
-        cap: opts.maxCostPerThreadUsd,
-      });
-    }
+    if (costCapped(conv, reply)) return;
     const body = PromptBody.parse(req.body ?? {});
     // Auto-title from the first prompt — the picker shows words, not uuids.
     if (conv.title === null) store.renameConversation(id, namespace, body.message.slice(0, 80));
@@ -602,11 +678,17 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       if (!userId) return;
       const namespace = toUserNamespace(userId);
       const { id } = req.params as { id: string };
+      // Review: /spec forwards the patch to the live agent (prompt-shaped
+      // work) — rate limit + cost cap apply. It never spawns a host, so no
+      // running-host cap here.
+      if (rateLimited(userId, reply)) return;
       const parsed = PatchSpecBody.safeParse(req.body ?? {});
       if (!parsed.success) {
         return reply.code(400).send({ error: "invalid_body", details: parsed.error.flatten() });
       }
-      if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
+      const conv = store.getConversation(id, namespace);
+      if (!conv) return reply.code(404).send({ error: "not_found" });
+      if (costCapped(conv, reply)) return;
       if (parsed.data.kind === "answer") {
         const merged = store.mergeSpecAnswers(id, namespace, parsed.data.answers);
         if (merged === "too_large") {
@@ -630,26 +712,60 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     if (!userId) return;
     const namespace = toUserNamespace(userId);
     const { id } = req.params as { id: string };
-    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
+    const conv = store.getConversation(id, namespace);
+    if (!conv) return reply.code(404).send({ error: "not_found" });
+    // Review: approve starts an LLM turn and can spawn a session host — the
+    // same abuse guards as /prompt, before any state mutation.
+    if (rateLimited(userId, reply)) return;
+    if (costCapped(conv, reply)) return;
+    if (hostCapExceeded(id, namespace, reply)) return;
     const spec = store.getThreadSpec(id, namespace);
-    if (!spec?.specDraft) return reply.code(409).send({ error: "no_spec" });
+    // Gate fix: a plain-prompt thread blocked on a gated action has no spec
+    // draft, yet approve is the ONLY way to allow the parked action.
+    if (!spec?.specDraft && !supervisor.hasPendingGated(id)) {
+      return reply.code(409).send({ error: "no_spec" });
+    }
+    // A spec-less approve re-sends the last prompt; with none there is
+    // nothing to run — 409 with no state change and no envelopes.
+    if (!hasRunnableTurn(id, spec?.specDraft)) {
+      return reply.code(409).send({ error: "nothing_to_approve" });
+    }
+    const prevStatus = store.getThreadStatus(id, namespace);
     store.updateThreadStatus(id, namespace, "running");
-    bus.publish({
-      conversationId: id,
-      ts: new Date().toISOString(),
-      kind: "spec_status",
-      payload: { status: "running" },
-    });
+    publishStatus(id, "running");
     // #80 fix 3: approve sends the REAL execution prompt — rebuilt from the
     // stored spec, spawning a session host when none is live.
-    // Review fix 6: an RPC failure must not leave the thread stuck 'running'.
+    let ok: boolean;
     try {
-      await supervisor.approveExecution(id);
+      ok = await supervisor.approveExecution(id);
     } catch {
+      // Review fix 6: an RPC failure must not leave the thread stuck
+      // 'running'. Review: publish what was actually written — the web
+      // client trusts the last replayed spec_status envelope, even after a
+      // reload; without it the UI shows RUNNING forever.
       metrics.promptRejections.inc();
       store.setConversationState(id, "degraded");
       store.updateThreadStatus(id, namespace, "reviewed");
+      bus.publish({
+        conversationId: id,
+        ts: new Date().toISOString(),
+        kind: "spec_status",
+        payload: { status: "reviewed" },
+      });
+      bus.publish({
+        conversationId: id,
+        ts: new Date().toISOString(),
+        kind: "session_state",
+        payload: { state: "degraded" },
+      });
       return reply.code(502).send({ error: "agent_rejected" });
+    }
+    if (!ok) {
+      if (prevStatus) {
+        store.updateThreadStatus(id, namespace, prevStatus);
+        publishStatus(id, prevStatus);
+      }
+      return reply.code(409).send({ error: "nothing_to_approve" });
     }
     return { ok: true };
   });
@@ -681,30 +797,59 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     if (!userId) return;
     const namespace = toUserNamespace(userId);
     const { id } = req.params as { id: string };
-    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
+    const conv = store.getConversation(id, namespace);
+    if (!conv) return reply.code(404).send({ error: "not_found" });
+    // Review: retry starts an LLM turn and can spawn a session host — the
+    // same abuse guards as /prompt, before any state mutation.
+    if (rateLimited(userId, reply)) return;
+    if (costCapped(conv, reply)) return;
+    if (hostCapExceeded(id, namespace, reply)) return;
+    // Nothing to retry (no spec, no prior prompt): 409 with no state change.
+    // Stamping 'running' then 'reviewed' on a no-op handed a thread that
+    // never ran a Merge button.
+    const spec = store.getThreadSpec(id, namespace);
+    if (!hasRunnableTurn(id, spec?.specDraft)) {
+      return reply.code(409).send({ error: "nothing_to_retry" });
+    }
+    const prevStatus = store.getThreadStatus(id, namespace);
     store.updateThreadStatus(id, namespace, "running");
+    // Counted before the turn can settle: markThreadReviewedById snapshots
+    // retry_count, and a late increment would read as a revision at merge.
+    store.incrementRetryCount(id, namespace);
+    publishStatus(id, "running");
     // #80 fix 3: retry re-executes against the same spec.
-    // Review fix 6: an RPC failure must not leave the thread stuck 'running'.
     let ok: boolean;
     try {
       ok = await supervisor.retryExecution(id);
     } catch {
+      // Review fix 6: an RPC failure must not leave the thread stuck
+      // 'running'. Review: publish what was actually written — the web
+      // client trusts the last replayed spec_status envelope, even after a
+      // reload.
       metrics.promptRejections.inc();
       store.setConversationState(id, "degraded");
       store.updateThreadStatus(id, namespace, "reviewed");
+      bus.publish({
+        conversationId: id,
+        ts: new Date().toISOString(),
+        kind: "spec_status",
+        payload: { status: "reviewed" },
+      });
+      bus.publish({
+        conversationId: id,
+        ts: new Date().toISOString(),
+        kind: "session_state",
+        payload: { state: "degraded" },
+      });
       return reply.code(502).send({ error: "agent_rejected" });
     }
     if (!ok) {
-      store.updateThreadStatus(id, namespace, "reviewed");
+      if (prevStatus) {
+        store.updateThreadStatus(id, namespace, prevStatus);
+        publishStatus(id, prevStatus);
+      }
       return reply.code(409).send({ error: "nothing_to_retry" });
     }
-    store.incrementRetryCount(id, namespace);
-    bus.publish({
-      conversationId: id,
-      ts: new Date().toISOString(),
-      kind: "spec_status",
-      payload: { status: "running" },
-    });
     return { ok: true };
   });
 
@@ -791,6 +936,40 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     };
 
     reply.hijack();
+    // Lifecycle fix: a client that disconnects while auth is pending fires
+    // the socket's 'close' BEFORE any listener exists, and writes to the
+    // dead socket return false WITHOUT throwing — the handshake try/catch,
+    // the heartbeat catch and writeEnvelope never notice, so the stream
+    // slot + 15s interval + bus listener leaked until restart (429
+    // too_many_streams after maxSseStreamsPerUser such drops). streamGone()
+    // is checked at every step transition, and cleanup releases exactly
+    // once from every exit path.
+    const streamGone = () =>
+      req.raw.destroyed || reply.raw.destroyed || reply.raw.writableEnded;
+    let closed = false;
+    let unsubscribe: () => void = () => {};
+    let stopHeartbeat: () => void = () => {};
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      unsubscribe();
+      stopHeartbeat();
+      sseReplies.delete(reply.raw);
+      releaseStream();
+    };
+    // Teardown listeners attach BEFORE replay (the slot is already taken):
+    // reply.raw 'close' fires for both a client abort and a normal end.
+    // #85: without an error handler an ECONNRESET surfaced as an unhandled
+    // socket 'error' event.
+    req.raw.on("close", cleanup);
+    req.raw.on("error", cleanup);
+    reply.raw.on("close", cleanup);
+    reply.raw.on("error", cleanup);
+    if (streamGone()) {
+      cleanup();
+      reply.raw.destroy();
+      return reply;
+    }
     // Handshake writes can hit an already-dead socket (client vanished
     // between auth and hijack). Fail the slot back before any listener
     // exists — an unguarded throw here leaks the stream slot and can
@@ -813,7 +992,14 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       reply.raw.writeHead(200, headers);
       reply.raw.write("retry: 2000\n\n");
     } catch {
-      releaseStream();
+      cleanup();
+      reply.raw.destroy();
+      return reply;
+    }
+    // A write to a socket the client already killed resolves without
+    // error — check instead of trusting the write result.
+    if (streamGone()) {
+      cleanup();
       reply.raw.destroy();
       return reply;
     }
@@ -824,6 +1010,23 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const raw = req.headers["last-event-id"];
     const parsed = Array.isArray(raw) ? Number(raw[0]) : Number(raw);
     let lastSeq = Number.isFinite(parsed) ? parsed : -1;
+
+    // Review: a client that keeps the socket open but stops reading made
+    // the gateway buffer every event in memory without bound. Past the cap
+    // the stream is dropped — the web client reconnects with Last-Event-ID
+    // and dedups by seq, so ending the connection is safe.
+    const dropOnBackpressure = (): void => {
+      if (reply.raw.writableLength <= sseWriteBufferCapBytes) return;
+      cleanup();
+      // end() rather than destroy(): the already-buffered bytes still
+      // flush, so the client parses what it got, sees a clean EOF, and
+      // reconnects with Last-Event-ID (a destroy would RST mid-stream).
+      try {
+        reply.raw.end();
+      } catch {
+        // socket already gone
+      }
+    };
 
     // Returns false when the envelope was skipped. Security review #85:
     // validate at the wire boundary — store rows are replayed unvalidated,
@@ -841,9 +1044,11 @@ export async function buildApp(opts: AppOptions): Promise<App> {
           `id: ${valid.seq}\nevent: ${valid.kind}\ndata: ${JSON.stringify(valid)}\n\n`,
         );
       } catch {
+        // the close/error listeners own teardown
         return false;
       }
-      return true;
+      dropOnBackpressure();
+      return !closed;
     };
 
     // Replay one page, then either hand the rest to a clean EOF (the web
@@ -854,41 +1059,45 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     const page = bus.replay(id, lastSeq, sseReplayPageSize);
     let written = 0;
     for (const env of page) {
+      if (closed) break;
       if (writeEnvelope(env)) written++;
     }
     if (page.length >= sseReplayPageSize && written > 0) {
-      sseReplies.delete(reply.raw);
+      cleanup();
       try {
         reply.raw.end();
       } catch {
         // socket already gone
       }
-      releaseStream();
       return;
     }
+    if (closed) return reply; // dropped mid-replay (backpressure/disconnect)
 
-    const unsubscribe = bus.subscribe(id, (env) => writeEnvelope(env));
-    const heartbeat = setInterval(() => {
+    unsubscribe = bus.subscribe(id, (env) => writeEnvelope(env));
+    const heartbeatTimer = setInterval(() => {
+      // Lifecycle fix: writes to a destroyed socket fail silently — poll
+      // so neither the interval nor the bus listener outlives the
+      // connection.
+      if (streamGone()) {
+        cleanup();
+        reply.raw.destroy();
+        return;
+      }
       try {
         reply.raw.write(": ping\n\n");
       } catch {
         cleanup();
+        return;
       }
+      dropOnBackpressure();
     }, opts.sseHeartbeatMs ?? 15_000);
-    let closed = false;
-    const cleanup = () => {
-      if (closed) return;
-      closed = true;
-      unsubscribe();
-      clearInterval(heartbeat);
-      sseReplies.delete(reply.raw);
-      releaseStream();
-    };
-    // #85: the hijacked raw socket previously had no error handler — an
-    // ECONNRESET mid-stream surfaced as an unhandled 'error' event.
-    req.raw.on("close", cleanup);
-    req.raw.on("error", cleanup);
-    reply.raw.on("error", cleanup);
+    stopHeartbeat = () => clearInterval(heartbeatTimer);
+    // The client may have dropped between the last check and the live
+    // subscription — the next tick would catch it, but bail now.
+    if (streamGone()) {
+      cleanup();
+      reply.raw.destroy();
+    }
   });
 
   // #83: background queue runner. Pops durably queued prompts (FIFO per
@@ -933,6 +1142,21 @@ export async function buildApp(opts: AppOptions): Promise<App> {
                 ts: new Date().toISOString(),
                 kind: "error",
                 payload: { message: "queued prompt was rejected by the agent" },
+              });
+              // Review: the web client trusts the last replayed spec_status
+              // envelope — the writeback must reach it too, or the UI shows
+              // RUNNING forever even after a reload.
+              bus.publish({
+                conversationId: item.conversationId,
+                ts: new Date().toISOString(),
+                kind: "spec_status",
+                payload: { status: "reviewed" },
+              });
+              bus.publish({
+                conversationId: item.conversationId,
+                ts: new Date().toISOString(),
+                kind: "session_state",
+                payload: { state: "degraded" },
               });
             } catch {
               // store closed (shutdown); ignore

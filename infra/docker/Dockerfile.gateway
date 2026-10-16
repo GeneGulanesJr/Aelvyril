@@ -40,6 +40,16 @@ ARG PI_CLI_VERSION=1.0.4
 RUN corepack enable && corepack prepare pnpm@10.15.0 --activate \
     && npm install -g "@earendil-works/pi-coding-agent@${PI_CLI_VERSION}" \
     && which pi && pi --version
+# Review 2026-10-15: install git in the runtime stage. The gateway's
+# workspace diff producer (apps/gateway/src/workspace-git.ts) shells out to
+# `git rev-parse` / `git diff` for every workspace snapshot; without git
+# the diff envelope is always empty and threads never reach "reviewed" in
+# Docker. Note: .dockerignore excludes .git, so the in-gateway admin
+# updater (POST /v1/admin/update/apply → git pull) still cannot work in
+# Docker — that's expected, Docker updates by image rebuild, not git pull.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 # The baked ~/.pi/agent directory is operator-provided: copy from build
 # context if present. Missing-by-default is fine; the gateway's PI_FAKE=1
 # fallback uses fixtures/fake-pi.mjs for local dev. For real mode, the
@@ -51,6 +61,16 @@ RUN groupadd --gid 1001 nodejs \
     && useradd --uid 1001 --gid nodejs --shell /bin/bash --create-home gateway \
     && mkdir -p /data /sessions \
     && chown -R gateway:nodejs /data /sessions /repo
+# Workspaces are bind-mounted at /workspaces from a host directory the
+# operator owns (typically root on Linux), so they are owned by a uid the
+# container user (1001) does not match — modern git refuses with
+# "dubious ownership". Mark every mounted path safe so rev-parse/diff work.
+# Trust boundary is GATEWAY_WORKSPACE_ALLOWLIST, not safe.directory (the
+# gateway runs git with repo-config command execution disabled and a
+# scrubbed env).
+# Debian bookworm's git does not support path globs — the literal `*` here
+# means "the entire /workspaces tree under whatever owner it ends up with".
+RUN git config --system --add safe.directory '*'
 USER gateway
 EXPOSE 8787
 # --env-file-if-exists loads apps/gateway/.env if mounted; the operator

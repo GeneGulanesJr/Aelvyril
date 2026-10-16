@@ -33,7 +33,7 @@ reverse proxy (`infra/docker/Caddyfile`), not in this app.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/healthz` | Liveness + readiness. Probes backing services via env. Returns 503 on probe failure. |
+| `GET` | `/healthz` | Liveness + readiness. Probes backing services via env. Returns 503 on required-probe failure; optional probes (`GATEWAY_HEALTH_OPTIONAL`, default `layamcp`) are reported (`ok:false` + `optional:true`) but never fail readiness. |
 | `GET` | `/metrics` | Prometheus text format. Fail-closed: 401 unless `GATEWAY_METRICS_SECRET` is configured (Bearer required) or `GATEWAY_METRICS_PUBLIC=1`. |
 | `POST` | `/v1/conversations` | Create conversation. 503 on per-user cap, 400 on disallowed workspace. |
 | `GET` | `/v1/conversations` | List conversations in the caller's namespace. |
@@ -66,6 +66,7 @@ reverse proxy (`infra/docker/Caddyfile`), not in this app.
 | `GATEWAY_METRICS_PUBLIC` | unset (401) | #85: `1` serves `/metrics` with no secret (opt-in). |
 | `CLERK_AUTHORIZED_PARTIES` | unset | #85: comma-separated azp origins pinned during JWT verify. |
 | `GATEWAY_MAX_SSE_STREAMS` | `10` | #85: concurrent SSE streams per user; excess connects rejected. |
+| `GATEWAY_HEALTH_OPTIONAL` | `layamcp` | Comma-separated `/healthz` probe names whose failure never fails readiness (still reported `ok:false` + `optional:true`); `none` = all required, empty = default. layamcp's ~120s cold model load must not block the compose stack. |
 | `GATEWAY_SSE_REPLAY_PAGE` | `500` | #85: max events per `Last-Event-ID` replay page. |
 | `GATEWAY_EVENT_RETENTION` | `10000` | #85: event-log rows kept per thread; `0` disables retention. |
 | `GATEWAY_SPEC_MAX_ROUNDS` | `3` | #80: bounded question budget per spec interview. |

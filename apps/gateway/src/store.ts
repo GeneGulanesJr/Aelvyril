@@ -385,12 +385,25 @@ export class Store {
     return row?.namespace ?? null;
   }
 
+  /** Thread lifecycle status without a namespace check (supervisor-internal). */
+  getThreadStatusById(id: string): string | null {
+    const row = this.db
+      .prepare("SELECT status FROM conversations WHERE id = ?")
+      .get(id) as { status: string } | undefined;
+    return row?.status ?? null;
+  }
+
   /** #80: transition into reviewed, snapshotting the revision counter so a
-   *  later merge knows whether the user retried in between (#81.3). */
+   *  later merge knows whether the user retried in between (#81.3).
+   *  Lifecycle fix: abandoned/merged are terminal — a slow post-turn
+   *  pipeline (verification can run minutes) finishing after the user
+   *  abandoned or merged must not overwrite their decision with reviewed. */
   markThreadReviewedById(id: string): boolean {
     const txn = this.db.transaction((): boolean => {
       const res = this.db
-        .prepare("UPDATE conversations SET status = 'reviewed', reviewed_revision = retry_count WHERE id = ?")
+        .prepare(
+          "UPDATE conversations SET status = 'reviewed', reviewed_revision = retry_count WHERE id = ? AND status NOT IN ('abandoned', 'merged')",
+        )
         .run(id);
       return res.changes > 0;
     });

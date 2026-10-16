@@ -86,6 +86,12 @@ function Desk() {
   // alone can't stop two clicks inside one render cycle).
   const creatingRef = useRef(false);
   const [creating, setCreating] = useState(false);
+  // A thread created by a FAILED new-thread attempt (prompt 429/502, ...).
+  // The user stays on /thread/new with their text kept — the resend must
+  // reuse this thread instead of orphaning another empty one per attempt
+  // (they pile up against the running-host/conversation caps). Cleared once
+  // a prompt is accepted and navigation owns the thread.
+  const orphanThreadRef = useRef<Thread | null>(null);
   // Mobile: the board slides in as a drawer over the desk.
   const [navOpen, setNavOpen] = useState(false);
   // The blocked "question" band points at the spec interview.
@@ -208,7 +214,14 @@ function Desk() {
             threadState.dismissError();
             setActionError(null);
           }}
-          onRetry={() => void threadState.retry()}
+          // Only turn errors (error envelopes off the thread's stream) may
+          // offer "Retry turn" — rename/delete/stream-loss failures must not
+          // re-run the whole execution.
+          onRetry={
+            threadState.error !== null && threadState.errorSource === "turn"
+              ? () => void threadState.retry()
+              : undefined
+          }
           onGotoSpec={gotoSpec}
           onApprove={() => void threadState.approve()}
         />
@@ -230,8 +243,18 @@ function Desk() {
                 })
                 .catch((err) => setActionError(toErrorMessage(err)))
             }
-            onAbandon={() => void threadState.abandon().then(() => toast("Thread abandoned"))}
-            onMerge={() => void threadState.merge().then(() => toast("Diff merged"))}
+            onAbandon={() =>
+              void threadState.abandon().then((ok) => {
+                // The mutations resolve false on failure (error band carries
+                // it) — never toast success next to the red band.
+                if (ok) toast("Thread abandoned");
+              })
+            }
+            onMerge={() =>
+              void threadState.merge().then((ok) => {
+                if (ok) toast("Diff merged");
+              })
+            }
             onDelete={() =>
               void client
                 .deleteThread(activeThread.id)
@@ -268,7 +291,7 @@ function Desk() {
                 // stay reachable outside the spec'ing status.
                 forceVisible={threadState.blocked === "gated"}
                 onSubmitAnswers={(a) => void threadState.submitAnswers(a)}
-                onEditSpec={(f, v) => void threadState.editSpec(f, v)}
+                onEditSpec={(f, v) => threadState.editSpec(f, v)}
                 onApprove={() => void threadState.approve()}
                 onCancel={() => router.push("/thread/new")}
               />
@@ -303,12 +326,19 @@ function Desk() {
                     creatingRef.current = true;
                     setCreating(true);
                     try {
-                      const t = await client.createThread();
+                      // Reuse the thread from a failed attempt — resending
+                      // must not create another empty one (#orphans).
+                      const t = orphanThreadRef.current ?? (await client.createThread());
+                      // Remember it until the prompt is accepted: a prompt
+                      // failure must leave the thread reusable, not orphaned.
+                      orphanThreadRef.current = t;
                       // Upsert before routing so the sidebar list (and the
                       // header actions it drives) contains the new thread even
                       // if the first prompt is still in flight.
                       setThreads((ts) => (ts.some((x) => x.id === t.id) ? ts : [t, ...ts]));
                       await client.prompt(t.id, { message: prompt, specMode: mode });
+                      // Accepted: navigation owns the thread now.
+                      orphanThreadRef.current = null;
                       router.push(`/thread/${t.id}`);
                     } catch (err) {
                       setActionError(toErrorMessage(err));

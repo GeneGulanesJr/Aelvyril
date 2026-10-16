@@ -174,6 +174,12 @@ services:
       # session state, and auto-verify runs test scripts that write
       # artifacts. GATEWAY_WORKSPACE_ALLOWLIST is the trust boundary, not
       # the mount mode.
+      # Review 2026-10-15: on Linux the host path must exist before
+      # `compose up` and be writable by uid 1001 — Docker creates missing
+      # dirs as root:root 0755, which the gateway then can't enter (and
+      # modern git refuses as "dubious ownership"; see Dockerfile.gateway).
+      # infra/smoke.sh creates it ahead of `compose up`; ad-hoc operators
+      # should `mkdir -p` + `chown 1001:1001` once, then start the stack.
       - ${WORKSPACES_HOST_PATH:-./workspaces}:/workspaces
     # NOTE: no depends_on sandd — sandd is prod-profile only (needs /dev/kvm,
     # absent on most dev hosts incl. macOS) and compose errors when a

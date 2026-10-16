@@ -27,10 +27,16 @@ const h = vi.hoisted(() => {
     renameConversation: vi.fn(),
     killAllThreads: vi.fn(),
   };
-  // Mutable slice of the useThread mock — tests flip error to null so the
-  // page-level actionError path (new-thread create failures) is reachable,
-  // and grab the deps.onStatus callback to simulate live spec_status events.
-  const hook = { error: null as string | null, onStatus: null as ((s: string) => void) | null };
+  // Mutable slice of the useThread mock — tests flip error/errorSource so
+  // the retry-gated banner paths are reachable, mergeOk so the success-toast
+  // contract is testable, and grab the deps.onStatus callback to simulate
+  // live spec_status events.
+  const hook = {
+    error: null as string | null,
+    errorSource: "turn" as "turn" | "client" | null,
+    mergeOk: true,
+    onStatus: null as ((s: string) => void) | null,
+  };
   return { mockGetToken, push, nav, client, hook };
 });
 
@@ -53,8 +59,9 @@ vi.mock("../../../lib/use-thread.js", async () => {
       const [error, setError] = useState(h.hook.error);
       return {
         status: "draft", statusLive: false, questions: [], draft: null, plan: ["step1"], trace: [], timeline: [], diff: [],
-        error, degraded: true, blocked: null, waiting: false, usage: null,
+        error, errorSource: h.hook.errorSource, degraded: true, blocked: null, waiting: false, usage: null,
         ask: vi.fn(), submitAnswers: vi.fn(), editSpec: vi.fn(), approve: vi.fn(), abandon: vi.fn(), retry: vi.fn(),
+        merge: vi.fn().mockResolvedValue(h.hook.mergeOk),
         stop: vi.fn(), dismissError: () => setError(null),
       };
     },
@@ -73,6 +80,8 @@ describe("ThreadPage", () => {
   beforeEach(() => {
     h.nav.params.id = "t1";
     h.hook.error = null;
+    h.hook.errorSource = "turn";
+    h.hook.mergeOk = true;
     h.hook.onStatus = null;
     h.push.mockClear();
     h.client.listThreads.mockReset().mockResolvedValue([threadRow("t1", { title: "add RBAC" })]);
@@ -204,6 +213,71 @@ describe("ThreadPage", () => {
     expect(banner.textContent).toContain("delete failed: 409");
     expect(screen.getByTestId("thread-t1")).toBeTruthy();
     expect(h.push).not.toHaveBeenCalled();
+  });
+
+  it("an actionError (failed rename) shows NO Retry turn — only turn errors may retry", async () => {
+    render(<ThreadPage />);
+    await screen.findByTestId("new-thread");
+    h.client.renameConversation.mockRejectedValueOnce(new Error("rename failed: 409"));
+    fireEvent.click(screen.getByTestId("rename-button"));
+    fireEvent.submit(screen.getByTestId("rename-input").closest("form")!);
+    const banner = await screen.findByTestId("error-banner");
+    expect(banner.textContent).toContain("rename failed: 409");
+    expect(screen.queryByTestId("retry-error")).toBeNull();
+  });
+
+  it("a turn-sourced error (error envelope) offers Retry turn, a client error does not", async () => {
+    h.hook.error = "turn blew up";
+    h.hook.errorSource = "turn";
+    const { unmount } = render(<ThreadPage />);
+    await screen.findByTestId("new-thread");
+    expect(screen.getByTestId("error-banner").textContent).toContain("turn blew up");
+    expect(screen.getByTestId("retry-error")).toBeTruthy();
+    unmount();
+    // Stream-loss / hook-raised errors are client-sourced: no re-run of the
+    // whole execution behind the button.
+    h.hook.errorSource = "client";
+    render(<ThreadPage />);
+    await screen.findByTestId("new-thread");
+    expect(screen.getByTestId("error-banner").textContent).toContain("turn blew up");
+    expect(screen.queryByTestId("retry-error")).toBeNull();
+  });
+
+  it("merge success toasts; merge failure (409) shows the band and NO success toast", async () => {
+    h.client.listThreads.mockResolvedValue([threadRow("t1", { status: "reviewed" })]);
+    const { unmount } = render(<ThreadPage />);
+    await screen.findByTestId("new-thread");
+    fireEvent.click(screen.getByTestId("merge-button"));
+    await waitFor(() => expect(screen.getByTestId("toast").textContent).toContain("Diff merged"));
+    unmount();
+    // Failure: run() resolves false (the band carries the error) — the green
+    // toast must not fire next to it.
+    h.hook.mergeOk = false;
+    h.hook.error = "merge failed: 409";
+    h.hook.errorSource = "client";
+    render(<ThreadPage />);
+    await screen.findByTestId("new-thread");
+    fireEvent.click(screen.getByTestId("merge-button"));
+    await waitFor(() => expect(screen.getByTestId("error-banner").textContent).toContain("merge failed: 409"));
+    expect(screen.queryByTestId("toast")).toBeNull();
+  });
+
+  it("a failed prompt after create reuses the SAME thread on resend — no orphan threads", async () => {
+    h.nav.params.id = "new";
+    h.client.prompt.mockRejectedValueOnce(new Error("prompt failed: 429 rate_limited"));
+    render(<ThreadPage />);
+    const input = await screen.findByTestId("thread-input");
+    fireEvent.change(input, { target: { value: "precious message" } });
+    fireEvent.click(screen.getByTestId("ask-button"));
+    await screen.findByTestId("error-banner");
+    // Resend (text is kept on failure): must reuse t-new, not create another.
+    fireEvent.click(screen.getByTestId("ask-button"));
+    await waitFor(() => expect(h.client.prompt).toHaveBeenCalledTimes(2));
+    expect(h.client.createThread).toHaveBeenCalledTimes(1);
+    expect(h.client.prompt).toHaveBeenNthCalledWith(2, "t-new", {
+      message: "precious message",
+      specMode: "auto",
+    });
   });
 
   it("live spec_status updates the ACTIVE thread's sidebar pill (#83)", async () => {

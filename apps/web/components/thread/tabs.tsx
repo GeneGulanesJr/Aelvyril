@@ -93,7 +93,10 @@ function patchStats(patch: string): { added: number; removed: number } {
 function newFileLineNumbers(lines: string[]): (number | null)[] {
   let newLine: number | null = null;
   return lines.map((line) => {
-    const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? \+@@/);
+    // Note the literal space before the closing @@ — a stray "+" here (the
+    // git-style "+@@" typo) made every real hunk header unmatchable, so line
+    // numbers never rendered.
+    const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunk) {
       newLine = Number(hunk[1]);
       return null;

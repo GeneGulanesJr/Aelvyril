@@ -99,6 +99,32 @@ export interface ApplyResult {
   message: string;
 }
 
+/** Build the bash script the update subprocess runs. Exported so tests
+ *  can drive it under bash directly and assert shell-level properties
+ *  (pipefail etc.) without spawning a detached child.
+ *  Review 2026-10-15: `set -e` alone lets `pnpm install ... | tail -20`
+ *  return the tail's exit code (0) even when the install fails, which
+ *  used to let the gateway SIGTERM itself and restart on stale deps.
+ *  `set -eo pipefail` makes the pipeline's leftmost failing exit code
+ *  the script's exit code. */
+export function buildUpdateScript(repoPath: string): string {
+  return `
+    set -eo pipefail
+    cd "${repoPath}"
+    echo "[updater] $(date -Iseconds) git pull"
+    git pull --ff-only
+    echo "[updater] $(date -Iseconds) pnpm install"
+    pnpm install --frozen-lockfile --prefer-offline 2>&1 | tail -20
+    echo "[updater] $(date -Iseconds) restart"
+    # Give the route a moment to respond + the client to receive.
+    sleep 2
+    # Find + SIGTERM the current gateway process. Self PID via $$,
+    # but $$ in a subshell is the subshell PID — use the parent's PPID
+    # captured at script start instead.
+    kill -TERM $PPID
+  `;
+}
+
 /**
  * Apply the update. Spawns a detached subprocess that runs
  * `git pull` → `pnpm install` → restarts the gateway. The current
@@ -123,21 +149,7 @@ export async function applyUpdate(opts: { shell?: string } = {}): Promise<ApplyR
   }
   // Spawn detached so this function can return without waiting. The
   // subprocess does the heavy lifting and restarts us.
-  const script = `
-    set -e
-    cd "${repoPath}"
-    echo "[updater] $(date -Iseconds) git pull"
-    git pull --ff-only
-    echo "[updater] $(date -Iseconds) pnpm install"
-    pnpm install --frozen-lockfile --prefer-offline 2>&1 | tail -20
-    echo "[updater] $(date -Iseconds) restart"
-    # Give the route a moment to respond + the client to receive.
-    sleep 2
-    # Find + SIGTERM the current gateway process. Self PID via $$,
-    # but $$ in a subshell is the subshell PID — use the parent's PPID
-    # captured at script start instead.
-    kill -TERM $PPID
-  `;
+  const script = buildUpdateScript(repoPath);
   const child = spawn(opts.shell ?? "bash", ["-c", script], {
     detached: true,
     stdio: ["ignore", "ignore", "ignore"],

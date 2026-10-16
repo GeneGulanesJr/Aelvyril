@@ -82,4 +82,34 @@ describe("runHealthCheck", () => {
     );
     expect(Object.keys(result.backing)).toHaveLength(0);
   });
+
+  // Optional probes (GATEWAY_HEALTH_OPTIONAL, default layamcp) are still
+  // probed + reported — but their failure must not fail the overall check:
+  // the decision engine's ~120s cold model load must never block the
+  // compose stack (web waits on gateway: service_healthy).
+  it("marks optional probes in the result without failing the check", async () => {
+    const result = await runHealthCheck(
+      {
+        probes: badProbes,
+        serviceProbes: () => ({ lapis: "192.0.2.10:8788", layamcp: "192.0.2.10:8765" }),
+        optional: ["layamcp"],
+      },
+      Date.now(),
+    );
+    expect(result.backing.lapis).toMatchObject({ ok: false });
+    expect(result.backing.lapis?.optional).toBeUndefined();
+    expect(result.backing.layamcp).toMatchObject({ ok: false, optional: true });
+  });
+
+  it("marks optional probes on bad-target entries too", async () => {
+    const result = await runHealthCheck(
+      {
+        probes: okProbes,
+        serviceProbes: () => ({ layamcp: "not-a-url" }),
+        optional: ["layamcp"],
+      },
+      Date.now(),
+    );
+    expect(result.backing.layamcp).toMatchObject({ ok: false, optional: true });
+  });
 });

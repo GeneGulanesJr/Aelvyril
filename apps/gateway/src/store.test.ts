@@ -229,6 +229,25 @@ describe("Store", () => {
     expect(store.getLastPromptById(conv.id)).toBe("the original ask");
   });
 
+  // Lifecycle fix: abandoned/merged are terminal — a slow post-turn pipeline
+  // (verification can run minutes) finishing after the user's decision must
+  // not overwrite it with reviewed.
+  it("markThreadReviewedById never overwrites the terminal abandoned/merged statuses", () => {
+    const store = new Store(":memory:");
+    const a = store.createConversation({ namespace: "user:a" });
+    const b = store.createConversation({ namespace: "user:a" });
+    store.updateThreadStatus(a.id, "user:a", "abandoned");
+    store.updateThreadStatus(b.id, "user:a", "merged");
+    expect(store.markThreadReviewedById(a.id)).toBe(false);
+    expect(store.markThreadReviewedById(b.id)).toBe(false);
+    expect(store.getThreadStatus(a.id, "user:a")).toBe("abandoned");
+    expect(store.getThreadStatus(b.id, "user:a")).toBe("merged");
+    // Non-terminal statuses still transition.
+    store.updateThreadStatus(a.id, "user:a", "running");
+    expect(store.markThreadReviewedById(a.id)).toBe(true);
+    expect(store.getThreadStatus(a.id, "user:a")).toBe("reviewed");
+  });
+
   it("deletes queued work per namespace and sweeps stale streaming rows (#83)", () => {
     const store = new Store(":memory:");
     const a = store.createConversation({ namespace: "user:a" });

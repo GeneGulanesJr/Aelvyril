@@ -2,7 +2,7 @@
 // subprocess. Cheap (~50ms each) and avoids brittle mock choreography.
 
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { execFile as execFileCb } from "node:child_process";
+import { execFile as execFileCb, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -69,4 +69,56 @@ describe("applyUpdate", () => {
       applyUpdate({ shell: "definitely-not-a-real-shell-xyz" }),
     ).rejects.toThrow(/failed to start/);
   });
+});
+
+// Review 2026-10-15: `pnpm install --frozen-lockfile --prefer-offline
+// 2>&1 | tail -20` was the last command in the script. With only
+// `set -e` (no pipefail), the pipeline returned `tail`'s exit code (0)
+// even when pnpm install failed — the gateway SIGTERM'd itself and
+// restarted on stale deps. `set -eo pipefail` is the fix; this test
+// runs the same shape of script under bash with a guaranteed-to-fail
+// command piped to a guaranteed-to-succeed tail and asserts non-zero.
+describe("buildUpdateScript pipefail (review 2026-10-15)", () => {
+  const bashAvailable = (() => {
+      try {
+        execFileSync("bash", ["-c", "true"], { stdio: "ignore" });
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+
+  it("the script enables pipefail (set -eo pipefail)", async () => {
+    const { buildUpdateScript } = await import("./updater.js");
+    const script = buildUpdateScript("/tmp/repo");
+    expect(script).toContain("set -eo pipefail");
+    expect(script).toContain("pipefail");
+  });
+
+  const itBash = bashAvailable ? it : it.skip;
+  itBash(
+    "a pipeline with a failing left side and a succeeding right side exits non-zero (pipefail works)",
+    async () => {
+      // Standalone proxy that mirrors the script's exact failure mode:
+      // a command that exits non-zero piped into `tail`. With pipefail
+      // the script must exit non-zero, with just `set -e` it exits 0.
+      // execFile rejects on non-zero exit; we assert the rejection
+      // AND that the post-pipeline `echo` was never reached.
+      let stdout = "";
+      let exitCode: number | null = null;
+      try {
+        const res = await execFile("bash", [
+          "-c",
+          "set -eo pipefail; (exit 7) | tail -1; echo SHOULD_NOT_REACH",
+        ]);
+        stdout = res.stdout;
+      } catch (err) {
+        const e = err as { stdout?: string; code?: unknown };
+        stdout = e.stdout ?? "";
+        exitCode = typeof e.code === "number" ? e.code : null;
+      }
+      expect(exitCode).not.toBe(0);
+      expect(stdout).not.toContain("SHOULD_NOT_REACH");
+    },
+  );
 });

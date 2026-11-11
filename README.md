@@ -19,7 +19,7 @@ Everything after that happens in the browser: create your account, click **Conne
 
 ## Develop
 
-Node 24+ (26 recommended) and pnpm 10. The gateway runs TypeScript directly (no build step).
+Node 26+ and pnpm 10. The gateway runs TypeScript directly (no build step).
 
 ```sh
 pnpm install

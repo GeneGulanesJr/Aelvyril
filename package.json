@@ -4,7 +4,7 @@
   "type": "module",
   "packageManager": "pnpm@10.34.7",
   "engines": {
-    "node": ">=24"
+    "node": ">=26"
   },
   "scripts": {
     "dev:gateway": "pnpm --filter @aelvyril/gateway dev",

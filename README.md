@@ -1,87 +1,36 @@
 # Aelvyril
 
-Spec-centric agent frontend for the GulanesKorp agent platform (pi + PiSubagent + LaPis + PiSandboxed + LayaMCP, all in Docker).
-Spec: `docs/superpowers/specs/2026-09-22-aelvyril-agent-platform-design.md` · UI redesign: `docs/superpowers/specs/2026-09-23-agent-spec-centric-ui-redesign.md` · ADRs: `docs/adr/`
+A general-purpose, local-first AI tool with a web UI, extensible the way [pi](https://github.com/earendil-works/pi-coding-agent) is. Pi is the engine (one `pi --mode rpc` child per thread); extensions are plain pi extensions. Design and decisions: [`docs/spec.md`](docs/spec.md).
 
-## Status: agent spec-centric UI (v1 surface)
+## Install and run (no coding needed)
 
-Every ask produces a **plan + diff**; non-trivial asks auto-trigger an **agent-driven spec interview** before execution. Threads live at `/thread/[id]` with Plan / Trace / Diff tabs; the gateway exposes `/v1/threads*` (old `/v1/conversations*` paths remain as back-compat aliases). See `docs/superpowers/plans/2026-09-23-agent-spec-centric-ui.md` and the thread-routes section of `docs/ops/gateway.md`.
+1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and open it.
+2. Download this folder, open a terminal in it, and run: `docker compose up -d`
+3. Open <http://localhost:3000> in your browser.
 
-## Dev
+Everything after that happens in the browser: create your account, click **Connect an AI** (sign in with Claude or ChatGPT, paste an API key, or point to a local server like LM Studio), pick the AI your chats use, and start chatting. **Settings → Extensions** adds or removes extensions by pasting a GitHub link.
 
-Requires Node 22+ and pnpm 10. Real Clerk dev keys go in `apps/web/.env.local` + `apps/gateway/.env`. The `apps/gateway/.env.example` file is the template (untracked locally).
+- Only this computer can reach it (`127.0.0.1`). That is why the first account needs no setup code. If you expose it to a network, remove `AELVYRIL_OPEN_SETUP` from `docker-compose.yml`: the first sign-up then needs a one-time code printed in the container log (Docker Desktop → Containers → aelvyril → Logs).
+- Your chats, accounts, keys and settings live in the `aelvyril-data` volume. `docker compose down` keeps them; `docker compose down -v` erases them.
+- A program on this computer (LM Studio, Ollama) is reached at `host.docker.internal` instead of `127.0.0.1`.
+- Included extensions: LaPis (memory), PiSubagent (helpers) and Ponytail (small, simple changes; level `full`, kept in `/data/config/ponytail/config.json`). A failed install is retried on the next start. `AELVYRIL_EXTENSIONS` overrides the list.
+- Pi's tools (bash, edit, write) run **inside the container** as the unprivileged `node` user; the container is the sandbox.
+- Other options: `AELVYRIL_ORIGINS` (extra allowed origins when served from another hostname), `AELVYRIL_SETUP_CODE` (fixed setup code).
 
-    # terminal 1 — gateway (auto-loads apps/gateway/.env; spawns real pi session hosts)
-    pnpm --filter @aelvyril/gateway start
-    # terminal 2 — web
-    pnpm --filter @aelvyril/web dev
+## Develop
 
-Open <http://localhost:3000>. If port 3000 is held by something on your host, run `pnpm exec next dev --webpack -p 3001` instead and update `GATEWAY_ALLOWED_ORIGIN` in `apps/gateway/.env` to match.
+Node 24+ (26 recommended) and pnpm 10. The gateway runs TypeScript directly (no build step).
 
-To fall back to the scripted fake `pi` child (no real LLM calls), set `PI_FAKE=1` in `apps/gateway/.env`. Without `CLERK_SECRET_KEY` this also enables the dev verifier — any bearer token is accepted — so the gateway then binds `127.0.0.1` by default and refuses to boot on a non-loopback `GATEWAY_HOST` (#78). `/v1/admin/*` (update status/apply) is admin-gated via `GATEWAY_ADMIN_USER_IDS` (#76, default-deny).
+```sh
+pnpm install
+pnpm dev:gateway     # http://localhost:3000   (needs `pi` on PATH, or PI_COMMAND)
+pnpm dev:web         # http://localhost:5173, proxies /api
+pnpm typecheck && pnpm test
+node e2e/mock-model.mjs   # scripted stand-in for an AI (no cost), used by the tests below
+node e2e/task-guard.mjs   # real gateway + real pi: the finish contract (nudges, need_input, watchdog)
+node e2e/ui-smoke.mjs     # real UI in Chrome against a running instance (see the header of that file)
+```
 
-## Checks
+How tasks work: the Stream answers directly and starts background tasks for real work; a task only counts as finished when it declares an outcome, and stalled or interrupted tasks are stopped or resumed. Details: `docs/spec.md` §12.
 
-    pnpm -r typecheck && pnpm -r lint && pnpm -r test
-    pnpm test:e2e   # Playwright (requires gateway + web running locally)
-
-> Windows note: this repo is developed under PowerShell — run the check commands one at a time (or use `;`).
-
-## Clerk setup
-
-The gateway enforces Clerk JWT bearer auth (`@clerk/backend.verifyToken`) and per-user LaPis namespaces via `LAPIS_PROJECT_KEY` (spec §2, §7 — see ADR 0002). The runtime auth reads keys from the env files above and is **independent of `clerk` CLI link state** — the link is only needed for `clerk env pull`, `clerk apps`, etc.
-
-## Stack
-
-Per spec §4/§5/§9 (see ADR 0003), the platform runs as **four** Docker services: `web`, `gateway`, `sandd` (prod profile), `layamcp`. See `infra/compose.yaml`, `infra/docker/`, and `infra/smoke.sh`. LaPis is **not** a service: `src/mcp/server.js` is stdio-MCP only (no HTTP server, no lockfile), so it runs in-process inside the gateway as a pi extension (`LAPIS_HOME=/data/lapis`). Two upstream patches in sibling repos complete the picture:
-
-- `LaPis/` — `LAPIS_PROJECT_KEY` env override for per-conversation namespaces (ADR 0002).
-- `DecisionMCP/` (ex-`LayaMCP`, repo renamed 2026-10-05 at v0.2.0) — decision-model MCP server; serves streamable HTTP at `/mcp` + legacy SSE at `/sse` on 8765, `GET /health`. The compose service key and `LAYAMCP_URL` keep the `layamcp` name for compatibility.
-
-The `gateway` (8787) and `web` (3000, or 3001 if 3000 is taken on the dev host) are the only host-published ports, and only on loopback (#79) — plaintext HTTP never leaves the host. In production only Caddy is public (80/443); everything else stays internal, and browsers call the gateway same-origin through Caddy's `/v1/*` route (build the web bundle with `NEXT_PUBLIC_GATEWAY_URL=` empty for that).
-
-## Abuse caps (spec §10)
-
-- **Rate limit**: 20 req/min/user on `/v1/threads/:id/prompt` (token bucket, capacity 20, refill 20/60 tokens/sec). On exceed: HTTP 429 with `retry-after: 60`.
-- **Concurrent-thread cap**: 3 total threads per user. On exceed: HTTP 503 with `{error: "conversation_limit_reached", limit: 3}` (error key kept for compatibility). Delete old threads to free space.
-- **Workspace allowlist**: default-deny via `GATEWAY_WORKSPACE_ALLOWLIST` (comma-separated absolute paths). Relative paths and `..` rejected at parse time.
-- **1MB body limit**: enforced at the transport layer (Fastify `bodyLimit: 1_048_576`).
-
-## Degraded state (spec §10)
-
-When a session host dies mid-turn the gateway emits a `session_state: degraded` envelope and marks the conversation degraded; the next prompt respawns the child automatically (workspace cwd preserved). The thread surface shows a persistent yellow banner while degraded; the orange error banner (per-request failures / `error` envelopes) is dismissable.
-
-## Observability (spec §11)
-
-- **`/healthz`** — liveness + readiness. Probes backing services via `LAPIS_URL` / `SANDD_URL` / `LAYAMCP_URL` env vars. Returns 503 if any probe fails.
-- **`/metrics`** — Prometheus text format. Counters + a histogram for request rate, latency, conv-creation, prompt counts, rate-limit / cap / workspace rejections, active session hosts.
-- **Structured logs** — Fastify pino JSON to stdout. Override with `GATEWAY_LOG=silent` for dev.
-- **Request IDs** — every response carries `X-Request-Id` (8-char random base36) for log correlation.
-- **Response compression** — gzip + deflate above 1 KB. SSE streams are excluded (would break `Last-Event-ID` reconnect).
-
-## Thread surface
-
-**Wired in the thread UI** (`/thread/[id]`):
-
-- **Spec interview** — heuristic (`GATEWAY_SPEC_HEURISTIC=off` to disable) decides auto-trigger; force via "Ask + spec"
-- **Plan / Trace / Diff tabs** — diff lines color-coded; spec drafts editable inline (goal / files / plan / risks)
-- **Lifecycle** — draft → spec'ing → running → reviewed → merged / abandoned; approve / abandon / retry routes
-- **Rename** (inline edit in the thread header, PATCH round-trip)
-- **Stream reconnect** — Last-Event-ID survives drops
-- **Banners** — degraded (yellow, persistent: session host died; next prompt respawns it) + error (orange, dismissable)
-- **Stop** — aborts the in-flight turn (`POST /v1/threads/:id/abort`); appears while a turn is streaming
-- **Steer-queued sends** — asking while a turn is mid-flight automatically sends `streamingBehavior: "steer"`
-- **Search** — sidebar box, case-insensitive substring on title (falls back to id for untitled threads)
-- **Delete** — two-step confirm in the thread header; removes the thread + event history and returns to `/thread/new`
-
-## Ops
-
-- **Runbooks** for every service: `docs/ops/{gateway,lapis,sandd,layamcp}.md` + `docs/ops/secrets.md`
-- **Smoke verification**: `./infra/smoke.sh` (or `./infra/smoke.sh --down` to tear down after)
-
-## Optional polish (not blocking v1)
-
-- Clerk Test Helper magic-link setup for full sign-in E2E (needs Clerk dashboard test mode — out of repo scope)
-- OpenTelemetry tracing across web + gateway + pi child (correlate traces through the SSE stream)
-
-See `docs/superpowers/specs/2026-09-22-aelvyril-agent-platform-design.md` §12 for the full phase roadmap.
+Layout: `apps/gateway` (Hono, Better Auth, SQLite, pi supervisor), `apps/web` (Preact + Vite), `packages/ui-schema` (the panel contract extensions emit; zod).

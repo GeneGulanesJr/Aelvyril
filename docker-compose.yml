@@ -1,0 +1,16 @@
+# One command: docker compose up -d   then open http://localhost:3000
+services:
+  aelvyril:
+    build: .
+    image: aelvyril
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000" # only this computer can reach it
+    volumes:
+      - aelvyril-data:/data # your chats, accounts and settings
+    environment:
+      AELVYRIL_OPEN_SETUP: "1" # no setup code: safe because the port above is local-only
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # lets Aelvyril reach LM Studio / Ollama on this computer
+volumes:
+  aelvyril-data:

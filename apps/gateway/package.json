@@ -1,29 +1,23 @@
 {
   "name": "@aelvyril/gateway",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --env-file-if-exists=.env --import tsx --watch src/index.ts",
-    "start": "node --env-file-if-exists=.env --import tsx src/index.ts",
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
-    "build": "tsc --noEmit"
+    "dev": "node --watch src/index.ts",
+    "start": "node src/index.ts",
+    "typecheck": "tsc -p .",
+    "test": "node --test --test-concurrency=1 src/"
   },
   "dependencies": {
-    "@aelvyril/shared": "workspace:*",
-    "@clerk/backend": "^3.18.1",
-    "@fastify/compress": "^9.2.0",
-    "@fastify/cors": "^11.3.0",
-    "better-sqlite3": "^13.0.3",
-    "fastify": "^5.2.0"
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@hono/node-server": "^1.19.0",
+    "better-auth": "^1.7.16",
+    "better-sqlite3": "^12.0.0",
+    "hono": "^4.9.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12",
-    "@types/node": "^22.10.0",
-    "tsx": "^4.19.0",
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0"
   }
 }

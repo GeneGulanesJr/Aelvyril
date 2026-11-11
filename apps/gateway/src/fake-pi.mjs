@@ -18,6 +18,7 @@ if (["install", "remove"].includes(process.argv[2])) {
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 let waitingAsk = null;
 let slowCalls = 0;
+let busy = false; // "/slow" keeps the agent working for a moment, like a real turn
 
 createInterface({ input: process.stdin }).on("line", (line) => {
   const m = JSON.parse(line);
@@ -42,7 +43,19 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     case "abort":
       return reply({});
     case "prompt":
+      // like real pi: a plain prompt while a turn runs is refused; it has to say steer or followUp
+      if (busy && !m.streamingBehavior) return out({ id: m.id, type: "response", command: m.type, success: false, error: "Agent is already processing." });
       reply({ disposition: "queued" });
+      if (busy) return;
+      if (m.message === "/slow") {
+        busy = true;
+        setTimeout(() => {
+          out({ type: "agent_start" });
+          out({ type: "agent_settled", aborted: false });
+          busy = false;
+        }, 60);
+        return;
+      }
       if (m.message.startsWith("[aelvyril:retry]")) {
         out({ type: "agent_start" });
         out({ type: "message_end", message: { role: "user", content: m.message } });

@@ -101,6 +101,18 @@ test("prompt round-trip is logged and replayable", async () => {
   assert.ok(!text.includes(`id: ${all[all.length - 2].seq}\n`));
 });
 
+test("a second message sent right behind the first steers instead of being refused", async () => {
+  const t = await (await call("/api/threads", { method: "POST", json: {} })).json();
+  // both leave before pi has said agent_start for the first
+  const [a, b] = await Promise.all([
+    call(`/api/threads/${t.id}/prompt`, { method: "POST", json: { message: "/slow" } }),
+    call(`/api/threads/${t.id}/prompt`, { method: "POST", json: { message: "and one more thing" } }),
+  ]);
+  assert.equal(a.status, 200, await a.clone().text());
+  assert.equal(b.status, 200, await b.clone().text());
+  await until(() => gw.sup.eventsAfter(t.id).some((e) => e.type === "agent_settled"));
+});
+
 test("extension dialog: pending until answered, then the extension continues", async () => {
   const t = await (await call("/api/threads", { method: "POST", json: {} })).json();
   await call(`/api/threads/${t.id}/prompt`, { method: "POST", json: { message: "/ask" } });

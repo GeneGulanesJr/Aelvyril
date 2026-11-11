@@ -73,7 +73,7 @@ function Login({ setup, onDone }: { setup: { needsSetup: boolean; needsCode: boo
           <p class="muted lede">{setup.needsSetup ? "Welcome! Create your account to get started. It stays on this computer." : "Sign in to continue."}</p>
           {setup.needsSetup && <input placeholder="Your name" value={name} onInput={(e) => setName(e.currentTarget.value)} />}
           <input type="email" required placeholder="Email" autocomplete="username" value={email} onInput={(e) => setEmail(e.currentTarget.value)} />
-          <input type="password" required minLength={8} placeholder="Password (at least 8 characters)" autocomplete={setup.needsSetup ? "new-password" : "current-password"} value={password} onInput={(e) => setPassword(e.currentTarget.value)} />
+          <input type="password" required minLength={8} placeholder={setup.needsSetup ? "Password (at least 8 characters)" : "Password"} autocomplete={setup.needsSetup ? "new-password" : "current-password"} value={password} onInput={(e) => setPassword(e.currentTarget.value)} />
           {setup.needsSetup && setup.needsCode && (
             <label class="field">
               <input required placeholder="Setup code" value={code} onInput={(e) => setCode(e.currentTarget.value)} />

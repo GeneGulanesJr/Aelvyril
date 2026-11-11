@@ -433,9 +433,18 @@ export class Supervisor {
       if (t.state !== "working" || !this.startedAt.has(threadId)) this.startedAt.set(threadId, Date.now());
     }
     const host = this.ensureHost(threadId);
-    const r = await host.call({ type: "prompt", message, ...(this.running.has(threadId) ? { streamingBehavior: "steer" } : {}) });
-    if (!r.success) throw new Error(r.error ?? "prompt rejected");
-    return r.data;
+    // Busy from the moment a prompt is sent, not from pi's later agent_start: a second
+    // message sent right behind the first must steer, or pi refuses it with a raw error.
+    const busy = this.running.has(threadId);
+    this.running.add(threadId);
+    try {
+      const r = await host.call({ type: "prompt", message, ...(busy ? { streamingBehavior: "steer" } : {}) });
+      if (!r.success) throw new Error(r.error ?? "prompt rejected");
+      return r.data;
+    } catch (e) {
+      if (!busy) this.running.delete(threadId); // nothing started
+      throw e;
+    }
   }
 
   async abort(threadId: string) {

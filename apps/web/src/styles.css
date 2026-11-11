@@ -193,7 +193,8 @@ textarea { resize: vertical; line-height: 1.5; }
 .btn.danger { background: transparent; color: var(--madder); border-color: currentColor; }
 .btn.danger:hover { background: var(--madder-wash); }
 .btn:disabled, .btn:disabled:hover { opacity: 0.45; cursor: default; transform: none; background: var(--sheet); border-color: var(--line); color: var(--ink); }
-.btn.primary:disabled, .btn.primary:disabled:hover { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+/* nothing to send yet: an undyed block, not a faded indigo one */
+.btn.primary:disabled, .btn.primary:disabled:hover { opacity: 1; background: color-mix(in srgb, var(--primary) 14%, var(--ground)); border-color: transparent; color: var(--ink-2); }
 .btn.wide { width: 100%; }
 .btn.link { border: 0; background: none; }
 a.btn { text-decoration: none; text-align: center; }
@@ -425,6 +426,8 @@ a.btn.primary { color: var(--on-primary); }
 .chip.live::before { content: ""; width: 8px; height: 8px; border: 2px solid var(--you-mark); border-radius: 1px; animation: breathe 1.6s ease-in-out infinite; }
 
 .transcript { flex: 1; }
+/* the warp runs the full height of the view, down to the composer's knot: one unbroken thread */
+.transcript > .weave { min-height: 100%; box-sizing: border-box; }
 .weave {
   position: relative;
   width: min(100% - 32px, var(--col)); margin: 0 auto;
@@ -570,6 +573,8 @@ pre.notice { white-space: pre-wrap; margin: 0; font-family: var(--font); font-si
 .composer::after { content: ""; position: absolute; left: 7px; top: 34px; width: 10px; height: 10px; border: 2px solid var(--you-mark); border-radius: 1px; background: var(--ground); }
 .composer textarea {
   flex: 1; min-width: 0;
+  /* grows with what you type, so no drag handle; rows=2 is the fallback where field-sizing is missing */
+  field-sizing: content; resize: none;
   min-height: 56px; max-height: 40vh;
   padding: 13px 14px;
   font-size: 16px;

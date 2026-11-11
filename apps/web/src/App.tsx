@@ -8,7 +8,7 @@ import { Quick } from "./Quick.tsx";
 import { Board } from "./Board.tsx";
 import { store } from "./store.ts";
 import { TaskView } from "./Task.tsx";
-import { IconArrow, IconSettings } from "./icons.tsx";
+import { IconArrow, IconBoard, IconInbox, IconQuick, IconSettings, IconStream } from "./icons.tsx";
 import {
   announcements,
   dragOffset,
@@ -380,12 +380,13 @@ function Shell({ onSignOut }: { onSignOut(): void }) {
   };
 
   return (
-    <div class={`shell ${sheetOpen && !phone ? "shift" : ""}`}>
+    <div class={`shell ${sheetOpen && !phone ? "shift" : ""} ${unlocked ? "has-tabs" : ""}`}>
       <header class={`beam ${unlocked ? "has-tabs" : ""}`}>
         <div class="brand"><span class="label-mark">Aelvyril</span></div>
         {unlocked && <Switcher current={settings ? null : current} needs={waiting.length} onPick={switchTo} />}
         <button class={`icon-btn gear ${settings ? "on" : ""}`} aria-label="Settings" title="Settings" onClick={() => openSettings()}>
           <IconSettings />
+          <span class="gear-label" aria-hidden="true">Settings</span>
         </button>
       </header>
 
@@ -470,13 +471,16 @@ function Shell({ onSignOut }: { onSignOut(): void }) {
   );
 }
 
-/** Stream | Inbox | Quick | Board (read from VIEWS). A real tablist; the oat shuttle slides to the chosen view. */
+const VIEW_ICON: Record<ViewId, () => preact.JSX.Element> = { stream: IconStream, inbox: IconInbox, quick: IconQuick, board: IconBoard };
+
+/** Stream, Inbox, Quick, Board (read from VIEWS): a side menu on wide screens, a bottom bar on phones.
+    A real tablist; the oat shuttle slides to the chosen view. */
 function Switcher({ current, needs, onPick }: { current: ViewId | null; needs: number; onPick(v: ViewId): void }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const idx = current ? viewIndex(current) : -1;
   const n = VIEWS.length;
   const onKey = (e: KeyboardEvent, i: number) => {
-    const j = e.key === "ArrowRight" ? (i + 1) % n : e.key === "ArrowLeft" ? (i - 1 + n) % n : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : -1;
+    const j = e.key === "ArrowRight" || e.key === "ArrowDown" ? (i + 1) % n : e.key === "ArrowLeft" || e.key === "ArrowUp" ? (i - 1 + n) % n : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : -1;
     if (j < 0) return;
     e.preventDefault();
     refs.current[j]?.focus();
@@ -497,6 +501,7 @@ function Switcher({ current, needs, onPick }: { current: ViewId | null; needs: n
           onClick={() => onPick(v.id)}
           onKeyDown={(e) => onKey(e, i)}
         >
+          {VIEW_ICON[v.id]()}
           {v.label}
           {v.id === "inbox" && needs > 0 && <span class="badge" aria-hidden="true">{needs}</span>}
         </button>

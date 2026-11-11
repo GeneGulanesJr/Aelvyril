@@ -167,18 +167,20 @@ components:
 
 # Design System: Aelvyril
 
+> **Out of date (2026-11-11).** The look was changed to a desktop-app window: a dark frame with the menu, content in a floating rounded panel, an electric indigo accent, round marks and soft corners. The colours, shapes and "woven cloth" wording below describe the previous look; the layout, behaviour and accessibility rules still hold. `apps/web/src/styles.css` is the truth until this file is rewritten.
+
 ## Overview
 
 **Creative North Star: "The Hand Loom"**
 
-Aelvyril is designed like woven cloth made at home. An indigo breast beam runs across the top and carries the woven-label wordmark, the view switcher and a gear. Below it lies undyed linen and one endless warp, the **Stream**: the person's words are indigo-tinted weft bands that cross the thread, the AI's words sit on the open ground, and every background **task** is a card tied onto the warp with a knot. While a task works, a shuttle runs back and forth along the card's weft line. When it needs the person, the shuttle stops and a weld-yellow knot pulses. Finished tasks fold to one quiet line. Calm comes from restraint in ornament and confidence in colour. The only decoration is a 2/2 twill, used for the sign-in cloth, the welcome swatch, the active Settings tab, dialog hems and the selvedge of the task sheet.
+Aelvyril is designed like woven cloth made at home. An indigo beam stands down the left side like the menu of an everyday app and carries the woven-label wordmark, the views (an icon and a name each) and Settings at the foot; on phones it lies across the top and the views become a bar along the bottom. Below it lies undyed linen and one endless warp, the **Stream**: the person's words are indigo-tinted weft bands that cross the thread, the AI's words sit on the open ground, and every background **task** is a card tied onto the warp with a knot. While a task works, a shuttle runs back and forth along the card's weft line. When it needs the person, the shuttle stops and a weld-yellow knot pulses. Finished tasks fold to one quiet line. Calm comes from restraint in ornament and confidence in colour. The only decoration is a 2/2 twill, used for the sign-in cloth, the welcome swatch, the active Settings tab, dialog hems and the selvedge of the task sheet.
 
 The density is unhurried: a single 760px reading column, 16px body text in a typeface designed to be easy to read, and generous space between turns. It deliberately avoids the AI-chat-app look: no chat list, no "New chat", no left/right bubbles, no white floating cards, no gradients, glow or sparkle, and no accent-on-grey shell.
 
 **Interaction model.** One permanent conversation (the Stream) answers quick questions and starts tasks by itself. Four views share the beam: **Stream** (home), **Inbox** (tasks grouped as Needs you, Working, Done, Older chats), **Quick** (one big "What do you need?" box with recent tasks; also an overlay on Ctrl/Cmd+K) and **Board** (every task as a card with the results it produced, side by side, plus a card for the Stream; the person arranges and folds them). The switcher appears only after the first task has finished (or when older chats exist). Until then the person sees only the Stream and its box. A task opens as a sheet sliding in from the right on desktop (the Stream stays visible and steps aside on wide screens) and as a full screen with Back on phones. On touch screens a sideways swipe on the content moves between views.
 
 **Key Characteristics:**
-- An indigo beam with an oat woven-label wordmark and a recessed switcher whose oat shuttle (a woven label) slides to the chosen view.
+- An indigo beam with an oat woven-label wordmark and a switcher of icon-and-name rows whose oat shuttle (a woven label) slides to the chosen view.
 - A warp thread down the reading column, with a knot tying each turn and task to it; day picks cross it.
 - Task cards with a live weft line: the shuttle runs while working, a weld knot pulses when it needs you.
 - Natural-dye colour roles: indigo, linen, oat, weld, madder and an indigo-over-weld green.
@@ -243,7 +245,7 @@ The shell is a grid with three rows: the beam (56px), an optional attention stri
 - **Board:** a column up to 1280px wide (24px margins; 12px on phones) holding a masonry of cards: rows of 4px, each card spanning its own height plus a 16px gap, so short cards never leave holes. The column count follows the Board's own width (container query): one below 640px, two from 640px, three from 1000px. With a task sheet open on a wide screen the Board steps aside like the other views and usually drops to one column. A short hint closes the Board ("To arrange, drag a card by its dotted handle, or use its arrow buttons."). With no tasks there is one plain line ("Results from your tasks will appear here.") above the Stream card.
 - **Task sheet:** spans the attention strip and the views on the right, `min(600px, 50vw)` wide. At 1180px and wider, the views and the strip step aside by the sheet's width so the Stream stays fully readable.
 
-At 720px and below, the switcher drops to a second row of the beam with equal segments, the gutter narrows to 30px, the composer's Stop and Send stack, finished task cards drop their preview, Inbox shows only its rail, and any open task becomes a full screen with "Back to …". The page never scrolls sideways (checked at 360px).
+At 720px and below, the beam lies across the top (wordmark and the Settings icon) and the switcher becomes a bar fixed along the bottom with four equal segments, icon above name, the gutter narrows to 30px, the composer's Stop and Send stack, finished task cards drop their preview, Inbox shows only its rail, and any open task becomes a full screen with "Back to …". The page never scrolls sideways (checked at 360px).
 
 ## Elevation & Depth
 
@@ -252,7 +254,7 @@ The system uses tonal layers (ground, then sheet, then deep sheet) plus a few re
 ### Shadow Vocabulary
 - **Lift** (`0 1px 2px rgb(27 34 50 / .08), 0 8px 24px -8px rgb(27 34 50 / .18)`; darker in dark theme): the composer textarea, the Quick box, a task card on hover, a Board card while it is dragged, and the dialog window.
 - **Sheet** (`-2px 0 4px rgb(27 34 50 / .06), -28px 0 56px -28px rgb(27 34 50 / .42)`; black in dark theme): the task sheet's left edge, above its twill selvedge.
-- **Recess** (`inset 0 1px 2px rgb(0 0 0 / .25)`): the switcher track pressed into the beam.
+- **Seam** (`inset -1px 0 0 rgb(0 0 0 / .28)`): the beam's right edge, so the Inbox rail beside it reads as its own piece.
 
 ## Shapes
 
@@ -279,8 +281,8 @@ Corners are cut, not rounded: 2px for chips, rows and labels, 3px for buttons, i
 - **Focus:** the border turns indigo, plus a 2px focus outline (indigo in light theme, weld in dark theme and on indigo).
 
 ### Navigation
-- **Beam:** indigo, 56px. The woven-label wordmark sits on the left, the switcher in the centre and the gear on the right. The gear is a 40px icon button labelled "Settings", and it turns oat while Settings is open. Sign out lives in the Settings header, beside Back.
-- **Switcher:** a real tablist (Stream | Inbox | Quick | Board) on a recessed track. The oat shuttle carries a dashed inner stitch and slides under the chosen tab (0.42s). Inactive tabs are muted oat-on-indigo. A weld count on Inbox shows how many tasks need you. Arrow keys, Home and End move between views. The view list is data (`VIEWS`): tabs, panels, swipe neighbours and slide directions all read it, so a further view is one more entry.
+- **Beam:** indigo, a 196px side menu. The woven-label wordmark sits at the top, the switcher below it and Settings (icon and name, 44px) at the foot; it turns oat while Settings is open. On phones the beam is a 52px top bar and Settings is a 40px icon button. Sign out lives in the Settings header, beside Back.
+- **Switcher:** a real tablist (Stream, Inbox, Quick, Board), one 44px row per view with a drawn icon and the name; on phones a bottom bar, icon above name. The oat shuttle carries a dashed inner stitch and slides to the chosen tab (0.42s). Inactive tabs are muted oat-on-indigo. A weld count on Inbox shows how many tasks need you. Arrow keys (either direction), Home and End move between views. The view list is data (`VIEWS`): tabs, panels, swipe neighbours and slide directions all read it, so a further view is one more entry.
 - **Attention strip:** a slim weld-wash band under the beam with a pulsing weld knot: "**Rename photos** needs your OK · Open →". It opens the task; "+2 more" goes to the Inbox. It is hidden in the Inbox (whose first group says the same) and for the task already on screen.
 - **Inbox rail:** indigo, rows 15px with a knot, title, one-line subtitle and a relative time. The chosen row is an oat label. Group headings use the label style with a count. On the rail, done is night-green and failed is night-madder so they read on indigo.
 

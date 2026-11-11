@@ -1,110 +1,102 @@
-/* Aelvyril: woven cloth. Natural-dye palette, cut-cloth corners, one warp thread per chat.
-   Roles: indigo = structure and your voice; linen = ground; oat = labels; weld = waiting for you;
-   madder = destructive and errors; green (indigo over weld) = done. */
+/* Aelvyril: a desktop app window. A dark frame holds the menu; the content floats in it as a rounded panel.
+   Roles: frame (--indigo) = structure; accent = your voice and the main action; amber (--weld) = waiting for you;
+   red (--madder) = destructive and errors; green = done. One thread per chat still ties the rows together. */
 
 :root {
-  --ground: #e9e7e0;
-  --sheet: #f5f4ef;
-  --sheet-2: #dfdcd3;
-  --ink: #1b2232;
-  --ink-2: #4f5566;
-  --seam: #cdc9be;
-  --seam-2: #aaa596;
-  --line: #857f70; /* field and button outlines, 3:1 */
-  --warp: #b9b3a4;
+  --ground: #f5f6fa; /* the content panel */
+  --sheet: #ffffff;
+  --sheet-2: #e9ebf3;
+  --ink: #141829;
+  --ink-2: #5a6077;
+  --seam: #e1e4ee;
+  --seam-2: #c5cada;
+  --line: #8a90a8; /* field and button outlines, 3:1 */
+  --warp: #d3d7e4;
 
-  --indigo: #24335a;
-  --indigo-2: #2f4170;
-  --on-indigo: #efeadc;
-  --on-indigo-2: #b4bcd3;
-  --rail-hover: #2d3e6b;
+  --indigo: #0f1322; /* the window frame: side menu, Inbox list, phone bars */
+  --indigo-2: #1a2036;
+  --on-indigo: #eef0fa;
+  --on-indigo-2: #9aa2c0;
+  --rail-hover: #1b2138;
 
-  --oat: #ece6d6;
-  --on-oat: #1f2b4b;
+  --oat: #272e4d; /* the chosen item on the frame */
+  --on-oat: #ffffff;
 
-  --primary: var(--indigo);
-  --primary-hover: var(--indigo-2);
-  --on-primary: var(--on-indigo);
+  --accent: #4f5dff;
+  --accent-2: #38c8e8;
+  --primary: var(--accent);
+  --primary-hover: #3d4be8;
+  --on-primary: #ffffff;
 
-  --you: #d5dbea;
-  --you-mark: var(--indigo);
+  --you: #e6e9ff;
+  --you-mark: var(--accent);
 
-  --weld: #c49a1c;
-  --weld-wash: #f1e6c2;
-  --weld-ink: #634b06;
-  --madder: #a3283f;
-  --madder-wash: #f4dde0;
-  --green: #2c6743;
-  --green-wash: #dbe8dd;
+  --weld: #d99a0b;
+  --weld-wash: #fdf3d7;
+  --weld-ink: #6b4a00;
+  --madder: #c8324b;
+  --madder-wash: #fde4e8;
+  --green: #1f8a5b;
+  --green-wash: #dcf3e8;
 
-  --layer: #f3f2ed; /* a raised sheet (task panel) */
-  --layer-2: #fbfaf7;
-  --sheet-shadow: -2px 0 4px rgb(27 34 50 / 0.06), -28px 0 56px -28px rgb(27 34 50 / 0.42);
+  --layer: #fbfbfe; /* a raised sheet (task panel) */
+  --layer-2: #ffffff;
+  --sheet-shadow: 0 0 0 1px rgb(15 19 34 / 0.04), -24px 0 60px -24px rgb(15 19 34 / 0.4);
 
-  --focus: #24335a;
-  --shadow: 0 1px 2px rgb(27 34 50 / 0.08), 0 8px 24px -8px rgb(27 34 50 / 0.18);
-  --scrim: rgb(20 27 44 / 0.55);
+  --focus: #4f5dff;
+  --shadow: 0 1px 2px rgb(15 19 34 / 0.06), 0 12px 32px -12px rgb(15 19 34 / 0.22);
+  --scrim: rgb(9 12 24 / 0.55);
 
-  --r: 3px;
+  --r: 10px;
   --col: 760px;
   --gutter: 36px;
   --font: "Atkinson Hyperlegible Next Variable", "Atkinson Hyperlegible Next", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
 
-  /* 2/2 twill: indigo warp, oat weft. Used for the cloth panel, the swatch and hems. */
-  --twill: repeating-linear-gradient(45deg, var(--twill-a) 0 3px, var(--twill-b) 3px 6px);
-  --twill-a: #24335a;
-  --twill-b: #3a4b78;
+  /* the one light: accent to cyan. Kept small: the mark, the chosen item's edge, hems, the active Settings tab. */
+  --twill: linear-gradient(120deg, var(--accent), var(--accent-2));
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --ground: #12151d;
-    --sheet: #1a1e29;
-    --sheet-2: #242938;
-    --ink: #e9e4d6;
-    --ink-2: #a8afc0;
-    --seam: #2b3141;
-    --seam-2: #3d4458;
-    --line: #67728e;
-    --warp: #3d4559;
+    --ground: #171b2d;
+    --sheet: #1f243a;
+    --sheet-2: #2a3049;
+    --ink: #eceefa;
+    --ink-2: #a0a7c2;
+    --seam: #2a3048;
+    --seam-2: #3c4463;
+    --line: #6a7397;
+    --warp: #353d5a;
 
-    --indigo: #1c2747;
-    --indigo-2: #26335b;
-    --on-indigo: #e9e4d6;
-    --on-indigo-2: #a3adc4;
-    --rail-hover: #243057;
+    --indigo: #0b0e1a;
+    --indigo-2: #151a2c;
+    --rail-hover: #161b30;
+    --oat: #232a47;
 
-    --oat: #e2dbc8;
-    --on-oat: #131a28;
+    --accent: #7c87ff;
+    --primary-hover: #939cff;
+    --on-primary: #0b0e1a;
 
-    --primary: #e2dbc8;
-    --primary-hover: #f1ebdb;
-    --on-primary: #131a28;
+    --you: #272e55;
 
-    --you: #24314f;
-    --you-mark: #9db1e0;
+    --weld: #f0c040;
+    --weld-wash: #3a3118;
+    --weld-ink: #f6dc8a;
+    --madder: #ff8fa0;
+    --madder-wash: #40202a;
+    --green: #7ddcab;
+    --green-wash: #183528;
 
-    --weld: #e0be55;
-    --weld-wash: #352f1c;
-    --weld-ink: #f0d888;
-    --madder: #f28b99;
-    --madder-wash: #3a1f27;
-    --green: #8ccc9c;
-    --green-wash: #1c3226;
+    --layer: #1b2034;
+    --layer-2: #242a42;
+    --sheet-shadow: 0 0 0 1px rgb(255 255 255 / 0.04), -32px 0 64px -24px rgb(0 0 0 / 0.75);
 
-    --layer: #191d28;
-    --layer-2: #222736;
-    --sheet-shadow: -2px 0 6px rgb(0 0 0 / 0.35), -32px 0 64px -24px rgb(0 0 0 / 0.75);
-
-    --focus: #e0be55;
+    --focus: #9aa3ff;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 12px 32px -8px rgb(0 0 0 / 0.55);
-    --scrim: rgb(4 7 14 / 0.7);
-
-    --twill-a: #1c2747;
-    --twill-b: #2c3a66;
+    --scrim: rgb(4 6 14 / 0.7);
     color-scheme: dark;
   }
 }
@@ -112,10 +104,13 @@
 /* ---------------------------------------------------------------- base */
 *, *::before, *::after { box-sizing: border-box; }
 html, body, #app { height: 100%; margin: 0; }
+/* behaves like an installed app: the window never rubber-bands, and menus and buttons aren't selectable text */
+html { overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+button, .beam, [role="tab"], summary { user-select: none; -webkit-user-select: none; }
 body {
   background: var(--ground);
   color: var(--ink);
-  font: 400 16px/1.55 var(--font);
+  font: 400 15px/1.55 var(--font);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   caret-color: var(--primary);
@@ -261,23 +256,29 @@ a.btn.primary { color: var(--on-primary); }
   position: relative;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 196px minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
 }
 
-/* the breast beam: an indigo band carrying the woven label, the views and the gear */
+/* the beam, stood on end: an indigo side menu carrying the woven label, the views and Settings.
+   On phones it lies across the top and the views move to a bar along the bottom. */
 .beam {
   --focus: #e0be55;
-  grid-row: 1; grid-column: 1;
+  grid-row: 1 / 4; grid-column: 1;
   z-index: 8;
-  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px;
-  min-height: 56px; padding: 8px 12px 8px 20px;
+  display: flex; flex-direction: column; gap: 22px;
+  padding: 18px 12px 12px;
   background: var(--indigo); color: var(--on-indigo);
+  box-shadow: inset -1px 0 0 rgb(0 0 0 / 0.28); /* a seam, so the Inbox rail beside it reads as its own piece */
 }
-.beam:not(.has-tabs) { grid-template-columns: 1fr auto; }
-.brand { line-height: 0; }
-.beam .gear { justify-self: end; }
+.brand { line-height: 0; padding-left: 4px; }
+.beam .gear {
+  margin-top: auto;
+  display: flex; align-items: center; justify-content: flex-start; gap: 12px;
+  width: 100%; height: 44px; padding: 0 12px;
+  font: inherit; font-weight: 650; font-size: 15px;
+}
 
 .icon-btn {
   display: inline-grid; place-items: center;
@@ -291,28 +292,20 @@ a.btn.primary { color: var(--on-primary); }
 .beam .icon-btn:hover { background: var(--rail-hover); color: var(--on-indigo); }
 .beam .icon-btn.on { background: var(--oat); color: var(--on-oat); }
 
-/* the switcher: a recessed track; the oat shuttle (a woven label) slides to the chosen view */
-.switcher {
-  position: relative;
-  display: grid; grid-template-columns: repeat(var(--n), minmax(88px, 1fr));
-  padding: 3px;
-  background: color-mix(in srgb, #000 24%, var(--indigo));
-  border-radius: var(--r);
-  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.25);
-}
+/* the switcher: one row per view; the oat shuttle (a woven label) slides to the chosen one */
+.switcher { position: relative; display: grid; grid-auto-rows: 44px; }
 .shuttle-tab {
-  position: absolute; top: 3px; bottom: 3px; left: 3px;
-  width: calc((100% - 6px) / var(--n));
+  position: absolute; top: 0; left: 0; right: 0; height: 44px;
   background: var(--oat); border-radius: 2px;
-  transform: translateX(calc(var(--i) * 100%));
+  transform: translateY(calc(var(--i) * 100%));
   transition: transform 0.42s var(--ease), opacity 0.2s;
 }
 .shuttle-tab::after { content: ""; position: absolute; inset: 3px; border: 1px dashed color-mix(in srgb, var(--on-oat) 32%, transparent); border-radius: 1px; }
 .switcher.none .shuttle-tab { opacity: 0; }
 .switcher [role="tab"] {
   position: relative; z-index: 1;
-  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-  min-height: 36px; padding: 4px 14px;
+  display: flex; align-items: center; gap: 12px;
+  min-height: 44px; padding: 0 12px;
   background: none; border: 0; border-radius: 2px;
   color: var(--on-indigo-2); font-weight: 650; font-size: 15px;
   cursor: pointer; transition: color 0.2s;
@@ -320,6 +313,7 @@ a.btn.primary { color: var(--on-primary); }
 .switcher [role="tab"]:hover { color: var(--on-indigo); }
 .switcher [role="tab"][aria-selected="true"] { color: var(--on-oat); }
 .switcher [role="tab"]:focus-visible { outline-offset: -1px; }
+.switcher .badge { margin-left: auto; }
 .badge {
   display: inline-grid; place-items: center;
   min-width: 19px; height: 19px; padding: 0 5px;
@@ -329,7 +323,7 @@ a.btn.primary { color: var(--on-primary); }
 
 /* "waiting for you": a slim weld strip under the beam */
 .attention {
-  grid-row: 2; grid-column: 1;
+  grid-row: 2; grid-column: 2;
   z-index: 4;
   display: flex; align-items: center; gap: 12px;
   padding-inline: max(16px, calc((100% - var(--col)) / 2));
@@ -350,7 +344,7 @@ a.btn.primary { color: var(--on-primary); }
 
 /* views sit side by side like panels of cloth; only the chosen one shows */
 .views {
-  grid-row: 3; grid-column: 1;
+  grid-row: 3; grid-column: 2;
   position: relative; min-height: 0; overflow: hidden;
   touch-action: pan-y pinch-zoom;
   transition: margin-right 0.38s var(--ease);
@@ -663,7 +657,7 @@ pre.notice { white-space: pre-wrap; margin: 0; font-family: var(--font); font-si
 /* a task on its own: a raised sheet with a twill selvedge */
 .sheet.side {
   --ground: var(--layer); --sheet: var(--layer-2);
-  grid-row: 2 / 4; grid-column: 1; justify-self: end;
+  grid-row: 2 / 4; grid-column: 2; justify-self: end;
   position: relative; z-index: 6;
   width: var(--sheet-w); min-height: 0;
   background: var(--layer);
@@ -893,7 +887,7 @@ kbd {
 .quick-esc { margin: 2px 0 0; text-align: right; }
 
 /* settings: a page laid over the views */
-.settings-layer { grid-row: 2 / 4; grid-column: 1; position: relative; z-index: 7; min-height: 0; background: var(--ground); animation: rise 0.32s var(--ease) both; }
+.settings-layer { grid-row: 2 / 4; grid-column: 2; position: relative; z-index: 7; min-height: 0; background: var(--ground); animation: rise 0.32s var(--ease) both; }
 
 /* ---------------------------------------------------------------- settings */
 .settings { height: 100%; overflow: auto; padding: 0 24px 64px; }
@@ -994,26 +988,95 @@ kbd {
   .weave.working::after { display: none; }
 }
 
+/* ---------------------------------------------------------------- the window: frame, floating panel, soft shapes */
+.shell { background: var(--indigo); }
+.beam { background: none; box-shadow: none; }
+.views, .settings-layer { margin: 8px 8px 8px 0; border-radius: 14px; }
+.settings-layer { overflow: hidden; }
+.attention { margin: 8px 8px 0 0; border: 1px solid color-mix(in srgb, var(--weld) 55%, transparent); border-radius: 12px; }
+.sheet.side { margin: 8px 8px 8px 0; padding-left: 0; border-radius: 14px; overflow: hidden; }
+.sheet.side::before { display: none; }
+
+/* the mark: a small lit tile and the name */
+.label-mark { padding: 0 0 0 26px; background: none; color: var(--on-indigo); font-size: 16px; font-weight: 700; letter-spacing: 0.01em; text-transform: none; }
+.label-mark::after { inset: auto; left: 0; top: 50%; width: 16px; height: 16px; margin-top: -8px; border: 0; border-radius: 5px; background: var(--twill); box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 60%, transparent); }
+.swatch { border-radius: 16px; box-shadow: 0 10px 30px -8px color-mix(in srgb, var(--accent) 60%, transparent); }
+.gate-cloth {
+  background:
+    radial-gradient(120% 80% at 0% 100%, color-mix(in srgb, var(--accent) 55%, transparent), transparent 60%),
+    radial-gradient(90% 60% at 100% 0%, color-mix(in srgb, var(--accent-2) 25%, transparent), transparent 60%),
+    var(--indigo);
+}
+
+/* menu: the chosen row is a raised slate with a lit edge */
+.shuttle-tab { border-radius: 9px; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06); }
+.shuttle-tab::after { inset: 12px auto 12px 0; width: 3px; border: 0; border-radius: 0 3px 3px 0; background: var(--twill); }
+.switcher [role="tab"] { border-radius: 9px; font-weight: 600; font-size: 14px; }
+.beam .gear { border-radius: 9px; font-weight: 600; font-size: 14px; }
+
+/* marks on the thread are round */
+.knot, .weave > *::before, .hello > :not(.swatch)::before, .chip.live::before, .composer::after, .quick-form::after,
+.tw-you::before, .tw-ai::before, .tile-send::before { border-radius: 50%; }
+.weave > .tool::before { border-radius: 2px; }
+.msg.user { border-radius: 12px; }
+.tw-you { border-radius: 10px; }
+
+/* controls */
+.btn.primary:not(:disabled) { box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--primary) 70%, transparent); }
+input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 16%, transparent); }
+.composer textarea, .composer .btn { border-radius: 14px; }
+.composer textarea, .quick-input { border-color: var(--seam-2); }
+.quick-input, .quick-form .btn { border-radius: 16px; }
+.chip { border-radius: 999px; padding-inline: 10px; }
+.suggestion { border-radius: 10px; }
+.row-item, .recent-row, .tile-grip, .link, .tabs button { border-radius: 8px; }
+kbd, code { border-radius: 5px; }
+.group-h, .weave > h2.day { font-size: 13px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.modal { border-radius: 16px; }
+.modal::before { height: 3px; }
+.modal-back { backdrop-filter: blur(6px); }
+
+/* the Inbox list sits on the frame, so the chosen row's marks stay light */
+.rail { border-top: 0; }
+.rail [aria-current] .k-working { border-color: var(--on-indigo); }
+.rail [aria-current] .k-done { background: #8ccc9c; border-color: #8ccc9c; }
+.rail [aria-current] .k-failed { background: #f28b99; border-color: #f28b99; }
+.rail [aria-current] .k-stopped { border-color: var(--on-indigo-2); }
+.rail .row-item[aria-current].s-needs_you .row-sub { color: #e0be55; }
+.row-item[aria-current] .row-sub, .row-item[aria-current] .row-when { color: var(--on-indigo-2); }
+
 /* ---------------------------------------------------------------- wide: the Stream steps aside for an open task */
 @media (min-width: 1180px) {
-  .shell.shift .views, .shell.shift .attention { margin-right: var(--sheet-w); }
+  .shell.shift .views, .shell.shift .attention { margin-right: calc(var(--sheet-w) + 16px); }
 }
 
 /* ---------------------------------------------------------------- phone */
 @media (max-width: 720px) {
   :root { --gutter: 30px; }
   .gate { grid-template-columns: 1fr; grid-template-rows: 88px 1fr; }
-  .gate-cloth { background: linear-gradient(to bottom, transparent calc(100% - 10px), var(--oat) calc(100% - 10px), var(--oat) calc(100% - 7px), transparent calc(100% - 7px)), var(--twill); }
   .gate-form { align-items: start; padding: 32px 20px; }
 
-  .beam { min-height: 52px; padding: 6px 8px 6px 12px; gap: 8px; }
-  .beam.has-tabs { grid-template-columns: 1fr auto; grid-template-areas: "brand gear" "tabs tabs"; row-gap: 6px; padding-bottom: 10px; }
-  .beam.has-tabs .brand { grid-area: brand; }
-  .beam.has-tabs .gear { grid-area: gear; }
-  .beam.has-tabs .switcher { grid-area: tabs; }
-  .label-mark { font-size: 12px; padding: 6px 11px 5px; }
-  .switcher { grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
-  .switcher [role="tab"] { min-height: 38px; padding-inline: 8px; }
+  /* phone: the beam lies across the top; the views are a bar along the bottom, in reach of the thumb */
+  .shell { --bar: calc(60px + env(safe-area-inset-bottom, 0px)); grid-template-columns: minmax(0, 1fr); }
+  .shell.has-tabs { padding-bottom: var(--bar); }
+  .beam { grid-row: 1; flex-direction: row; align-items: center; justify-content: space-between; min-height: 52px; padding: 6px 8px 6px 12px; }
+  .beam { box-shadow: none; }
+  .brand { padding-left: 0; }
+  .beam .gear { margin: 0; width: 40px; height: 40px; padding: 0; justify-content: center; }
+  .gear-label { display: none; }
+  .attention, .views, .settings-layer { grid-column: 1; }
+  .views, .settings-layer, .attention { margin: 0; border-radius: 0; }
+  .attention { border-width: 0 0 1px; }
+  .shuttle-tab::after { display: none; }
+  .switcher {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    grid-template-columns: repeat(var(--n), minmax(0, 1fr)); grid-auto-rows: 52px;
+    height: var(--bar); padding: 4px 6px 0;
+    background: var(--indigo);
+  }
+  .shuttle-tab { top: 4px; left: 6px; right: auto; height: 52px; width: calc((100% - 12px) / var(--n)); transform: translateX(calc(var(--i) * 100%)); }
+  .switcher [role="tab"] { flex-direction: column; justify-content: center; gap: 3px; min-height: 52px; padding: 0; font-size: 12px; }
+  .switcher .badge { position: absolute; top: 4px; left: calc(50% + 8px); margin: 0; }
 
   .attention { gap: 10px; padding-inline: 12px; }
   .attention-go { font-size: 14px; }

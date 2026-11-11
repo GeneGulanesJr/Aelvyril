@@ -1,28 +1,24 @@
-name: CI
+name: ci
 on:
   push:
     branches: [main]
   pull_request:
 
-# Least privilege: the workflow only checks out code — no token-scoped
-# writes (GITHUB_TOKEN runs with repo-default permissions otherwise).
+# Least privilege: the workflow only checks out code.
 permissions:
   contents: read
 
 jobs:
-  verify:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # No `version:` here — pnpm/action-setup@v4 reads packageManager from
-      # package.json (pnpm@10.15.0). Specifying both is ERR_PNPM_BAD_PM_VERSION.
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 26 # `node --test src/` (a folder) needs 26; on 24 it is read as a file
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm -r typecheck
-      - run: pnpm -r lint
-      - run: pnpm -r test
-      - run: pnpm -r build
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build

@@ -1,47 +1,9 @@
-# Dependencies
-node_modules/
-.pnpm-store/
-
-# Builds
-dist/
-build/
-.next/
-out/
-*.tsbuildinfo
-
-# Env & secrets — never commit
+node_modules
+dist
 .env
-.env.*
-!.env.example
-
-# Machine-local agent/tool dirs
-.agents/
-**/.impeccable/*
-!**/.impeccable/design.json
-.bench-venv/
-.claude/
-.kilo/
-.pi/
-.venv_bench/
-.worktrees/
-
-# OS / editor
+*.db
+*.db-*
+/data
 .DS_Store
-*.log
 
-# Docker dev state
-infra/.docker-state/
-# compose WORKSPACES_HOST_PATH default — created on first `up` (gateway /workspaces)
-infra/workspaces/
-
-# Gateway dev database
-data/
-
-# Playwright run artifacts (HTML report + test results JSON/traces)
-playwright-report/
-test-results/
-.zcode/
-
-# Self-update keeper state (scripts/self-update.mjs): last-good sha, failure
-# breaker, lock, service + keeper logs. Machine-local, never commit.
-.self-update/
+apps/web/.impeccable

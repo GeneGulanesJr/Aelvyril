@@ -1,44 +1,46 @@
-import { verifyToken } from "@clerk/backend";
-
-export interface VerifiedUser {
-  userId: string;
-}
-
-export type TokenVerifier = (token: string) => Promise<VerifiedUser | null>;
-
-/**
- * #78: true for listen hosts reachable only from this machine (localhost,
- * 127.0.0.0/8, ::1). Anything else — "::" or "0.0.0.0" (all interfaces), a
- * LAN IP, a hostname — counts as network-exposed. Brackets are stripped so
- * "[::1]" (URI-style spelling) also matches.
- */
-export function isLoopbackHost(host: string): boolean {
-  const h = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
-  return h === "localhost" || h === "::1" || h.startsWith("127.");
-}
+import { betterAuth } from "better-auth";
+import { bearer } from "better-auth/plugins";
+import { getMigrations } from "better-auth/db/migration";
+import { randomBytes } from "node:crypto";
+import type { Config } from "./config.ts";
+import type { Db } from "./db.ts";
 
 /**
- * Real Clerk verifier (spec §8). Bearer token on every /v1 call.
- * Requires CLERK_SECRET_KEY in the gateway env.
- *
- * authorizedParties (#85): pins the token's azp claim to the expected
- * origins, so a token minted for another application can't be replayed
- * against the gateway. Unset = no azp pinning (legacy behavior).
- *
- * @clerk/backend >= 2 exposes verifyToken as a standalone function taking the
- * secret key per call (ClerkClient no longer carries verifyToken).
+ * The gateway talks to auth only through this interface. Better Auth implements it
+ * today; a Clerk verifier (token -> userId) can be added later without touching routes.
  */
-export function createClerkVerifier(secretKey: string, authorizedParties?: string[]): TokenVerifier {
-  return async (token) => {
-    try {
-      const claims = await verifyToken(token, {
-        secretKey,
-        ...(authorizedParties?.length ? { authorizedParties } : {}),
-      });
-      if (!claims.sub) return null;
-      return { userId: claims.sub };
-    } catch {
-      return null;
-    }
+export interface Auth {
+  /** Resolves the caller from cookies or an `Authorization: Bearer` header. */
+  verify(headers: Headers): Promise<{ userId: string } | null>;
+  /** Better Auth's own HTTP handler, mounted at /api/auth/*. */
+  handler(req: Request): Promise<Response>;
+  /** Sign-up is open only until the first account exists (single-user app). */
+  hasUsers(): boolean;
+  /** One-time code the first sign-up must present (printed in the server log); null once an account exists. */
+  setupCode(): string | null;
+}
+
+export async function createAuth(cfg: Config, db: Db, extraOrigins: string[] = []): Promise<Auth> {
+  const options = {
+    database: db,
+    secret: cfg.authSecret,
+    emailAndPassword: { enabled: true },
+    plugins: [bearer()],
+    // Same-origin check: the browser's Origin must match the host the request arrived on.
+    trustedOrigins: (req?: Request) => [...extraOrigins, ...(req ? [new URL(req.url).origin] : [])],
+  };
+  // Migrate before betterAuth() starts, or it logs a "schema mismatch" error on first run.
+  await (await getMigrations(options)).runMigrations();
+  const auth = betterAuth(options);
+  const hasUsers = () => (db.prepare("SELECT COUNT(*) AS c FROM user").get() as { c: number }).c > 0;
+  const code = process.env.AELVYRIL_SETUP_CODE || randomBytes(4).toString("hex");
+  return {
+    async verify(headers) {
+      const s = await auth.api.getSession({ headers });
+      return s ? { userId: s.user.id } : null;
+    },
+    handler: (req) => auth.handler(req),
+    hasUsers,
+    setupCode: () => (hasUsers() ? null : code),
   };
 }

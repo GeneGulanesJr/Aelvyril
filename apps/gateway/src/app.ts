@@ -1,1226 +1,229 @@
-import Fastify, {
-  type FastifyInstance,
-  type FastifyReply,
-  type FastifyRequest,
-} from "fastify";
-import { spawn } from "node:child_process";
-import { createHash, timingSafeEqual } from "node:crypto";
-import type { ServerResponse } from "node:http";
-import {
-  CreateConversationBody,
-  EventEnvelope as EventEnvelopeSchema,
-  PatchSpecBody,
-  PromptBody,
-  RenameConversationBody,
-  ThreadStatus,
-  toUserNamespace,
-  type EventEnvelope,
-} from "@aelvyril/shared";
-import { Store } from "./store.js";
-import { EventBus } from "./bus.js";
-import { Supervisor } from "./supervisor.js";
-import type { VerifyOptions as SupervisorVerifyOptions } from "./supervisor.js";
-import type { TokenVerifier } from "./auth.js";
-import { createWorkspaceAllowlist, type WorkspaceAllowlist } from "./workspace-allowlist.js";
-import { createRateLimiter, type RateLimiter } from "./rate-limit.js";
-import { createMetrics, type Metrics } from "./metrics.js";
-import { runHealthCheck, defaultServiceProbes, type BackingServiceProbes } from "./health.js";
-import { getUpdateStatus, applyUpdate } from "./updater.js";
-import { computeChildEnv } from "./child-env.js";
+import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
+import { serveStatic } from "@hono/node-server/serve-static";
+import { timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
+import { relative } from "node:path";
+import type { Auth } from "./auth.ts";
+import type { Config } from "./config.ts";
+import { normalizeSource, type Extensions } from "./extensions.ts";
+import type { Providers } from "./providers.ts";
+import type { StoredEvent, Supervisor } from "./supervisor.ts";
 
-export interface AppOptions {
-  dbPath: string;
-  childCommand: string;
-  childArgs: string[];
-  idleMs?: number;
-  verifyToken: TokenVerifier;
-  allowedOrigins?: string[];
-  /** Optional workspace allowlist override for tests. Defaults to a default-deny list. */
-  workspaceAllowlist?: WorkspaceAllowlist;
-  /** Optional rate-limiter override for tests. Defaults to 20 req/min/user. */
-  rateLimiter?: RateLimiter;
-  /** Max total conversations per user (spec §10). #83 raised the default
-   *  from 3 to 30: threads are cheap rows; the running-host cap below is
-   *  the real resource limit. */
-  maxConversationsPerUser?: number;
-  /** #83: max concurrent running session hosts per user. Prompts beyond
-   *  this are durably queued. Default 2. */
-  maxRunningHostsPerUser?: number;
-  /** #83: global ceiling on live session hosts across all users. Default 100. */
-  maxSessionHosts?: number;
-  /** #83: queue-runner tick interval in ms. Default 2_000 (tests shrink it). */
-  queueIntervalMs?: number;
-  /** Optional metrics override for tests. Defaults to a fresh in-memory registry. */
-  metrics?: Metrics;
-  /** Optional logger override for tests. Defaults to silent (logger: false). */
-  logger?: boolean;
-  /** Optional backing-service probe override for tests. Defaults to TCP probes via env. */
-  probes?: BackingServiceProbes;
-  /** Started-at timestamp used by the /healthz uptime field. */
-  startedAt?: number;
-  /** Disable compression middleware (tests / explicit opt-out). */
-  compress?: boolean;
-  /** SSE keepalive interval in ms (spec §6 heartbeat). Defaults to 15_000. */
-  sseHeartbeatMs?: number;
-  /** Max concurrent SSE streams per user (security review #85). Default 10. */
-  maxSseStreamsPerUser?: number;
-  /** Replay events per SSE page; the client reconnects with Last-Event-ID to
-   *  page through a long backlog. Default 500. */
-  sseReplayPageSize?: number;
-  /** Max events retained per conversation. Default 10_000 (0 disables). */
-  eventRetentionPerThread?: number;
-  /** Optional scrape secret for /metrics. Review P3: /metrics is now
-   *  fail-closed — without a secret it answers 401 unless metricsPublic is
-   *  explicitly true. When set, requests must send
-   *  `Authorization: Bearer <secret>` (compared constant-time). */
-  metricsSecret?: string;
-  /** Review P3: serve /metrics with NO secret only when explicitly true
-   *  (GATEWAY_METRICS_PUBLIC=1). Default false — fail-closed. */
-  metricsPublic?: boolean;
-  /** Review P1: extra process.env keys children may inherit beyond the
-   *  built-in allowlist (tests use this for the fake-pi fixture knobs).
-   *  CLERK_* and GATEWAY_* keys are always blocked. */
-  childEnvAllowlist?: string[];
-  /** Review P3: per-user prompt rate limit in requests/minute. Default 20. */
-  rateLimitPerMin?: number;
-  /** #84: per-thread budget in USD. When a thread's cumulative cost reaches
-   *  this, further prompts are refused with 403 cost_cap_reached. */
-  maxCostPerThreadUsd?: number;
-  /** #84: pi extension_ui_request handling. Default "auto-responder". */
-  dialogMode?: "auto-responder" | "blocked";
-  /** #76: user ids allowed to call /v1/admin/*. Default-deny: with no
-   *  allowlist configured, /v1/admin/* answers 403 for everyone. */
-  adminUserIds?: string[];
-  /** Optional update-flow overrides for tests. Defaults run real git. */
-  updateStatus?: typeof getUpdateStatus;
-  /** Optional update-flow override for tests. Defaults to the real
-   *  applyUpdate (spawns a detached restart script — never run in tests). */
-  applyUpdate?: typeof applyUpdate;
-  /** #81.2: bounded spec-question budget per interview. Default 3. */
-  specMaxRounds?: number;
-  /** #81.3: merges-without-revision at which a namespace's autonomy
-   *  escalates. Default 5; 0 disables. */
-  trustThreshold?: number;
-  /** #82: auto-verify loop. Default: enabled (auto-detect package.json
-   *  scripts in the workspace). `null` disables; fields override. */
-  verify?: SupervisorVerifyOptions | null;
-  /** #80: diff-producer override for tests. Default runs real git. */
-  computeDiff?: (cwd: string) => Promise<{ path: string; patch: string }[] | null>;
-  /** Backing-probe names whose failure must NOT fail /healthz (still
-   *  reported in the body with ok:false + optional:true). Default
-   *  ["layamcp"]: compose sets LAYAMCP_URL and the decision engine's ~120s
-   *  cold model load must never block the stack (web waits on
-   *  gateway: service_healthy, so an unhealthy gateway holds web + Caddy). */
-  optionalHealthProbes?: string[];
-  /** Review: per-stream cap on buffered-but-unacked SSE bytes. A client
-   *  that keeps the socket open but stops reading otherwise makes the
-   *  gateway buffer every event without bound; past the cap the stream is
-   *  dropped and the client reconnects with Last-Event-ID (dedup by seq).
-   *  Tests shrink it. */
-  sseWriteBufferCapBytes?: number;
-}
+const MAX_PROMPT = 100_000;
 
-export type App = FastifyInstance;
+export function createApp(deps: { cfg: Config; auth: Auth; sup: Supervisor; providers: Providers; extensions: Extensions }) {
+  const { cfg, auth, sup, providers, extensions } = deps;
+  const app = new Hono();
 
-/**
- * Review: ThreadStatus values that are terminal lifecycle endpoints — the
- * user already ended the thread (abandon is terminal; merged is the accepted
- * end state). A dequeued prompt that fails after the fact must not overwrite
- * them with "reviewed"/degraded.
- */
-const TERMINAL_THREAD_STATUSES: ReadonlySet<string> = new Set(["abandoned", "merged"]);
+  app.get("/api/health", (c) => c.json({ ok: true }));
+  app.get("/api/setup", (c) => c.json({ needsSetup: !auth.hasUsers(), needsCode: !auth.hasUsers() && !cfg.openSetup }));
 
-/** Review: SSE clients that keep the socket open but stop reading must not
- *  make the gateway buffer events without bound — past this cap the stream
- *  is dropped; the web client reconnects with Last-Event-ID, dedups by seq. */
-export const SSE_MAX_WRITE_BUFFER_BYTES = 8 * 1024 * 1024;
-
-// Re-exported for the allowlist unit test (app.test.ts); the implementation
-// lives in child-env.ts so non-app paths (auto-verify exec) share the boundary.
-export { computeChildEnv };
-
-/**
- * Review P3: constant-time bearer comparison for /metrics. Both sides are
- * hashed to fixed-length buffers so timingSafeEqual never throws on length
- * mismatches (and the hash hides the secret's length).
- */
-function bearerSecretMatches(presented: string, secret: string): boolean {
-  const a = createHash("sha256").update(presented).digest();
-  const b = createHash("sha256").update(secret).digest();
-  return timingSafeEqual(a, b);
-}
-
-export async function buildApp(opts: AppOptions): Promise<App> {
-  // Spec §10: 1MB max message. Fastify defaults to 1MB anyway, but we set it
-  // explicitly so the value lives in the code (not in the runtime default) and
-  // so the test asserts the contract instead of an implementation accident.
-  // Pino (bundled with Fastify) emits structured JSON logs by default in
-  // production. Tests opt out via opts.logger = false.
-  // requestIdHeader: every response carries X-Request-Id. The web client +
-  // reverse proxy can grep the same id across web + gateway + downstream
-  // services for log correlation.
-  const app = Fastify({
-    logger: opts.logger ?? false,
-    bodyLimit: 1_048_576,
-    // With logger: false Fastify installs a null logger — per-request logs
-    // are silent already (tests + GATEWAY_LOG=silent dev). No logController
-    // override: Fastify 5.12 validates it must be a real LogController
-    // instance and rejects plain objects at startup.
-    // #85: the client-supplied x-request-id flows into structured logs and
-    // the response echo, so it is accepted only with a bounded safe charset
-    // (and never trusted as a Fastify requestIdHeader). genReqId is called
-    // for every request and applies the sanitization itself.
-    genReqId: (req) => {
-      const header = req.headers["x-request-id"];
-      const raw = Array.isArray(header) ? header[0] : header;
-      if (raw && /^[A-Za-z0-9_.:@-]{1,64}$/.test(raw)) return raw;
-      return Math.random().toString(36).slice(2, 10);
-    },
-  });
-  const store = new Store(opts.dbPath, {
-    eventRetentionPerThread: opts.eventRetentionPerThread,
-  });
-  // #83: hosts die with the gateway process; rows still marked streaming
-  // after a restart are stale. Queued prompts are durable and picked up
-  // by the runner below, so recovery after a restart is automatic.
-  store.markStaleStreamingDegraded();
-  const bus = new EventBus(store);
-  // Spec §10: default-deny workspace allowlist. Override via opts in tests.
-  const workspaceAllowlist = opts.workspaceAllowlist ?? createWorkspaceAllowlist(process.env.GATEWAY_WORKSPACE_ALLOWLIST);
-  // Spec §10: per-user rate limit on /v1/conversations/:id/prompt.
-  // rateLimitPerMin requests/min/user = capacity n, refill n/60 tokens/sec.
-  const rateLimitPerMin = opts.rateLimitPerMin ?? 20;
-  const rateLimiter = opts.rateLimiter ?? createRateLimiter({
-    capacity: rateLimitPerMin,
-    refillPerSecond: rateLimitPerMin / 60,
-  });
-  // #83: the running-host cap is the real resource limit; the thread count
-  // is not (rows are cheap). Defaults per the long-horizon execution issue.
-  const maxConversationsPerUser = opts.maxConversationsPerUser ?? 30;
-  const maxRunningHostsPerUser = opts.maxRunningHostsPerUser ?? 2;
-  const maxSessionHosts = opts.maxSessionHosts ?? 100;
-  // Security review #85: cap concurrent SSE streams per user (each holds a
-  // bus listener + a heartbeat timer). Keyed by userId, counted on connect.
-  const maxSseStreamsPerUser = opts.maxSseStreamsPerUser ?? 10;
-  const sseStreams = new Map<string, number>();
-  // Review: hijacked SSE replies never "finish" — Fastify's close() waits
-  // for every open connection, so app.close() would hang while any viewer
-  // is connected (the index.ts process-exit backstop fires instead, and
-  // onClose → supervisor.disposeAll() never runs). Track the open streams
-  // so the preClose hook below can tear them down and let shutdown finish.
-  const sseReplies = new Set<ServerResponse>();
-  const sseReplayPageSize = opts.sseReplayPageSize ?? 500;
-  // Review: per-stream write-buffer cap (see AppOptions.sseWriteBufferCapBytes).
-  const sseWriteBufferCapBytes = opts.sseWriteBufferCapBytes ?? SSE_MAX_WRITE_BUFFER_BYTES;
-  const metrics = opts.metrics ?? createMetrics();
-  const supervisor = new Supervisor({
-    bus,
-    store,
-    spawnChild: (_conversationId, extraEnv, cwd) =>
-      spawn(opts.childCommand, opts.childArgs, {
-        // Review P1: explicit allowlist — never `{ ...process.env }`, which
-        // leaked CLERK_*/GATEWAY_* operator secrets into every child.
-        env: computeChildEnv(extraEnv, opts.childEnvAllowlist),
-        cwd,
-      }),
-    idleMs: opts.idleMs ?? 300_000,
-    maxCostPerThreadUsd: opts.maxCostPerThreadUsd,
-    dialogMode: opts.dialogMode,
-    onSessionHostSpawn: () => metrics.activeSessionHosts.inc(),
-    onSessionHostExit: () => metrics.activeSessionHosts.dec(),
-    // #80/#81/#82: contract + autonomy + auto-verify wiring.
-    specMaxRounds: opts.specMaxRounds,
-    trustThreshold: opts.trustThreshold,
-    verify: opts.verify,
-    computeDiff: opts.computeDiff,
-    // Review fix 11: fire-and-forget contract reply failures land in the
-    // request/process log at warn level (a no-op under logger:false).
-    logger: app.log,
-  });
-
-  const unauthorized = (reply: FastifyReply) => reply.code(401).send({ error: "unauthorized" });
-  async function user(req: FastifyRequest, reply: FastifyReply): Promise<string | undefined> {
-    const header = req.headers.authorization;
-    if (!header?.startsWith("Bearer ")) return void unauthorized(reply);
-    const user = await opts.verifyToken(header.slice(7));
-    if (!user) return void unauthorized(reply);
-    return user.userId;
-  }
-
-  // #76: /v1/admin/* is privileged — the update route restarts the process
-  // and force-executes whatever lands on origin/main, so any authenticated
-  // user (or stolen JWT) must NOT reach it. Allowlist via
-  // GATEWAY_ADMIN_USER_IDS (Clerk Organizations admin wiring can slot in
-  // later); default-deny when nothing is configured.
-  const adminUserIds = new Set(opts.adminUserIds ?? []);
-  async function admin(req: FastifyRequest, reply: FastifyReply): Promise<string | undefined> {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    if (!adminUserIds.has(userId)) {
-      return void reply.code(403).send({ error: "forbidden" });
+  app.on(["GET", "POST"], "/api/auth/*", (c) => {
+    if (c.req.method === "POST" && c.req.path.endsWith("/sign-up/email")) {
+      const code = auth.setupCode();
+      if (!code) return c.json({ error: "sign-up is closed" }, 403);
+      if (!cfg.openSetup && c.req.header("x-setup-code") !== code) return c.json({ error: "wrong setup code" }, 403);
     }
-    return userId;
-  }
-
-  // Review: the abuse guards used to live only in promptThread — approve and
-  // retry also start LLM turns (and can spawn session hosts), and PATCH
-  // /spec forwards a prompt to a live host. Each helper sends the error
-  // response itself and returns true when the request must stop, so routes
-  // call them BEFORE any state mutation (status writes, bus publishes).
-  function rateLimited(userId: string, reply: FastifyReply): boolean {
-    const remaining = rateLimiter.consume(userId);
-    if (remaining < 0) {
-      metrics.rateLimitedTotal.inc();
-      reply.code(429).header("retry-after", "60").send({ error: "rate_limited" });
-      return true;
-    }
-    return false;
-  }
-  function costCapped(conv: { usage?: { cost: number } | null }, reply: FastifyReply): boolean {
-    if (
-      opts.maxCostPerThreadUsd !== undefined &&
-      conv.usage &&
-      conv.usage.cost >= opts.maxCostPerThreadUsd
-    ) {
-      metrics.costCapRejections.inc();
-      reply.code(403).send({
-        error: "cost_cap_reached",
-        cost: conv.usage.cost,
-        cap: opts.maxCostPerThreadUsd,
-      });
-      return true;
-    }
-    return false;
-  }
-  function hostCapExceeded(id: string, namespace: string, reply: FastifyReply): boolean {
-    // Only a NEW host needs a slot: with a live host the turn passes
-    // through to it (steer semantics). The queue carries plain prompts
-    // only — approve/retry at cap fail fast here, status untouched.
-    if (supervisor.has(id)) return false;
-    const atUserCap = store.countStreaming(namespace) >= maxRunningHostsPerUser;
-    const atGlobalCap = supervisor.runningCount() >= maxSessionHosts;
-    if (atUserCap || atGlobalCap) {
-      reply.code(429).send({
-        error: "running_host_limit",
-        limit: atUserCap ? maxRunningHostsPerUser : maxSessionHosts,
-      });
-      return true;
-    }
-    return false;
-  }
-
-  // Approve/retry write 'running' BEFORE the supervisor call: a spec-less
-  // run awaits the prompt ack, and a fast turn can settle (→ reviewed)
-  // before that await returns — a later 'running' write would strand it.
-  // So the no-op case is decided up front, and the rare late "nothing to
-  // run" puts back the status it found.
-  function hasRunnableTurn(id: string, specDraft: unknown): boolean {
-    return Boolean(specDraft) || store.getLastPromptById(id) !== null;
-  }
-  function publishStatus(id: string, status: string): void {
-    const parsed = ThreadStatus.safeParse(status);
-    if (!parsed.success) return;
-    bus.publish({
-      conversationId: id,
-      ts: new Date().toISOString(),
-      kind: "spec_status",
-      payload: { status: parsed.data },
-    });
-  }
-
-  // CORS before routes so preflight/headers apply to every /v1 handler.
-  await app.register(import("@fastify/cors"), {
-    origin: opts.allowedOrigins ?? false,
-    credentials: true,
+    return auth.handler(c.req.raw);
   });
 
-  // Spec §11: gzip + zstd compression on JSON responses. SSE streams
-  // (text/event-stream) are excluded by @fastify/compress by default —
-  // compressing them would buffer the whole stream and break Last-Event-ID
-  // reconnect semantics. Tests opt out via opts.compress.
-  if (opts.compress !== false) {
-    await app.register(import("@fastify/compress"), {
-      global: true,
-      threshold: 1_024,
-      encodings: ["gzip", "deflate", "identity"],
-    });
-  }
-
-  // Echo the request id on every response so the web client + reverse
-  // proxy can correlate a single user request across web + gateway +
-  // downstream pi child logs. Fastify's requestIdHeader is for INCOMING
-  // requests; for the outgoing echo we need an explicit onSend hook.
-  app.addHook("onSend", async (req, reply) => {
-    if (req.id) reply.header("x-request-id", req.id);
-    // #79: the gateway is an internal-only API (behind Caddy /v1/* in
-    // prod) — responses are never framed and never MIME-sniffed. This
-    // covers the helmet essentials without the dependency; CSP belongs
-    // at the HTML-serving edge (the Caddyfile), not on JSON APIs.
-    reply.header("x-content-type-options", "nosniff");
-    reply.header("x-frame-options", "DENY");
-  });
-
-  // Spec §11: request-level metrics. onResponse fires after the route
-  // handler has set reply.statusCode, so we capture the final response code.
-  // Review: the label must stay BOUNDED — falling back to req.url (raw
-  // path+query) for unmatched routes would let any caller mint
-  // attacker-controlled metric series (unbounded cardinality in memory).
-  // Unmatched requests share one fixed label instead.
-  app.addHook("onResponse", async (req, reply) => {
-    const route = req.routeOptions?.url || "unmatched";
-    const labels = { method: req.method, route, status: String(reply.statusCode) };
-    metrics.httpRequestsTotal.inc(labels);
-    metrics.httpRequestDurationMs.observe(
-      reply.elapsedTime ?? Date.now() - (req as { startTime?: number }).startTime!,
-      labels,
-    );
-  });
-
-  app.setErrorHandler((err, _req, reply) => {
-    if (err instanceof Error && err.name === "ZodError") {
-      return reply.code(400).send({ error: "bad_request" });
-    }
-    throw err;
-  });
-
-  // Spec §9 + §11: probe backing services so K8s readiness reflects real
-  // dependency state. Defaults to no probes (env opt-in); tests override
-  // via opts.probes. Returns 503 only when a REQUIRED probe fails —
-  // readiness stays red until the dep is reachable. Optional probes
-  // (default: layamcp) are still reported (ok:false + optional:true) but
-  // must not fail the gateway: compose sets LAYAMCP_URL, and the decision
-  // engine's ~120s cold model load would otherwise hold `web`
-  // (depends_on gateway: service_healthy) and Caddy down with it.
-  const startedAt = opts.startedAt ?? Date.now();
-  const optionalHealthProbes = opts.optionalHealthProbes ?? ["layamcp"];
-  app.get("/healthz", async (_req, reply) => {
-    const result = await runHealthCheck(
-      {
-        probes: opts.probes,
-        serviceProbes: opts.probes ? () => ({}) : defaultServiceProbes,
-        optional: optionalHealthProbes,
-      },
-      startedAt,
-    );
-    const allOk =
-      result.gateway.ok &&
-      Object.values(result.backing).every((s) => s.ok || s.optional === true);
-    return reply.code(allOk ? 200 : 503).send(result);
-  });
-
-  // Prometheus text format. Review P3: fail-closed. /metrics is served
-  // without a secret only when metricsPublic is explicitly true (the
-  // operator opted in via GATEWAY_METRICS_PUBLIC=1); otherwise a valid
-  // bearer secret is REQUIRED — a deployment that never configured one
-  // must not silently expose counters. Comparison is constant-time.
-  app.get("/metrics", async (req, reply) => {
-    if (opts.metricsPublic !== true) {
-      const secret = opts.metricsSecret;
-      const header = req.headers.authorization;
-      const presented = header?.startsWith("Bearer ") ? header.slice(7) : "";
-      if (!secret || !bearerSecretMatches(presented, secret)) {
-        return reply.code(401).send({ error: "unauthorized" });
-      }
-    }
-    reply.header("content-type", "text/plain; version=0.0.4");
-    return metrics.render();
-  });
-
-  // Spec §11: manual update flow (#76: admin-gated — see the `admin` guard).
-  // Self-hosted convenience for operators on the allowlist; check for +
-  // apply upstream commits.
-  app.get("/v1/admin/update/status", async (req, reply) => {
-    const userId = await admin(req, reply);
-    if (!userId) return;
+  // Called by our own pi children (the start_job tool), never by browsers: needs the per-start secret.
+  app.post("/internal/jobs", async (c) => {
+    const sent = Buffer.from(c.req.header("x-aelvyril-token") ?? "");
+    const want = Buffer.from(sup.internalToken);
+    if (sent.length !== want.length || !timingSafeEqual(sent, want)) return c.json({ error: "forbidden" }, 403);
+    const b = (await c.req.json().catch(() => ({}))) as Record<string, any>;
     try {
-      return await (opts.updateStatus ?? getUpdateStatus)();
-    } catch (err) {
-      return reply.code(503).send({ error: "update_status_failed", message: String(err) });
+      const job = sup.createJob(String(b.threadId ?? ""), String(b.title ?? ""), String(b.task ?? ""));
+      return c.json({ jobId: job.id }, 201);
+    } catch (e) {
+      return c.json({ error: String((e as Error).message) }, 400);
     }
   });
 
-  app.post("/v1/admin/update", async (req, reply) => {
-    const userId = await admin(req, reply);
-    if (!userId) return;
+  // Everything else under /api needs a session.
+  app.use("/api/*", async (c, next) => {
+    if (!(await auth.verify(c.req.raw.headers))) return c.json({ error: "unauthorized" }, 401);
+    await next();
+  });
+
+  const thread = (id: string) => sup.getThread(id);
+  const body = async (c: { req: { json(): Promise<any> } }) => (await c.req.json().catch(() => ({}))) as Record<string, any>;
+
+  app.get("/api/main", (c) => c.json(sup.main()));
+  app.get("/api/board", (c) => c.json(sup.board()));
+  app.get("/api/threads", (c) => c.json(sup.listThreads()));
+  app.post("/api/threads", async (c) => c.json(sup.createThread(String((await body(c)).title ?? "").trim() || undefined), 201));
+  app.patch("/api/threads/:id", async (c) => {
+    const title = String((await body(c)).title ?? "").trim();
+    if (!thread(c.req.param("id")) || !title) return c.json({ error: "bad request" }, 400);
+    sup.renameThread(c.req.param("id"), title);
+    return c.json({ ok: true });
+  });
+  app.delete("/api/threads/:id", (c) => {
+    const t = thread(c.req.param("id"));
+    if (!t) return c.json({ error: "not found" }, 404);
+    if (t.kind === "main") return c.json({ error: "the Stream cannot be deleted" }, 400);
+    sup.deleteThread(c.req.param("id"));
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/threads/:id/prompt", async (c) => {
+    const id = c.req.param("id");
+    const message = String((await body(c)).message ?? "");
+    if (!thread(id)) return c.json({ error: "not found" }, 404);
+    if (!message.trim() || message.length > MAX_PROMPT) return c.json({ error: "bad message" }, 400);
     try {
-      const result = await (opts.applyUpdate ?? applyUpdate)();
-      // The applyUpdate subprocess will SIGTERM us in ~2s. Respond first.
-      return reply.code(202).send(result);
-    } catch (err) {
-      return reply.code(400).send({ error: "update_failed", message: String(err) });
+      return c.json({ ok: true, ...(await sup.prompt(id, message)) });
+    } catch (e) {
+      return c.json({ error: String((e as Error).message) }, 502);
     }
   });
 
-  // --- Threads (renamed from conversations; old paths stay alive below) ---
-  // Mutating routes use named handlers registered under BOTH paths: a 302
-  // would make fetch re-issue them as GETs, dropping method + body. GET
-  // aliases are plain 302s.
-  const createThread = async (req: FastifyRequest, reply: FastifyReply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const namespace = toUserNamespace(userId);
-    metrics.conversationCreationsTotal.inc();
-    // Spec §10: per-user concurrent-conversation cap. Delete old ones to free space.
-    if (store.countConversations(namespace) >= maxConversationsPerUser) {
-      metrics.conversationLimitReachedTotal.inc();
-      return reply.code(503).send({ error: "conversation_limit_reached", limit: maxConversationsPerUser });
-    }
-    const body = CreateConversationBody.parse(req.body ?? {});
-    // Spec §10: reject workspaces not on the allowlist (default-deny).
-    if (body.workspace !== undefined && !workspaceAllowlist.isAllowed(body.workspace)) {
-      metrics.workspaceRejectionsTotal.inc();
-      return reply.code(400).send({ error: "workspace_not_allowed" });
-    }
-    const conv = store.createConversation({ ...body, namespace });
-    return reply.code(201).send(conv);
-  };
-  app.post("/v1/threads", createThread);
-  app.post("/v1/conversations", createThread);
-
-  app.get("/v1/threads", async (req, reply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const namespace = toUserNamespace(userId);
-    return { conversations: store.listConversations(namespace) };
-  });
-  // #85: the 302 aliases are authenticated like every other route (they
-  // used to be open) and the reflected :id is charset-validated +
-  // percent-encoded so it can't smuggle arbitrary header content.
-  const threadIdOr400 = (rawId: string): string | undefined =>
-    /^[A-Za-z0-9_-]{1,128}$/.test(rawId) ? encodeURIComponent(rawId) : undefined;
-
-  app.get("/v1/conversations", async (req, reply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    return reply.redirect("/v1/threads", 302);
-  });
-
-  app.get("/v1/threads/:id", async (req, reply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const namespace = toUserNamespace(userId);
-    const { id } = req.params as { id: string };
-    const conv = store.getConversation(id, namespace);
-    return conv ? conv : reply.code(404).send({ error: "not_found" });
-  });
-  app.get("/v1/conversations/:id", async (req, reply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const { id } = req.params as { id: string };
-    const safeId = threadIdOr400(id);
-    if (!safeId) return reply.code(400).send({ error: "bad_request" });
-    return reply.redirect(`/v1/threads/${safeId}`, 302);
-  });
-
-  const renameThread = async (req: FastifyRequest, reply: FastifyReply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const namespace = toUserNamespace(userId);
-    const { id } = req.params as { id: string };
-    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
-    const body = RenameConversationBody.parse(req.body ?? {});
-    store.renameConversation(id, namespace, body.title);
-    return store.getConversation(id, namespace);
-  };
-  app.patch("/v1/threads/:id", renameThread);
-  app.patch("/v1/conversations/:id", renameThread);
-
-  const deleteThread = async (req: FastifyRequest, reply: FastifyReply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const namespace = toUserNamespace(userId);
-    const { id } = req.params as { id: string };
-    // Cross-tenant guard: store.deleteConversation is namespaced, so a
-    // foreign conv id is a no-op → 404, never a destructive 204.
-    const deleted = store.deleteConversation(id, namespace);
-    // #85: kill the session host too — otherwise it keeps running and its
-    // next protocol event re-inserts orphan event rows for the deleted
-    // conversation. killChild marks the id dead synchronously, so protocol
-    // events already queued in the event loop are dropped as well. Only
-    // after the namespaced delete succeeded: killChild is not namespaced.
-    if (deleted) {
-      supervisor.killChild(id);
-      store.deleteQueuedForConversation(id);
-    }
-    return deleted ? reply.code(204).send() : reply.code(404).send({ error: "not_found" });
-  };
-  app.delete("/v1/threads/:id", deleteThread);
-  app.delete("/v1/conversations/:id", deleteThread);
-
-  const promptThread = async (req: FastifyRequest, reply: FastifyReply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const namespace = toUserNamespace(userId);
-    // Spec §10: per-user rate limit. 429 with a Retry-After header.
-    if (rateLimited(userId, reply)) return;
-    const { id } = req.params as { id: string };
-    const conv = store.getConversation(id, namespace);
-    if (!conv) return reply.code(404).send({ error: "not_found" });
-    // #84: budget enforcement — a thread at its cost cap needs explicit
-    // operator action (raise GATEWAY_MAX_THREAD_COST_USD or abandon it).
-    if (costCapped(conv, reply)) return;
-    const body = PromptBody.parse(req.body ?? {});
-    // Auto-title from the first prompt — the picker shows words, not uuids.
-    if (conv.title === null) store.renameConversation(id, namespace, body.message.slice(0, 80));
-
-    // #83: long-horizon execution. Review fixes 3+4: the cap/queue gate
-    // applies whenever the prompt would need a NEW host (no live host for
-    // the target thread). When the target thread HAS a live host, the
-    // prompt passes through to it — a steer/followUp as today, and a plain
-    // prompt too (steer semantics below): it never queues behind the user's
-    // own running-host cap, and a streamingBehavior prompt with NO live
-    // host is capped + queued instead of spawning an untracked host.
-    const live = supervisor.has(id);
-    if (!live) {
-      if (store.getThreadStatus(id, namespace) === "queued") {
-        return reply.code(409).send({ error: "already_queued" });
-      }
-      const atUserCap = store.countStreaming(namespace) >= maxRunningHostsPerUser;
-      const atGlobalCap = supervisor.runningCount() >= maxSessionHosts;
-      if (atUserCap || atGlobalCap) {
-        // #80: specMode travels with the queued message (the runner re-sends
-        // with the same mode instead of silently defaulting to auto).
-        store.enqueuePrompt({ conversationId: id, namespace, message: body.message, specMode: body.specMode });
-        store.updateThreadStatus(id, namespace, "queued");
-        bus.publish({
-          conversationId: id,
-          ts: new Date().toISOString(),
-          kind: "spec_status",
-          payload: { status: "queued" },
-        });
-        // Persist the user's prompt so SSE replay reconstructs the
-        // conversation even before the queued turn starts.
-        bus.publish({
-          conversationId: id,
-          ts: new Date().toISOString(),
-          kind: "user_message",
-          payload: { text: body.message },
-        });
-        metrics.queuedPromptsTotal.inc();
-        return reply.code(202).send({ accepted: true, queued: true });
-      }
-    }
-
-    // Spec §6/§10: workspace -> spawn cwd so pi finds its prior session file
-    // on disk after a crash + re-prompt (session resume). #80 fix 2: the
-    // specMode field finally rides along instead of being dropped.
-    // Review fix 4: a plain prompt hitting a BUSY live host carries steer
-    // semantics — pi's shared schema rejects a bare prompt mid-turn.
-    const streamingBehavior =
-      body.streamingBehavior ?? (live && conv.state === "streaming" ? "steer" : undefined);
-    let ok: boolean;
+  app.post("/api/threads/:id/retry", async (c) => {
     try {
-      ok = await supervisor.prompt(
-        id,
-        body.message,
-        streamingBehavior,
-        { LAPIS_PROJECT_KEY: namespace },
-        conv.workspace ?? undefined,
-        body.specMode,
-      );
-    } catch (err) {
-      // Review fix 6: an RPC failure (dead host, timeout) used to bubble to
-      // the 500 handler and leave the thread stuck 'running' until the idle
-      // reaper. Fail visibly instead. Review fix 8: log the error so
-      // operators can tell an agent rejection from a gateway fault (rpc
-      // timeout vs busy-reject vs dead stdin) — the bare 502 alone can't.
-      req.log.warn({ err }, "supervisor prompt failed; responding 502 agent_rejected");
-      metrics.promptRejections.inc();
-      store.setConversationState(id, "degraded");
-      bus.publish({
-        conversationId: id,
-        ts: new Date().toISOString(),
-        kind: "session_state",
-        payload: { state: "degraded" },
-      });
-      return reply.code(502).send({ error: "agent_rejected" });
+      await sup.retry(c.req.param("id"));
+      return c.json({ ok: true });
+    } catch (e) {
+      return c.json({ error: String((e as Error).message) }, 400);
     }
-    if (!ok) {
-      metrics.promptRejections.inc();
-      return reply.code(502).send({ error: "agent_rejected" });
-    }
-    metrics.promptRequestsTotal.inc();
-    // Persist the user's prompt as an envelope so SSE replay reconstructs the
-    // full conversation (assistant-only history was the "my chats are gone" bug).
-    bus.publish({
-      conversationId: id,
-      ts: new Date().toISOString(),
-      kind: "user_message",
-      payload: { text: body.message },
-    });
-    return reply.code(202).send({ accepted: true });
-  };
-  app.post("/v1/threads/:id/prompt", promptThread);
-  app.post("/v1/conversations/:id/prompt", promptThread);
+  });
 
-  const abortThread = async (req: FastifyRequest, reply: FastifyReply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const namespace = toUserNamespace(userId);
-    const { id } = req.params as { id: string };
-    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
-    await supervisor.abort(id);
-    return reply.code(202).send({ accepted: true });
-  };
-  app.post("/v1/threads/:id/abort", abortThread);
-  app.post("/v1/conversations/:id/abort", abortThread);
+  app.post("/api/threads/:id/abort", async (c) => {
+    if (!thread(c.req.param("id"))) return c.json({ error: "not found" }, 404);
+    await sup.abort(c.req.param("id"));
+    return c.json({ ok: true });
+  });
 
-  // Spec interview + lifecycle (agent spec-centric UI, Slice 4). All blob
-  // and status accessors are namespaced — cross-tenant ids 404 like every
-  // other route. #80: the old dead `contracts` Map is gone — the supervisor
-  // owns one AgentContract per live session host, and the lifecycle routes
-  // drive it through the supervisor (working with or without a live host).
+  app.post("/api/threads/:id/ui-response", async (c) => {
+    const b = await body(c);
+    if (!thread(c.req.param("id")) || typeof b.id !== "string") return c.json({ error: "bad request" }, 400);
+    const ok = sup.resolveUi(c.req.param("id"), { id: b.id, value: b.value, confirmed: b.confirmed, cancelled: b.cancelled });
+    return ok ? c.json({ ok: true }) : c.json({ error: "no such pending request" }, 404);
+  });
 
-  app.patch<{ Params: { id: string }; Body: unknown }>(
-    "/v1/threads/:id/spec",
-    async (req, reply) => {
-      const userId = await user(req, reply);
-      if (!userId) return;
-      const namespace = toUserNamespace(userId);
-      const { id } = req.params as { id: string };
-      // Review: /spec forwards the patch to the live agent (prompt-shaped
-      // work) — rate limit + cost cap apply. It never spawns a host, so no
-      // running-host cap here.
-      if (rateLimited(userId, reply)) return;
-      const parsed = PatchSpecBody.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return reply.code(400).send({ error: "invalid_body", details: parsed.error.flatten() });
-      }
-      const conv = store.getConversation(id, namespace);
-      if (!conv) return reply.code(404).send({ error: "not_found" });
-      if (costCapped(conv, reply)) return;
-      if (parsed.data.kind === "answer") {
-        const merged = store.mergeSpecAnswers(id, namespace, parsed.data.answers);
-        if (merged === "too_large") {
-          return reply.code(413).send({ error: "spec_too_large" });
-        }
-      } else {
-        const patched = store.patchSpecDraft(id, namespace, parsed.data.field, parsed.data.value);
-        if (patched === "too_large") {
-          return reply.code(413).send({ error: "spec_too_large" });
-        }
-      }
-      // #80 fix 6: persisted edits/answers are forwarded to the live agent
-      // so it re-drafts (a no-op when the session host is gone).
-      supervisor.submitSpecPatch(id, parsed.data);
-      return { ok: true };
-    },
-  );
-
-  app.post<{ Params: { id: string } }>("/v1/threads/:id/approve", async (req, reply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const namespace = toUserNamespace(userId);
-    const { id } = req.params as { id: string };
-    const conv = store.getConversation(id, namespace);
-    if (!conv) return reply.code(404).send({ error: "not_found" });
-    // Review: approve starts an LLM turn and can spawn a session host — the
-    // same abuse guards as /prompt, before any state mutation.
-    if (rateLimited(userId, reply)) return;
-    if (costCapped(conv, reply)) return;
-    if (hostCapExceeded(id, namespace, reply)) return;
-    const spec = store.getThreadSpec(id, namespace);
-    // Gate fix: a plain-prompt thread blocked on a gated action has no spec
-    // draft, yet approve is the ONLY way to allow the parked action.
-    if (!spec?.specDraft && !supervisor.hasPendingGated(id)) {
-      return reply.code(409).send({ error: "no_spec" });
-    }
-    // A spec-less approve re-sends the last prompt; with none there is
-    // nothing to run — 409 with no state change and no envelopes.
-    if (!hasRunnableTurn(id, spec?.specDraft)) {
-      return reply.code(409).send({ error: "nothing_to_approve" });
-    }
-    const prevStatus = store.getThreadStatus(id, namespace);
-    store.updateThreadStatus(id, namespace, "running");
-    publishStatus(id, "running");
-    // #80 fix 3: approve sends the REAL execution prompt — rebuilt from the
-    // stored spec, spawning a session host when none is live.
-    let ok: boolean;
+  app.post("/api/threads/:id/model", async (c) => {
+    const b = await body(c);
+    if (!thread(c.req.param("id")) || typeof b.provider !== "string" || typeof b.modelId !== "string") return c.json({ error: "bad request" }, 400);
     try {
-      ok = await supervisor.approveExecution(id);
-    } catch {
-      // Review fix 6: an RPC failure must not leave the thread stuck
-      // 'running'. Review: publish what was actually written — the web
-      // client trusts the last replayed spec_status envelope, even after a
-      // reload; without it the UI shows RUNNING forever.
-      metrics.promptRejections.inc();
-      store.setConversationState(id, "degraded");
-      store.updateThreadStatus(id, namespace, "reviewed");
-      bus.publish({
-        conversationId: id,
-        ts: new Date().toISOString(),
-        kind: "spec_status",
-        payload: { status: "reviewed" },
-      });
-      bus.publish({
-        conversationId: id,
-        ts: new Date().toISOString(),
-        kind: "session_state",
-        payload: { state: "degraded" },
-      });
-      return reply.code(502).send({ error: "agent_rejected" });
+      return c.json({ ok: true, model: await sup.setModel(c.req.param("id"), b.provider, b.modelId) });
+    } catch (e) {
+      return c.json({ error: String((e as Error).message) }, 502);
     }
-    if (!ok) {
-      if (prevStatus) {
-        store.updateThreadStatus(id, namespace, prevStatus);
-        publishStatus(id, prevStatus);
-      }
-      return reply.code(409).send({ error: "nothing_to_approve" });
-    }
-    return { ok: true };
   });
 
-  app.post<{ Params: { id: string } }>("/v1/threads/:id/abandon", async (req, reply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const namespace = toUserNamespace(userId);
-    const { id } = req.params as { id: string };
-    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
-    store.updateThreadStatus(id, namespace, "abandoned");
-    bus.publish({
-      conversationId: id,
-      ts: new Date().toISOString(),
-      kind: "spec_status",
-      payload: { status: "abandoned" },
-    });
-    // #80: the contract publishes + the child dies — one supervisor entry
-    // point instead of the old empty-map no-op.
-    supervisor.abandonThread(id);
-    // #83 (2nd review): a queued prompt for an abandoned thread must not be
-    // picked up by the runner later — abandoning is terminal.
-    store.deleteQueuedForConversation(id);
-    return { ok: true };
-  });
-
-  app.post<{ Params: { id: string } }>("/v1/threads/:id/retry", async (req, reply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const namespace = toUserNamespace(userId);
-    const { id } = req.params as { id: string };
-    const conv = store.getConversation(id, namespace);
-    if (!conv) return reply.code(404).send({ error: "not_found" });
-    // Review: retry starts an LLM turn and can spawn a session host — the
-    // same abuse guards as /prompt, before any state mutation.
-    if (rateLimited(userId, reply)) return;
-    if (costCapped(conv, reply)) return;
-    if (hostCapExceeded(id, namespace, reply)) return;
-    // Nothing to retry (no spec, no prior prompt): 409 with no state change.
-    // Stamping 'running' then 'reviewed' on a no-op handed a thread that
-    // never ran a Merge button.
-    const spec = store.getThreadSpec(id, namespace);
-    if (!hasRunnableTurn(id, spec?.specDraft)) {
-      return reply.code(409).send({ error: "nothing_to_retry" });
-    }
-    const prevStatus = store.getThreadStatus(id, namespace);
-    store.updateThreadStatus(id, namespace, "running");
-    // Counted before the turn can settle: markThreadReviewedById snapshots
-    // retry_count, and a late increment would read as a revision at merge.
-    store.incrementRetryCount(id, namespace);
-    publishStatus(id, "running");
-    // #80 fix 3: retry re-executes against the same spec.
-    let ok: boolean;
+  app.get("/api/models", async (c) => {
     try {
-      ok = await supervisor.retryExecution(id);
-    } catch {
-      // Review fix 6: an RPC failure must not leave the thread stuck
-      // 'running'. Review: publish what was actually written — the web
-      // client trusts the last replayed spec_status envelope, even after a
-      // reload.
-      metrics.promptRejections.inc();
-      store.setConversationState(id, "degraded");
-      store.updateThreadStatus(id, namespace, "reviewed");
-      bus.publish({
-        conversationId: id,
-        ts: new Date().toISOString(),
-        kind: "spec_status",
-        payload: { status: "reviewed" },
-      });
-      bus.publish({
-        conversationId: id,
-        ts: new Date().toISOString(),
-        kind: "session_state",
-        payload: { state: "degraded" },
-      });
-      return reply.code(502).send({ error: "agent_rejected" });
+      const connected = (await providers.list()).providers.some((p) => p.configured);
+      return c.json(await sup.models(connected));
+    } catch (e) {
+      return c.json({ error: String((e as Error).message) }, 502);
     }
-    if (!ok) {
-      if (prevStatus) {
-        store.updateThreadStatus(id, namespace, prevStatus);
-        publishStatus(id, prevStatus);
-      }
-      return reply.code(409).send({ error: "nothing_to_retry" });
-    }
-    return { ok: true };
   });
 
-  // #80 fix 5: the merged producer. A reviewed thread whose diff the user
-  // accepts transitions to merged; a merge WITHOUT an intervening retry is
-  // the trust-escalation signal (#81.3).
-  app.post<{ Params: { id: string } }>("/v1/threads/:id/merge", async (req, reply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const namespace = toUserNamespace(userId);
-    const { id } = req.params as { id: string };
-    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
-    if (store.getThreadStatus(id, namespace) !== "reviewed") {
-      return reply.code(409).send({ error: "not_reviewable" });
-    }
-    store.updateThreadStatus(id, namespace, "merged");
-    store.setConversationState(id, "idle");
-    if (store.isMergedWithoutRevision(id, namespace)) {
-      store.recordMergedWithoutRevision(namespace);
-    }
-    bus.publish({
-      conversationId: id,
-      ts: new Date().toISOString(),
-      kind: "spec_status",
-      payload: { status: "merged" },
-    });
-    return { ok: true, merged: true };
+
+  // ---- providers, custom endpoints, default model, interactive login ------
+  const fail = (c: any, e: unknown, status = 400) => c.json({ error: String((e as Error)?.message ?? e) }, status);
+
+  app.get("/api/providers", async (c) => c.json(await providers.list()));
+
+  app.put("/api/custom-providers/:id", async (c) => {
+    const err = providers.saveCustom(c.req.param("id"), await body(c));
+    return err ? c.json({ error: err }, 400) : c.json({ ok: true });
+  });
+  app.delete("/api/custom-providers/:id", (c) => (providers.deleteCustom(c.req.param("id")) ? c.json({ ok: true }) : c.json({ error: "not found" }, 404)));
+
+  app.put("/api/default-model", async (c) => {
+    const b = await body(c);
+    if (typeof b.provider !== "string" || typeof b.modelId !== "string") return c.json({ error: "bad request" }, 400);
+    providers.setDefaultModel(b.provider, b.modelId);
+    return c.json({ ok: true });
   });
 
-  // #83: global kill switch — abandon is per-thread only today; this takes
-  // down every live thread for the calling user in one shot, and drops
-  // their queued work too.
-  app.post("/v1/threads/kill-all", async (req, reply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const namespace = toUserNamespace(userId);
-    let abandoned = 0;
-    for (const conv of store.listConversations(namespace)) {
-      const status = store.getThreadStatus(conv.id, namespace);
-      const live = conv.state === "streaming" || conv.state === "blocked";
-      if (!live && status !== "queued") continue;
-      supervisor.killChild(conv.id);
-      store.updateThreadStatus(conv.id, namespace, "abandoned");
-      store.setConversationState(conv.id, "idle");
-      bus.publish({
-        conversationId: conv.id,
-        ts: new Date().toISOString(),
-        kind: "spec_status",
-        payload: { status: "abandoned" },
-      });
-      abandoned++;
-    }
-    store.deleteQueuedForNamespace(namespace);
-    return { abandoned };
-  });
-
-  app.get("/v1/conversations/:id/events", async (req, reply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const { id } = req.params as { id: string };
-    const safeId = threadIdOr400(id);
-    if (!safeId) return reply.code(400).send({ error: "bad_request" });
-    return reply.redirect(`/v1/threads/${safeId}/events`, 302);
-  });
-
-  app.get("/v1/threads/:id/events", async (req, reply) => {
-    const userId = await user(req, reply);
-    if (!userId) return;
-    const namespace = toUserNamespace(userId);
-    const { id } = req.params as { id: string };
-    if (!store.getConversation(id, namespace)) return reply.code(404).send({ error: "not_found" });
-
-    // Security review #85: per-user concurrent stream cap.
-    const active = sseStreams.get(userId) ?? 0;
-    if (active >= maxSseStreamsPerUser) {
-      metrics.sseStreamsRejectedTotal.inc();
-      return reply.code(429).send({ error: "too_many_streams" });
-    }
-    sseStreams.set(userId, active + 1);
-    const releaseStream = () => {
-      const n = (sseStreams.get(userId) ?? 1) - 1;
-      if (n <= 0) sseStreams.delete(userId);
-      else sseStreams.set(userId, n);
-    };
-
-    reply.hijack();
-    // Lifecycle fix: a client that disconnects while auth is pending fires
-    // the socket's 'close' BEFORE any listener exists, and writes to the
-    // dead socket return false WITHOUT throwing — the handshake try/catch,
-    // the heartbeat catch and writeEnvelope never notice, so the stream
-    // slot + 15s interval + bus listener leaked until restart (429
-    // too_many_streams after maxSseStreamsPerUser such drops). streamGone()
-    // is checked at every step transition, and cleanup releases exactly
-    // once from every exit path.
-    const streamGone = () =>
-      req.raw.destroyed || reply.raw.destroyed || reply.raw.writableEnded;
-    let closed = false;
-    let unsubscribe: () => void = () => {};
-    let stopHeartbeat: () => void = () => {};
-    const cleanup = () => {
-      if (closed) return;
-      closed = true;
-      unsubscribe();
-      stopHeartbeat();
-      sseReplies.delete(reply.raw);
-      releaseStream();
-    };
-    // Teardown listeners attach BEFORE replay (the slot is already taken):
-    // reply.raw 'close' fires for both a client abort and a normal end.
-    // #85: without an error handler an ECONNRESET surfaced as an unhandled
-    // socket 'error' event.
-    req.raw.on("close", cleanup);
-    req.raw.on("error", cleanup);
-    reply.raw.on("close", cleanup);
-    reply.raw.on("error", cleanup);
-    if (streamGone()) {
-      cleanup();
-      reply.raw.destroy();
-      return reply;
-    }
-    // Handshake writes can hit an already-dead socket (client vanished
-    // between auth and hijack). Fail the slot back before any listener
-    // exists — an unguarded throw here leaks the stream slot and can
-    // surface as an unhandled socket error.
+  app.post("/api/providers/:id/logout", async (c) => {
     try {
-      // Hijacking the reply bypasses @fastify/cors reply hooks, so the streamed
-      // response would go out with no Access-Control-Allow-Origin and the browser
-      // would drop it (200 but unreadable). Mirror the plugin's allow-list logic.
-      const origin = req.headers.origin;
-      const headers: Record<string, string> = {
-        "content-type": "text/event-stream",
-        "cache-control": "no-cache",
-        connection: "keep-alive",
+      await providers.logout(c.req.param("id"));
+      return c.json({ ok: true });
+    } catch (e) {
+      return fail(c, e);
+    }
+  });
+
+  app.post("/api/providers/:id/login", async (c) => {
+    const type = (await body(c)).type;
+    if (type !== "api_key" && type !== "oauth") return c.json({ error: "type must be api_key or oauth" }, 400);
+    try {
+      return c.json({ sessionId: (await providers.startLogin(c.req.param("id"), type)).id });
+    } catch (e) {
+      return fail(c, e);
+    }
+  });
+
+  // The browser polls this; `after` is the last event number it has seen.
+  app.get("/api/login/:sid", (c) => {
+    const s = providers.session(c.req.param("sid"));
+    if (!s) return c.json({ error: "not found" }, 404);
+    const after = Number(c.req.query("after") ?? 0) || 0;
+    return c.json({ events: s.events.filter((e) => e.n > after), finished: s.finished });
+  });
+  app.post("/api/login/:sid/answer", async (c) => {
+    const b = await body(c);
+    const ok = providers.session(c.req.param("sid"))?.answer(String(b.promptId), String(b.value ?? ""));
+    return ok ? c.json({ ok: true }) : c.json({ error: "no such pending prompt" }, 404);
+  });
+  app.delete("/api/login/:sid", (c) => {
+    providers.session(c.req.param("sid"))?.cancel();
+    return c.json({ ok: true });
+  });
+
+
+  // ---- extensions (pi packages), managed from the UI ----------------------
+  app.get("/api/extensions", (c) => c.json(extensions.list()));
+  app.post("/api/extensions", async (c) => {
+    const n = normalizeSource(String((await body(c)).source ?? ""));
+    if ("error" in n) return c.json({ error: n.error }, 400);
+    const r = await extensions.add(n.source);
+    return r.ok ? c.json({ ok: true, source: n.source }) : c.json({ error: "The install failed.", detail: r.output }, 502);
+  });
+  app.post("/api/extensions/remove", async (c) => {
+    const r = await extensions.remove(String((await body(c)).source ?? ""));
+    return r.ok ? c.json({ ok: true }) : c.json({ error: r.output || "Could not remove it." }, 502);
+  });
+
+  // Server-sent events: replay from the log after Last-Event-ID, then live.
+  app.get("/api/threads/:id/events", (c) => {
+    const id = c.req.param("id");
+    if (!thread(id)) return c.json({ error: "not found" }, 404);
+    const after = Number(c.req.header("last-event-id") ?? c.req.query("after") ?? 0) || 0;
+    const tail = Math.min(Number(c.req.query("tail") ?? 0) || 0, 5000); // the Stream is endless: load only the newest events
+    return streamSSE(c, async (stream) => {
+      let last = after;
+      let replaying = true;
+      const buffered: StoredEvent[] = [];
+      let chain: Promise<unknown> = Promise.resolve();
+      const send = (ev: StoredEvent) => {
+        if (ev.seq && ev.seq <= last) return;
+        if (ev.seq) last = ev.seq;
+        chain = chain.then(() => stream.writeSSE({ id: ev.seq ? String(ev.seq) : undefined, data: JSON.stringify({ seq: ev.seq, ...ev.data }) })).catch(() => {});
       };
-      if (origin && opts.allowedOrigins?.includes(origin)) {
-        headers["access-control-allow-origin"] = origin;
-        headers["access-control-allow-credentials"] = "true";
-        headers["vary"] = "Origin";
-      }
-      reply.raw.writeHead(200, headers);
-      reply.raw.write("retry: 2000\n\n");
-    } catch {
-      cleanup();
-      reply.raw.destroy();
-      return reply;
-    }
-    // A write to a socket the client already killed resolves without
-    // error — check instead of trusting the write result.
-    if (streamGone()) {
-      cleanup();
-      reply.raw.destroy();
-      return reply;
-    }
-    // Handshake succeeded — the stream is now open and must be tracked for
-    // the preClose teardown (and dropped from it on any close/error below).
-    sseReplies.add(reply.raw);
-
-    const raw = req.headers["last-event-id"];
-    const parsed = Array.isArray(raw) ? Number(raw[0]) : Number(raw);
-    let lastSeq = Number.isFinite(parsed) ? parsed : -1;
-
-    // Review: a client that keeps the socket open but stops reading made
-    // the gateway buffer every event in memory without bound. Past the cap
-    // the stream is dropped — the web client reconnects with Last-Event-ID
-    // and dedups by seq, so ending the connection is safe.
-    const dropOnBackpressure = (): void => {
-      if (reply.raw.writableLength <= sseWriteBufferCapBytes) return;
-      cleanup();
-      // end() rather than destroy(): the already-buffered bytes still
-      // flush, so the client parses what it got, sees a clean EOF, and
-      // reconnects with Last-Event-ID (a destroy would RST mid-stream).
-      try {
-        reply.raw.end();
-      } catch {
-        // socket already gone
-      }
-    };
-
-    // Returns false when the envelope was skipped. Security review #85:
-    // validate at the wire boundary — store rows are replayed unvalidated,
-    // so legacy/malformed rows must not reach the stream (a kind containing
-    // a newline would desync SSE framing). A failed write (EPIPE etc.)
-    // returns false instead of throwing an unhandled socket error.
-    const writeEnvelope = (env: EventEnvelope): boolean => {
-      const parsed = EventEnvelopeSchema.safeParse(env);
-      if (!parsed.success) return false;
-      const valid = parsed.data;
-      if (valid.seq <= lastSeq) return false;
-      lastSeq = valid.seq;
-      try {
-        reply.raw.write(
-          `id: ${valid.seq}\nevent: ${valid.kind}\ndata: ${JSON.stringify(valid)}\n\n`,
-        );
-      } catch {
-        // the close/error listeners own teardown
-        return false;
-      }
-      dropOnBackpressure();
-      return !closed;
-    };
-
-    // Replay one page, then either hand the rest to a clean EOF (the web
-    // client reconnects with Last-Event-ID and dedups by seq) or hold the
-    // stream open for live events. Ending on a full page with zero valid
-    // envelopes would loop the client on the same window, so fall through
-    // to live subscription instead.
-    const page = bus.replay(id, lastSeq, sseReplayPageSize);
-    let written = 0;
-    for (const env of page) {
-      if (closed) break;
-      if (writeEnvelope(env)) written++;
-    }
-    if (page.length >= sseReplayPageSize && written > 0) {
-      cleanup();
-      try {
-        reply.raw.end();
-      } catch {
-        // socket already gone
-      }
-      return;
-    }
-    if (closed) return reply; // dropped mid-replay (backpressure/disconnect)
-
-    unsubscribe = bus.subscribe(id, (env) => writeEnvelope(env));
-    const heartbeatTimer = setInterval(() => {
-      // Lifecycle fix: writes to a destroyed socket fail silently — poll
-      // so neither the interval nor the bus listener outlives the
-      // connection.
-      if (streamGone()) {
-        cleanup();
-        reply.raw.destroy();
-        return;
-      }
-      try {
-        reply.raw.write(": ping\n\n");
-      } catch {
-        cleanup();
-        return;
-      }
-      dropOnBackpressure();
-    }, opts.sseHeartbeatMs ?? 15_000);
-    stopHeartbeat = () => clearInterval(heartbeatTimer);
-    // The client may have dropped between the last check and the live
-    // subscription — the next tick would catch it, but bail now.
-    if (streamGone()) {
-      cleanup();
-      reply.raw.destroy();
-    }
+      const onEvent = (ev: StoredEvent) => (replaying ? buffered.push(ev) : send(ev));
+      sup.bus.on(id, onEvent);
+      for (const ev of after || !tail ? sup.eventsAfter(id, after) : sup.eventsTail(id, tail)) send(ev);
+      replaying = false;
+      buffered.forEach(send);
+      const ping = setInterval(() => (chain = chain.then(() => stream.writeSSE({ event: "ping", data: "" })).catch(() => {})), 15_000);
+      await new Promise<void>((resolve) => stream.onAbort(resolve));
+      clearInterval(ping);
+      sup.bus.off(id, onEvent);
+    });
   });
 
-  // #83: background queue runner. Pops durably queued prompts (FIFO per
-  // namespace, fair across namespaces) whenever the user has a free
-  // running-host slot. Execution is fully decoupled from any viewer: the
-  // queue survives restarts and hosts spawn on demand via the supervisor.
-  const queueTimer = setInterval(() => {
-    try {
-      for (const ns of store.listQueuedNamespaces()) {
-        while (store.countStreaming(ns) < maxRunningHostsPerUser && supervisor.runningCount() < maxSessionHosts) {
-          const item = store.dequeueOldestPrompt(ns);
-          if (!item) break;
-          const queued = store.getConversation(item.conversationId, ns);
-          if (!queued) continue; // thread deleted while queued
-          store.updateThreadStatus(item.conversationId, ns, "running");
-          bus.publish({
-            conversationId: item.conversationId,
-            ts: new Date().toISOString(),
-            kind: "spec_status",
-            payload: { status: "running" },
-          });
-          // Both failure shapes share one terminal-guarded writeback. Review
-          // SHOULD-FIX: a THROW from supervisor.prompt (the fail-closed
-          // scratch-dir mkdir, rpc teardown, store hiccups) used to reach
-          // only an empty catch — but the dequeue above already wrote
-          // status="running", and with no settle or exit coming the thread
-          // stuck "running" forever with no degraded state and no error
-          // envelope. Now both agent rejection and a thrown prompt fail
-          // visibly.
-          const failDequeuedPrompt = () => {
-            metrics.promptRejections.inc();
-            try {
-              // The thread may have gone terminal between dequeue and this
-              // failure (user abandoned/merged it) — the writeback must not
-              // resurrect a terminal status.
-              const status = store.getThreadStatus(item.conversationId, ns);
-              if (status === null || TERMINAL_THREAD_STATUSES.has(status)) return;
-              store.setConversationState(item.conversationId, "degraded");
-              store.updateThreadStatus(item.conversationId, ns, "reviewed");
-              bus.publish({
-                conversationId: item.conversationId,
-                ts: new Date().toISOString(),
-                kind: "error",
-                payload: { message: "queued prompt was rejected by the agent" },
-              });
-              // Review: the web client trusts the last replayed spec_status
-              // envelope — the writeback must reach it too, or the UI shows
-              // RUNNING forever even after a reload.
-              bus.publish({
-                conversationId: item.conversationId,
-                ts: new Date().toISOString(),
-                kind: "spec_status",
-                payload: { status: "reviewed" },
-              });
-              bus.publish({
-                conversationId: item.conversationId,
-                ts: new Date().toISOString(),
-                kind: "session_state",
-                payload: { state: "degraded" },
-              });
-            } catch {
-              // store closed (shutdown); ignore
-            }
-          };
-          void supervisor
-            .prompt(
-              item.conversationId,
-              item.message,
-              // Review fix 4: if the target thread's host went live between
-              // enqueue and dequeue (a restart's stale queue row, approve/
-              // retry reviving the thread), the prompt must carry steer
-              // semantics — pi's shared schema rejects a bare prompt on a
-              // busy agent, which used to flip the thread degraded/reviewed.
-              supervisor.has(item.conversationId) && queued.state === "streaming"
-                ? "steer"
-                : undefined,
-              { LAPIS_PROJECT_KEY: ns },
-              queued.workspace ?? undefined,
-              // #80: the queued prompt's own specMode (schema-capped enum).
-              (item.specMode as "auto" | "force" | "off") ?? "auto",
-            )
-            .then((ok) => {
-              if (ok) {
-                metrics.promptRequestsTotal.inc();
-                return;
-              }
-              failDequeuedPrompt(); // agent rejection (rpc answered success:false)
-            })
-            .catch(() => {
-              // supervisor.prompt THREW (not an agent answer) — the dequeue
-              // already flipped the thread to "running", so run the same
-              // writeback or the row sticks there forever.
-              failDequeuedPrompt();
-            });
-        }
-      }
-    } catch {
-      // store closed during shutdown; skip this tick
-    }
-  }, opts.queueIntervalMs ?? 2_000);
-  queueTimer.unref();
-
-  // Review: runs BEFORE Fastify's close() starts draining connections —
-  // a hijacked SSE reply never completes on its own, so close() would wait
-  // forever on an open viewer and the 8s process-exit backstop (index.ts)
-  // would kill the gateway before onClose → supervisor.disposeAll() (the
-  // SIGTERM-first child drain) ever ran. Destroying the streams here lets
-  // close() finish and the drain actually happen.
-  app.addHook("preClose", async () => {
-    for (const raw of sseReplies) {
-      sseReplies.delete(raw);
-      raw.destroy();
-    }
-  });
-
-  app.addHook("onClose", async () => {
-    // Graceful shutdown: wait up to 5s for in-flight pi children to exit
-    // before closing the store. Without this, a deploy during a turn kills
-    // the child mid-prompt and the user sees a partial response.
-    clearInterval(queueTimer);
-    await supervisor.disposeAll();
-    store.close();
-  });
-
+  // The built web app, with SPA fallback.
+  if (existsSync(cfg.webDir)) {
+    const root = relative(process.cwd(), cfg.webDir) || ".";
+    app.use("/*", serveStatic({ root }));
+    app.get("/*", serveStatic({ root, path: "index.html" }));
+  }
   return app;
 }

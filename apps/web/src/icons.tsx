@@ -59,3 +59,28 @@ export const IconFold = () => (
     <path d="M6 9l6 6 6-6" />
   </svg>
 );
+
+/** The four views. Stream: the warp with two wefts crossing it. */
+export const IconStream = () => (
+  <svg {...base} width={20} height={20}>
+    <path d="M6 3v18M6 8h13M6 15h9" />
+  </svg>
+);
+
+export const IconInbox = () => (
+  <svg {...base} width={20} height={20}>
+    <path d="M4 13l2.5-8h11L20 13v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1zM4 13h4.5l1 2.5h5l1-2.5H20" />
+  </svg>
+);
+
+export const IconQuick = () => (
+  <svg {...base} width={20} height={20}>
+    <path d="M13 3L5 14h6l-1 7 8-11h-6z" />
+  </svg>
+);
+
+export const IconBoard = () => (
+  <svg {...base} width={20} height={20}>
+    <path d="M4 4h7v9H4zM13 4h7v5h-7zM13 11h7v9h-7zM4 15h7v5H4z" />
+  </svg>
+);

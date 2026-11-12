@@ -165,6 +165,7 @@ function ModelsTab() {
   const [showAll, setShowAll] = useState(false);
   const [filter, setFilter] = useState("");
   const [saved, setSaved] = useState("");
+  const [taskSaved, setTaskSaved] = useState("");
   const [error, setError] = useState("");
 
   const load = async () => {
@@ -194,6 +195,7 @@ function ModelsTab() {
   const popular = Object.keys(POPULAR).map((id) => state.providers.find((p) => p.id === id)).filter((p): p is ProviderRow => !!p && !p.configured);
   const others = state.providers.filter((p) => !p.configured && !p.custom && !(p.id in POPULAR) && p.name.toLowerCase().includes(filter.toLowerCase()));
   const current = state.defaultModel ? `${state.defaultModel.provider}/${state.defaultModel.modelId}` : "";
+  const forTasks = state.taskModel ? `${state.taskModel.provider}/${state.taskModel.modelId}` : "";
 
   return (
     <div class="stack">
@@ -222,6 +224,28 @@ function ModelsTab() {
             </select>
             {saved && <span class="tone-success">{saved}</span>}
           </div>
+        )}
+        {models.length > 0 && (
+          <>
+            <h3>AI for tasks (optional)</h3>
+            <p class="muted">Tasks are the longer jobs the assistant does in the background. They can use a different AI, for example a stronger one.</p>
+            <div class="row">
+              <select
+                aria-label="AI for tasks"
+                value={forTasks}
+                onChange={async (e) => {
+                  const [provider, ...rest] = e.currentTarget.value.split("/");
+                  await api.setTaskModel(provider ?? "", rest.join("/")).catch((err) => setError(err.message));
+                  setTaskSaved(provider ? "Saved. Tasks will use it." : "Saved. Tasks will use the same AI as chats.");
+                  load();
+                }}
+              >
+                <option value="">Same as chats</option>
+                {models.map((m) => <option value={`${m.provider}/${m.id}`}>{label(state, m)}</option>)}
+              </select>
+              {taskSaved && <span class="tone-success">{taskSaved}</span>}
+            </div>
+          </>
         )}
       </section>
 

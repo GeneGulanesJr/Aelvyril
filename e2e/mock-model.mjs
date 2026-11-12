@@ -8,6 +8,8 @@
 //   a finished-task hand-off message   -> "Your job finished: job-ok."; if its result is "job-partial", calls continue_job first
 //   "... do-screen ..."                -> calls get_screen
 //   "... do-design ..."                -> calls change_design (colours and layout)
+//   "... do-guide ..."                 -> reads the aelvyril-limits guide from the path its system prompt lists
+//   "... do-abilities ..."             -> calls get_abilities
 //   anything else                      -> "Hello from mock"
 // A background task (it has the finish_task tool); the scenario is read from "scenario:<name>" in the conversation:
 //   done      -> finish_task(done, verified), then "job-ok"
@@ -22,7 +24,7 @@
 //   sendback  -> finish_task(done, "job-partial"); once sent back by the main conversation, finish_task(done, "job-full")
 import http from "node:http";
 
-const stats = { lastToolResult: "", mainSystem: "", requests: 0, byScenario: {}, finishTaskCalls: {}, nudgesSeen: {}, ponytail: [], continueJobCalls: 0 };
+const stats = { lastToolResult: "", mainSystem: "", taskSystem: "", requests: 0, byScenario: {}, finishTaskCalls: {}, nudgesSeen: {}, ponytail: [], continueJobCalls: 0 };
 const send = (res, chunks) => {
   res.writeHead(200, { "content-type": "text/event-stream" });
   for (const c of chunks) res.write(`data: ${JSON.stringify({ id: "x", object: "chat.completion.chunk", model: "spike-1", ...c })}\n\n`);
@@ -59,6 +61,7 @@ http
       if (tools.includes("start_job")) stats.mainSystem = msgs.filter((m) => m.role === "system").map(flat).join("\n");
 
       if (tools.includes("finish_task")) {
+        stats.taskSystem = msgs.filter((m) => m.role === "system").map(flat).join("\n");
         const scenario = (all.match(/scenario:(\w+)/) || [])[1] || "done";
         stats.byScenario[scenario] = (stats.byScenario[scenario] || 0) + 1;
         const nudged = lastText.includes("You stopped without calling finish_task");
@@ -107,6 +110,11 @@ http
       }
       if (tools.includes("get_screen") && last.role === "user" && lastText.includes("do-screen")) return send(res, call("get_screen", {}));
       if (tools.includes("change_design") && last.role === "user" && lastText.includes("do-design")) return send(res, call("change_design", { accent: "#1f8a5b", orb: "#ff8800", home: "grid", mascot: "large", width: "wide", scale: 110 }));
+      if (tools.includes("read") && last.role === "user" && lastText.includes("do-guide")) {
+        const path = (stats.mainSystem.match(/<location>([^<]*aelvyril-limits[^<]*)<\/location>/) || [])[1];
+        return send(res, call("read", { path }));
+      }
+      if (tools.includes("get_abilities") && last.role === "user" && lastText.includes("do-abilities")) return send(res, call("get_abilities", {}));
       if (last.role === "tool") {
         stats.lastToolResult = lastText; // what the last tool told the model, for the get_screen check
         return send(res, text("Started it, ask me anything else."));

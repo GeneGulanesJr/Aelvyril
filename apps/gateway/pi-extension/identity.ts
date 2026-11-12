@@ -3,19 +3,38 @@
 // so updating pi does not break it. The gateway passes the names in the environment (Supervisor.identityEnv).
 // Not part of the gateway's typecheck: pi supplies the types when it loads this file.
 
-/** What the assistant knows about the app it lives in. Said only when asked. */
+/** What the assistant knows about the app it lives in. The details are in the bundled guides (pi skills, apps/gateway/guides). */
 const ABOUT =
-  "About the app you live in (use this when the person asks what you are or how things work; do not recite it unprompted): " +
-  "you are a personal AI assistant that runs on the person's own computer, and their chats, accounts and keys stay there. " +
-  "The person talks to you in the Stream, one permanent conversation. " +
-  "Bigger work becomes a task that runs in the background: it shows as a card in the Stream and in Tasks (grouped as Needs you, Working and Done), and as a chip on the home screen while it works or needs them, and the person can open it to read it, answer it, stop it or delete it. " +
-  "Quick (Ctrl or Cmd + K) is a fast box that sends a message to the Stream. " +
-  "In Settings the person connects an AI (sign in, an API key, or their own server such as LM Studio or Ollama), picks the default AI, and adds extensions by pasting a GitHub link. " +
-  "You can change how the app looks when asked (its colours, and a few layout choices within set limits) with the change_design tool, and you can see what screen the person is using with the get_screen tool (look before you change the layout). Anything the person wants kept on screen (a weather tracker, a price, a list, a countdown) goes on their home screen as a widget with show_widget: you describe the card, the app keeps it current, and you never write code for it. You cannot change anything else about the app. " +
-  "You answer through whichever AI the person connected; you do not know which model it is, so never guess. " +
+  "About the app you live in: you are a personal AI assistant that runs on the person's own computer, and their chats, accounts and keys stay there. " +
+  "Before you explain how something in the app works, or say what you can or cannot do, read the matching aelvyril guide from your skills; " +
+  "call get_abilities to see what is connected and installed right now. Do not recite any of it unprompted. " +
+  "You answer through whichever AI the person connected; you do not know for sure which model it is, so never guess. " +
   "If asked what powers you, say it is the AI they connected, run by this app's engine, an open-source program called pi.";
 
 export default function (pi: any) {
+  // The Stream can check the person's real setup (never secrets) instead of guessing.
+  if (process.env.AELVYRIL_ROLE === "main") {
+    pi.registerTool({
+      name: "get_abilities",
+      label: "Check what is set up",
+      description: "What is set up on this Aelvyril right now: whether an AI is connected, the AI for chats and the AI for tasks, the installed extensions, whether coding projects are available, and whether GitHub is connected.",
+      promptSnippet: "Check which AI, extensions, coding projects and GitHub are set up, before saying what you can do",
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        const url = process.env.AELVYRIL_INTERNAL_URL;
+        if (!url) return { content: [{ type: "text", text: "Not available in this session." }], details: {}, isError: true };
+        try {
+          const res = await fetch(`${url}/internal/abilities`, { headers: { "x-aelvyril-token": process.env.AELVYRIL_INTERNAL_TOKEN ?? "" } });
+          const data: any = await res.json().catch(() => ({}));
+          if (!res.ok) return { content: [{ type: "text", text: `Could not check: ${data.error ?? res.status}` }], details: {}, isError: true };
+          return { content: [{ type: "text", text: data.text }], details: {} };
+        } catch (e) {
+          return { content: [{ type: "text", text: `Could not check: ${(e as Error).message}` }], details: {}, isError: true };
+        }
+      },
+    });
+  }
+
   pi.on("before_agent_start", (event: any) => {
     const name = process.env.AELVYRIL_ASSISTANT_NAME || "Aelvyril";
     const you = process.env.AELVYRIL_YOUR_NAME || "";

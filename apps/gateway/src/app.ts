@@ -50,6 +50,17 @@ export function createApp(deps: { cfg: Config; auth: Auth; sup: Supervisor; prov
       return c.json({ error: String((e as Error).message) }, 400);
     }
   });
+  // The continue_job tool: only the Stream, only for a task it started.
+  app.post("/internal/jobs/:id/continue", async (c) => {
+    const caller = sup.getThread(c.req.header("x-aelvyril-thread") ?? "");
+    if (!fromPi(c) || caller?.kind !== "main" || sup.getThread(c.req.param("id"))?.parent_id !== caller.id) return c.json({ error: "forbidden" }, 403);
+    try {
+      await sup.sendBack(c.req.param("id"), String(((await c.req.json().catch(() => ({}))) as Record<string, any>).instruction ?? ""));
+      return c.json({ ok: true });
+    } catch (e) {
+      return c.json({ error: String((e as Error).message) }, 400);
+    }
+  });
 
   // The change_design tool: colours only, validated, never code.
   app.get("/internal/design", (c) => (fromPi(c) ? c.json(design.get()) : c.json({ error: "forbidden" }, 403)));
@@ -73,6 +84,25 @@ export function createApp(deps: { cfg: Config; auth: Auth; sup: Supervisor; prov
     }
   });
   app.delete("/internal/widgets/:id", (c) => (!fromPi(c) ? c.json({ error: "forbidden" }, 403) : widgets.remove(c.req.param("id")) ? c.json({ ok: true }) : c.json({ error: "no widget with that id" }, 404)));
+
+  // The get_abilities tool: what is set up, as plain text the assistant can relay. Names only, never keys or tokens.
+  app.get("/internal/abilities", async (c) => {
+    if (!fromPi(c)) return c.json({ error: "forbidden" }, 403);
+    const p = await providers.list().catch(() => null);
+    const connected = p?.providers.filter((x) => x.configured).map((x) => x.name) ?? [];
+    const model = (m: { provider: string; modelId: string } | null | undefined) => (m ? `${m.modelId} (${m.provider})` : "");
+    const ext = extensions.list();
+    const account = github?.account();
+    const lines = [
+      `AI: ${!p ? "could not check" : connected.length ? `connected (${connected.join(", ")})` : "none connected yet; the person connects one in Settings, AI models"}`,
+      `AI for chats: ${model(p?.defaultModel) || "not chosen"}`,
+      `AI for tasks: ${model(p?.taskModel) || "the same as chats"}`,
+      `Extensions: ${ext.length ? ext.map((e) => e.name).join("; ") : "none"}`,
+      `Coding projects: ${projects?.enabled() ? `available (${projects.list().length} so far)` : "not set up on this computer"}`,
+      `GitHub: ${account ? `connected as ${account}` : github?.configured() ? "not connected" : "not set up on this Aelvyril"}`,
+    ];
+    return c.json({ text: lines.join("\n") });
+  });
 
   // The get_screen tool: what screens the person has been using.
   app.get("/internal/screen", (c) => (fromPi(c) ? c.json({ devices: screens.list() }) : c.json({ error: "forbidden" }, 403)));
@@ -353,6 +383,13 @@ export function createApp(deps: { cfg: Config; auth: Auth; sup: Supervisor; prov
     const b = await body(c);
     if (typeof b.provider !== "string" || typeof b.modelId !== "string") return c.json({ error: "bad request" }, 400);
     providers.setDefaultModel(b.provider, b.modelId);
+    return c.json({ ok: true });
+  });
+  // The AI tasks use; empty provider and model = the same as chats.
+  app.put("/api/task-model", async (c) => {
+    const b = await body(c);
+    if (typeof b.provider !== "string" || typeof b.modelId !== "string") return c.json({ error: "bad request" }, 400);
+    providers.setTaskModel(b.provider, b.modelId);
     return c.json({ ok: true });
   });
 

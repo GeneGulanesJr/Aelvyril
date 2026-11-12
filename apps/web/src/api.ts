@@ -53,6 +53,8 @@ export interface ProvidersState {
   providers: ProviderRow[];
   custom: CustomProvider[];
   defaultModel: { provider: string; modelId: string } | null;
+  /** The AI tasks use; null = the same as chats. */
+  taskModel: { provider: string; modelId: string } | null;
 }
 export interface ExtensionRow {
   source: string;
@@ -113,6 +115,7 @@ export const api = {
   saveCustom: (id: string, body: { baseUrl: string; apiKey?: string; models: { id: string; name?: string }[] }) => req("PUT", `/api/custom-providers/${id}`, body),
   deleteCustom: (id: string) => req("DELETE", `/api/custom-providers/${id}`),
   setDefaultModel: (provider: string, modelId: string) => req("PUT", "/api/default-model", { provider, modelId }),
+  setTaskModel: (provider: string, modelId: string) => req("PUT", "/api/task-model", { provider, modelId }),
   design: () => req<Design>("GET", "/api/design"),
   widgets: () => req<WidgetRow[]>("GET", "/api/widgets"),
   github: () => req<GitHubStatus>("GET", "/api/github"),

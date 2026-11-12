@@ -31,7 +31,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   const reply = (data) => out({ id: m.id, type: "response", command: m.type, success: true, data });
   switch (m.type) {
     case "get_state":
-      return reply({ sessionFile: null, sessionId: "fake", messageCount: said });
+      return reply({ sessionFile: null, sessionId: "fake", messageCount: said, model: process.argv.includes("--model") ? { provider: process.argv[process.argv.indexOf("--provider") + 1], id: process.argv[process.argv.indexOf("--model") + 1] } : null, skills: process.argv.flatMap((a, i) => (process.argv[i - 1] === "--skill" ? [a] : [])) });
     case "new_session":
       said = 0;
       return reply({ cancelled: false });
@@ -69,6 +69,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         out({ type: "agent_start" });
         out({ type: "message_end", message: { role: "user", content: m.message } });
         out({ type: "entry_appended", entry: { type: "custom", customType: "aelvyril.task_outcome", data: { outcome: "done", summary: "retried ok" } } });
+        out({ type: "agent_settled", aborted: false });
+        return;
+      }
+      if (m.message.startsWith("[aelvyril:send-back]")) {
+        out({ type: "agent_start" });
+        out({ type: "message_end", message: { role: "user", content: m.message } });
+        out({ type: "entry_appended", entry: { type: "custom", customType: "aelvyril.task_outcome", data: { outcome: "done", summary: `added ${/What is missing: (.*)/.exec(m.message)?.[1]}` } } });
         out({ type: "agent_settled", aborted: false });
         return;
       }

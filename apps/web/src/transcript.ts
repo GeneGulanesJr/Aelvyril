@@ -14,6 +14,8 @@ export type DialogState = "pending" | "resolved" | "dead";
 export const JOB_MARKER = "[aelvyril:job-result]";
 /** Starts the message the gateway sends when the person taps "Try again"; shown as a short notice. */
 export const RETRY_MARKER = "[aelvyril:retry]";
+/** Starts the message the gateway sends when the Stream sends a finished task back; shown as "Sent back: …". */
+export const SEND_BACK_MARKER = "[aelvyril:send-back]";
 
 export type JobState = "working" | "needs_you" | "done" | "failed" | "stopped";
 
@@ -78,6 +80,7 @@ export function buildTranscript(events: Ev[]): Transcript {
         if (m.role === "user") {
           const t = text(m.content);
           if (t.startsWith(RETRY_MARKER)) items.push({ kind: "notice", key, text: "Trying again.", level: "info" });
+          else if (t.startsWith(SEND_BACK_MARKER)) items.push({ kind: "notice", key, text: `Sent back: ${/What is missing: (.*)/.exec(t)?.[1] ?? "something was missing"}`, level: "info" });
           else if (t.startsWith(JOB_MARKER)) items.push({ kind: "handoff", key, title: /The task "(.*?)" /.exec(t)?.[1] ?? "" });
           else items.push({ kind: "user", key, text: t, ...at });
         }
@@ -106,8 +109,8 @@ export function buildTranscript(events: Ev[]): Transcript {
         break;
       }
       case "tool_execution_start": {
-        // Starting or finishing a task shows as a task card and its summary, not as a tool line.
-        if (e.toolName === "start_job" || e.toolName === "finish_task") break;
+        // Starting, sending back or finishing a task shows as a task card and its summary, not as a tool line.
+        if (e.toolName === "start_job" || e.toolName === "continue_job" || e.toolName === "finish_task") break;
         const t = { kind: "tool" as const, key, name: e.toolName, args: e.args, output: "", isError: false, done: false };
         tools.set(e.toolCallId, t);
         items.push(t);

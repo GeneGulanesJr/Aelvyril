@@ -25,8 +25,9 @@ export async function createGateway(cfg: Config = loadConfig()) {
   if (process.env.AELVYRIL_WIDGETS !== "0") widgets.start(); // reads each widget's address when it is due
   const sup: Supervisor = new Supervisor(db, cfg, () => profile.get());
   sup.projectExists = (id) => !!projects.get(id);
-  sup.recoverJobs();
   const providers = new Providers(cfg, () => sup.configChanged());
+  sup.taskModel = () => providers.taskModel();
+  sup.recoverJobs();
   const extensions = new Extensions(cfg, () => sup.configChanged());
   // Keep the extensions current without anyone having to ask: shortly after start, then once a day. AELVYRIL_AUTO_UPDATE=0 turns it off.
   const timers: NodeJS.Timeout[] = [];

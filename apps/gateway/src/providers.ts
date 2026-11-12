@@ -131,7 +131,7 @@ export class Providers {
   }
 
   // ---- listing -------------------------------------------------------------
-  async list(): Promise<{ providers: ProviderRow[]; custom: CustomProvider[]; defaultModel: { provider: string; modelId: string } | null }> {
+  async list(): Promise<{ providers: ProviderRow[]; custom: CustomProvider[]; defaultModel: { provider: string; modelId: string } | null; taskModel: { provider: string; modelId: string } | null }> {
     const rt = await this.runtime();
     const customIds = new Set(Object.keys(this.readJson(this.modelsPath).providers ?? {}));
     const providers = rt.getProviders().map((p) => {
@@ -151,6 +151,7 @@ export class Providers {
       providers,
       custom: this.customProviders(),
       defaultModel: s.defaultProvider && s.defaultModel ? { provider: s.defaultProvider, modelId: s.defaultModel } : null,
+      taskModel: this.taskModel(),
     };
   }
 
@@ -209,6 +210,18 @@ export class Providers {
   setDefaultModel(provider: string, modelId: string) {
     const s = this.readJson(this.settingsPath);
     this.writeJson(this.settingsPath, { ...s, defaultProvider: provider, defaultModel: modelId });
+    this.onChange();
+  }
+
+  // ---- the AI for tasks (optional; empty = the same as chats). Our own keys in settings.json: pi keeps keys it doesn't know.
+  taskModel(): { provider: string; modelId: string } | null {
+    const s = this.readJson(this.settingsPath);
+    return s.aelvyrilTaskProvider && s.aelvyrilTaskModel ? { provider: s.aelvyrilTaskProvider, modelId: s.aelvyrilTaskModel } : null;
+  }
+
+  setTaskModel(provider: string, modelId: string) {
+    const { aelvyrilTaskProvider: _p, aelvyrilTaskModel: _m, ...s } = this.readJson(this.settingsPath);
+    this.writeJson(this.settingsPath, provider && modelId ? { ...s, aelvyrilTaskProvider: provider, aelvyrilTaskModel: modelId } : s);
     this.onChange();
   }
 

@@ -26,13 +26,14 @@ test("profile: defaults, cleaning, saving, reset", () => {
 /** Runs the extension's before_agent_start hook the way pi would; returns what the model would be given as the changed part. */
 function run(env: Record<string, string>, event: Record<string, any>) {
   let hook: (e: unknown) => { systemPrompt: string } | undefined;
+  const tools: string[] = [];
   Object.assign(process.env, { AELVYRIL_ASSISTANT_NAME: "", AELVYRIL_YOUR_NAME: "", AELVYRIL_ROLE: "", ...env });
-  identity({ on: (_name: string, fn: typeof hook) => (hook = fn) });
-  return { returned: hook!(event)?.systemPrompt, options: event.systemPromptOptions };
+  identity({ on: (_name: string, fn: typeof hook) => (hook = fn), registerTool: (t: { name: string }) => tools.push(t.name) });
+  return { returned: hook!(event)?.systemPrompt, options: event.systemPromptOptions, tools };
 }
 
 test("identity: the main conversation drops pi's own prompt and keeps the gateway's, with the name and the app knowledge", () => {
-  const { returned, options } = run(
+  const { returned, options, tools } = run(
     { AELVYRIL_ROLE: "main", AELVYRIL_ASSISTANT_NAME: "Luna", AELVYRIL_YOUR_NAME: "Sam" },
     { systemPrompt: "You are a coding assistant running inside pi", systemPromptOptions: { appendSystemPrompt: "GATEWAY RULES" } },
   );
@@ -42,13 +43,17 @@ test("identity: the main conversation drops pi's own prompt and keeps the gatewa
   assert.match(out, /^Your name is Luna\./);
   assert.match(out, /likes to be called Sam/);
   assert.match(out, /GATEWAY RULES/);
-  assert.match(out, /the Stream/);
-  assert.match(out, /change_design/, "it knows it can change the colours");
+  assert.match(out, /own computer/);
+  assert.match(out, /aelvyril guide/, "it is told to read the guides before explaining");
+  assert.match(out, /never guess/);
+  assert.deepEqual(tools, ["get_abilities"], "the Stream can check what is set up");
   assert.doesNotMatch(out, /coding assistant/);
 });
 
 test("identity: a task keeps pi's prompt, with the name first; the default name is Aelvyril", () => {
-  const out = run({ AELVYRIL_ROLE: "job" }, { systemPrompt: "PI PROMPT", systemPromptOptions: { appendSystemPrompt: "x" } }).returned!;
+  const r = run({ AELVYRIL_ROLE: "job" }, { systemPrompt: "PI PROMPT", systemPromptOptions: { appendSystemPrompt: "x" } });
+  const out = r.returned!;
+  assert.deepEqual(r.tools, [], "get_abilities is the Stream's");
   assert.match(out, /^Your name is Aelvyril\./);
   assert.match(out, /PI PROMPT$/);
 });

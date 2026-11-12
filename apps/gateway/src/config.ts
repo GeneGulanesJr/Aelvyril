@@ -31,6 +31,8 @@ export interface Config {
   sandboxExtension: string;
   /** Bundled pi extension that makes a task's "finished" mean finished. */
   taskGuardExtension: string;
+  /** Bundled guides (pi skills): what the assistant can and cannot do, read by the model when it needs them. */
+  guidesDir: string;
   /** A working task silent for this long is stopped and marked failed. */
   taskStallMs: number;
   /** A task running longer than this in total is stopped and marked failed. */
@@ -66,6 +68,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     taskGuardExtension: resolve(import.meta.dirname, "../pi-extension/task-guard.ts"),
     projectsExtension: resolve(import.meta.dirname, "../pi-extension/projects.ts"),
     sandboxExtension: resolve(import.meta.dirname, "../pi-extension/sandbox.ts"),
+    guidesDir: resolve(import.meta.dirname, "../guides"),
     taskStallMs: Number(env.AELVYRIL_TASK_STALL_MS ?? 10 * 60_000),
     taskMaxMs: Number(env.AELVYRIL_TASK_MAX_MS ?? 60 * 60_000),
     watchdogMs: Number(env.AELVYRIL_WATCHDOG_MS ?? 30_000),

@@ -1,5 +1,5 @@
 // Drives the REAL gateway with REAL pi (the user's `pi` on PATH or PI_COMMAND) against the scripted mock model,
-// to prove the finish contract end to end: the task-guard extension, finish_task, nudges, need_input, the stall watchdog.
+// to prove the finish contract end to end: the task-guard extension, finish_task, nudges, need_input, send-back, the stall watchdog.
 //   node e2e/task-guard.mjs
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
@@ -67,6 +67,18 @@ try {
   const s1 = await stats();
   assert.equal(s1.finishTaskCalls.done, 1, "accepted at once: it said what it checked");
 
+  console.log("• guides: the Stream's and the task's model are both offered the aelvyril guides; the Stream can open one and check its setup");
+  for (const [who, sys] of [["the Stream", s1.mainSystem], ["a task", s1.taskSystem]])
+    for (const g of ["aelvyril-app", "aelvyril-tasks", "aelvyril-coding", "aelvyril-look", "aelvyril-limits"]) assert.ok(sys.includes(`<name>${g}</name>`), `${who} is offered ${g}`);
+  const say = async (message, what) => {
+    const n = (await stats()).requests;
+    assert.equal((await api(`/api/threads/${main.id}/prompt`, { method: "POST", body: JSON.stringify({ message }) })).status, 200);
+    await until(async () => { const s = await stats(); return s.requests >= n + 2 && !(await api("/api/threads")).json.find((t) => t.id === main.id).running ? s : null; }, what);
+    return (await stats()).lastToolResult;
+  };
+  assert.match(await say("do-guide", "the Stream reading a guide"), /# What you cannot do/, "the Stream's read reaches the guide on disk");
+  assert.match(await say("do-abilities", "get_abilities"), /AI for chats: spike-1 \(spikeai\)\nAI for tasks: the same as chats/);
+
   console.log("• silent: never declares an outcome, so the guard nudges 3 times, then it is reported as NOT finished");
   t = await start("silent");
   t = await settled(t.id, "failed", "silent task failing");
@@ -112,6 +124,12 @@ try {
   assert.equal(t.preview, "Which folder?");
   assert.equal((await api(`/api/threads/${t.id}/prompt`, { method: "POST", body: JSON.stringify({ message: "the photos folder" }) })).status, 200);
   t = await settled(t.id, "done", "need task finishing after the answer");
+
+  console.log("• send-back: a partial result goes back to the task once, and its full result comes back");
+  t = await start("sendback");
+  t = await until(async () => { const x = await task(t.id); return x.status === "done" && !x.running && x.preview === "job-full" ? x : null; }, "sent-back task finishing again");
+  assert.equal((await stats()).finishTaskCalls.sendback, 2, "done, sent back, done again");
+  assert.equal((await stats()).continueJobCalls, 1, "sent back once, not again for the full result");
 
   console.log("• hang: the model never answers; the watchdog stops the task instead of waiting forever");
   t = await start("hang");

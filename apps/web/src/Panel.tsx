@@ -67,6 +67,14 @@ function PanelBody({ panel, onCommand }: { panel: PanelData; onCommand(command: 
       );
     case "status":
       return <p class={`tone-${panel.tone ?? "info"}`}>{panel.text}</p>;
+    case "stat":
+      return (
+        <div class={`stat tone-${panel.tone ?? "info"}`}>
+          <span class="stat-value">{panel.value}</span>
+          {panel.label && <span class="stat-label">{panel.label}</span>}
+          {panel.detail && <span class="stat-detail">{panel.detail}</span>}
+        </div>
+      );
     case "form":
       return <FormPanel panel={panel} onCommand={onCommand} />;
   }

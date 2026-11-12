@@ -34,33 +34,6 @@ export const IconArrow = () => (
 );
 
 /** The drag handle: two rows of running stitches. */
-export const IconGrip = () => (
-  <svg {...base} width={16} height={16} stroke-width={2.4}>
-    <path d="M9 6h.5M14.5 6h.5M9 12h.5M14.5 12h.5M9 18h.5M14.5 18h.5" />
-  </svg>
-);
-
-/** Move earlier / later. Points left and right; turned upright when the cards stack in one column. */
-export const IconEarlier = () => (
-  <svg {...base} width={16} height={16} class="icon icon-move">
-    <path d="M15 6l-6 6 6 6" />
-  </svg>
-);
-
-export const IconLater = () => (
-  <svg {...base} width={16} height={16} class="icon icon-move">
-    <path d="M9 6l6 6-6 6" />
-  </svg>
-);
-
-/** Fold / unfold a card. */
-export const IconFold = () => (
-  <svg {...base} width={16} height={16} class="icon icon-fold">
-    <path d="M6 9l6 6 6-6" />
-  </svg>
-);
-
-/** The four views. Stream: the warp with two wefts crossing it. */
 export const IconStream = () => (
   <svg {...base} width={20} height={20}>
     <path d="M6 3v18M6 8h13M6 15h9" />
@@ -79,8 +52,8 @@ export const IconQuick = () => (
   </svg>
 );
 
-export const IconBoard = () => (
-  <svg {...base} width={20} height={20}>
-    <path d="M4 4h7v9H4zM13 4h7v5h-7zM13 11h7v9h-7zM4 15h7v5H4z" />
+export const IconHome = () => (
+  <svg {...base}>
+    <path d="M4 11l8-7 8 7M6 10v9h12v-9M10 19v-5h4v5" />
   </svg>
 );

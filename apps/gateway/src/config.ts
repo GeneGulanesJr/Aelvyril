@@ -18,6 +18,17 @@ export interface Config {
   authSecret: string;
   /** Bundled pi extension that gives the main conversation its start_job tool. */
   jobsExtension: string;
+  /** Bundled pi extension that lets the main conversation see the person's screen. */
+  screenExtension: string;
+  /** Bundled pi extension that lets the main conversation change the app's colours. */
+  designExtension: string;
+  /** Bundled pi extension that lets the assistant put widgets on the home screen. */
+  widgetsExtension: string;
+  /** Bundled pi extension that tells every thread its name and what the app is. */
+  identityExtension: string;
+  /** Bundled pi extensions: coding projects for the main conversation, and the sandboxed tools a project's task gets. */
+  projectsExtension: string;
+  sandboxExtension: string;
   /** Bundled pi extension that makes a task's "finished" mean finished. */
   taskGuardExtension: string;
   /** A working task silent for this long is stopped and marked failed. */
@@ -26,6 +37,9 @@ export interface Config {
   taskMaxMs: number;
   /** How often the gateway checks for stalled or runaway tasks. */
   watchdogMs: number;
+  /** After the main conversation has been quiet this long, it saves what matters to memory and starts fresh
+      (AELVYRIL_CLEAR_IDLE_MIN, default 30; 0 turns it off). */
+  clearIdleMs: number;
   /** First sign-up needs no setup code (for installs bound to localhost only). */
   openSetup: boolean;
 }
@@ -45,10 +59,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host: env.HOST ?? "0.0.0.0",
     webDir: resolve(env.AELVYRIL_WEB ?? join(import.meta.dirname, "../../web/dist")),
     jobsExtension: resolve(import.meta.dirname, "../pi-extension/jobs.ts"),
+    screenExtension: resolve(import.meta.dirname, "../pi-extension/screen.ts"),
+    designExtension: resolve(import.meta.dirname, "../pi-extension/design.ts"),
+    widgetsExtension: resolve(import.meta.dirname, "../pi-extension/widgets.ts"),
+    identityExtension: resolve(import.meta.dirname, "../pi-extension/identity.ts"),
     taskGuardExtension: resolve(import.meta.dirname, "../pi-extension/task-guard.ts"),
+    projectsExtension: resolve(import.meta.dirname, "../pi-extension/projects.ts"),
+    sandboxExtension: resolve(import.meta.dirname, "../pi-extension/sandbox.ts"),
     taskStallMs: Number(env.AELVYRIL_TASK_STALL_MS ?? 10 * 60_000),
     taskMaxMs: Number(env.AELVYRIL_TASK_MAX_MS ?? 60 * 60_000),
     watchdogMs: Number(env.AELVYRIL_WATCHDOG_MS ?? 30_000),
+    clearIdleMs: Number(env.AELVYRIL_CLEAR_IDLE_MIN ?? 30) * 60_000,
     openSetup: env.AELVYRIL_OPEN_SETUP === "1",
     authSecret: env.BETTER_AUTH_SECRET ?? persistedSecret(join(dataDir, "auth-secret")),
   };

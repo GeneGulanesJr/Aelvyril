@@ -51,18 +51,19 @@ test("tools, statuses and widgets", () => {
   assert.deepEqual(t.widgets.w, ["a", "b"]);
 });
 
-test("tasks: a card per job that updates in place; the hand-off message and the start_job line stay hidden", () => {
+test("tasks: a card per job that updates in place; the hand-off becomes a marker nobody sees (it names its task), and the start_job line stays hidden", () => {
   const t = buildTranscript([
     ev(1, { type: "message_end", message: { role: "user", content: "please rename my photos" } }),
     ev(2, { type: "tool_execution_start", toolCallId: "c", toolName: "start_job", args: {} }),
     ev(3, { type: "aelvyril_job_started", jobId: "j1", title: "Rename photos" }),
     ev(4, { type: "aelvyril_job_update", jobId: "j1", title: "Rename photos", state: "needs_you", preview: "" }),
     ev(5, { type: "aelvyril_job_update", jobId: "j1", title: "Rename photos", state: "done", preview: "Renamed 40 photos" }),
-    ev(6, { type: "message_end", message: { role: "user", content: "[aelvyril:job-result]\nThe job finished" } }),
+    ev(6, { type: "message_end", message: { role: "user", content: '[aelvyril:job-result]\nThe task "Rename photos" has finished. Its result:\n\nRenamed 40 photos' } }),
     ev(7, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "All done!" }] } }),
   ]);
-  assert.deepEqual(t.items.map((i) => i.kind), ["user", "job", "assistant"]);
+  assert.deepEqual(t.items.map((i) => i.kind), ["user", "job", "handoff", "assistant"]);
   assert.deepEqual(t.items[1], { kind: "job", key: "3", jobId: "j1", title: "Rename photos", state: "done", preview: "Renamed 40 photos" });
+  assert.deepEqual(t.items[2], { kind: "handoff", key: "6", title: "Rename photos" });
 });
 
 test("the finish_task tool call is not shown as a tool line", () => {
@@ -90,4 +91,12 @@ test("an extension's startup confirmation is not shown, other notifications are"
     ev(2, { type: "extension_ui_request", id: "b", method: "notify", message: "Saved your notes", notifyType: "info" }),
   ]);
   assert.deepEqual(t.items.map((i) => (i.kind === "notice" ? i.text : i.kind)), ["Saved your notes"]);
+});
+
+test("status chips: Ponytail's badge is hidden, colour codes are stripped, other extensions' chips show", () => {
+  const t = buildTranscript([
+    ev(1, { type: "extension_ui_request", id: "a", method: "setStatus", statusKey: "ponytail", statusText: "\x1B[39m\x1B[2m○\x1B[22;39m 🐴 \x1B[39m\x1B[2mponytail: \x1B[22;39m\x1B[39m⚡ FULL\x1B[39m" }),
+    ev(2, { type: "extension_ui_request", id: "b", method: "setStatus", statusKey: "memory", statusText: "\x1B[32mMemory on\x1B[39m" }),
+  ]);
+  assert.deepEqual(Object.values(t.status), ["Memory on"]);
 });

@@ -1,80 +1,90 @@
-// Inbox: every task by what it needs from you. Desktop: list and the chosen task side by side.
+// Tasks: a kanban of projects (boards), and inside each project a kanban of its tasks.
+// A project sits in the column of its most urgent task: needs you, then working, then done. A task opens beside the board.
+import { useState } from "preact/hooks";
 import type { ThreadRow } from "./api.ts";
-import { ago, groupTasks, plainPreview, STATUS_WORD } from "./model.ts";
+import { ago, COLUMNS, columnOf, plainPreview, projects, STATUS_WORD, type Project } from "./model.ts";
 import { Knot } from "./Thread.tsx";
-import { TaskView } from "./Task.tsx";
+import { IconBack } from "./icons.tsx";
+import { store } from "./store.ts";
 
-const GROUPS = [
-  { key: "needsYou", title: "Needs you" },
-  { key: "working", title: "Working" },
-  { key: "done", title: "Done" },
-  { key: "chats", title: "Older chats" },
-] as const;
-
-export function Inbox({
-  threads,
-  rows,
-  selected,
-  phone,
-  onSelect,
-  onChanged,
-}: {
-  threads: ThreadRow[];
-  rows: Map<string, ThreadRow>;
-  /** The open task, if any (from the address). */
-  selected: string | null;
-  phone: boolean;
-  onSelect(id: string): void;
-  onChanged(): void;
-}) {
-  const g = groupTasks(threads);
-  const all = [...g.needsYou, ...g.working, ...g.done, ...g.chats];
-  // On a wide screen the right side is never blank: show the most urgent task.
-  const shown = selected && rows.has(selected) ? selected : phone ? null : all[0]?.id ?? null;
+export function Inbox({ threads, onOpenTask }: { threads: ThreadRow[]; onOpenTask(id: string): void }) {
+  const list = projects(threads);
+  const [openName, setOpenName] = useState<string | null>(() => store.get("aelvyril.board"));
+  const open = list.find((p) => p.name === openName) ?? null;
+  const pick = (name: string | null) => {
+    setOpenName(name);
+    store.set("aelvyril.board", name ?? "");
+  };
   const now = Date.now();
 
+  if (!list.length)
+    return (
+      <div class="kanban-page">
+        <p class="kanban-empty">No tasks yet. When the Stream starts one, its project shows up here.</p>
+      </div>
+    );
+
+  if (!open)
+    return (
+      <div class="kanban-page">
+        <header class="kanban-head">
+          <h2>Projects</h2>
+          <span class="muted small">{list.length === 1 ? "1 project" : `${list.length} projects`}</span>
+        </header>
+        <div class="kanban">
+          {COLUMNS.map((col) => {
+            const here = list.filter((p) => p.column === col.key);
+            return (
+              <section key={col.key} class={`kcol c-${col.key}`} aria-label={col.title}>
+                <h3 class="kcol-h">{col.title}<span class="count">{here.length}</span></h3>
+                {here.map((p) => <ProjectCard key={p.name} p={p} now={now} onOpen={() => pick(p.name)} />)}
+                {!here.length && <p class="kcol-empty">Nothing here</p>}
+              </section>
+            );
+          })}
+        </div>
+      </div>
+    );
+
   return (
-    <div class="inbox">
-      <nav class="rail scroll" aria-label="Tasks">
-        {all.length === 0 && <p class="rail-empty">Nothing here yet. When the Stream starts a task, it shows up here.</p>}
-        {GROUPS.map(({ key, title }) => {
-          const list = g[key];
-          if (!list.length) return null;
+    <div class="kanban-page">
+      <header class="kanban-head">
+        <button class="link back" onClick={() => pick(null)}><IconBack />All projects</button>
+        <h2>{open.name}</h2>
+        <span class="muted small">{open.tasks.length === 1 ? "1 task" : `${open.tasks.length} tasks`}</span>
+      </header>
+      <div class="kanban">
+        {COLUMNS.map((col) => {
+          const here = open.tasks.filter((t) => columnOf(t.status) === col.key);
           return (
-            <section class="group" key={key} aria-labelledby={`g-${key}`}>
-              <h2 class="group-h" id={`g-${key}`}>{title}<span class="count">{list.length}</span></h2>
-              <ul>
-                {list.map((t) => (
-                  <li key={t.id}>
-                    <button class={`row-item s-${t.status}`} aria-current={t.id === shown ? "true" : undefined} onClick={() => onSelect(t.id)}>
-                      <Knot status={t.status} />
-                      <span class="row-text">
-                        <span class="row-title">{t.title}</span>
-                        <span class="row-sub">
-                          {t.status === "needs_you" ? "Waiting for your answer" : plainPreview(t.preview) || STATUS_WORD[t.status]}
-                        </span>
-                      </span>
-                      <span class="row-when">{ago(t.updated_at, now)}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+            <section key={col.key} class={`kcol c-${col.key}`} aria-label={col.title}>
+              <h3 class="kcol-h">{col.title}<span class="count">{here.length}</span></h3>
+              {here.map((t) => (
+                <button key={t.id} class={`kcard s-${t.status}`} onClick={() => onOpenTask(t.id)} aria-label={`${t.title}, ${STATUS_WORD[t.status]}. Open task`}>
+                  <span class="kcard-top"><Knot status={t.status} /><span class="kcard-title">{t.title}</span></span>
+                  <span class="kcard-line">{t.status === "needs_you" ? "Waiting for your answer" : plainPreview(t.preview) || STATUS_WORD[t.status]}</span>
+                  <span class="kcard-foot">{STATUS_WORD[t.status]} · {ago(t.updated_at, now)}</span>
+                </button>
+              ))}
+              {!here.length && <p class="kcol-empty">Nothing here</p>}
             </section>
           );
         })}
-      </nav>
-      {!phone && (
-        <div class="inbox-detail">
-          {shown ? (
-            <TaskView key={shown} id={shown} row={rows.get(shown)} rows={rows} mode="pane" backLabel="Back to Inbox" onClose={() => {}} onChanged={onChanged} onOpenTask={onSelect} />
-          ) : (
-            <div class="pane-empty">
-              <div class="swatch" aria-hidden="true" />
-              <p class="muted">Tasks appear here when the Stream starts one.</p>
-            </div>
-          )}
-        </div>
-      )}
+      </div>
     </div>
+  );
+}
+
+/** A project on the outer board: its name, how its tasks stand, and the newest one. */
+function ProjectCard({ p, now, onOpen }: { p: Project; now: number; onOpen(): void }) {
+  const n = (s: string) => p.tasks.filter((t) => columnOf(t.status) === s).length;
+  const parts = [n("needs") && `${n("needs")} need you`, n("working") && `${n("working")} working`, n("done") && `${n("done")} done`].filter(Boolean);
+  return (
+    <button class={`kcard project c-${p.column}`} onClick={onOpen} aria-label={`${p.name}: ${parts.join(", ")}. Open project`}>
+      <span class="kcard-title">{p.name}</span>
+      <span class="kcard-knots" aria-hidden="true">{p.tasks.slice(0, 12).map((t) => <Knot key={t.id} status={t.status} />)}</span>
+      <span class="kcard-line">{parts.join(" · ")}</span>
+      <span class="kcard-foot">Latest: {p.tasks[0].title} · {ago(p.tasks[0].updated_at, now)}</span>
+    </button>
   );
 }

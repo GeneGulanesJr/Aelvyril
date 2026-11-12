@@ -32,6 +32,10 @@ export function openDb(cfg: Config): Db {
     ["state", "TEXT"],
     ["preview", "TEXT NOT NULL DEFAULT ''"],
     ["resumes", "INTEGER NOT NULL DEFAULT 0"],
+    // the project a task belongs to (its board on the Tasks screen); empty for the Stream and older chats
+    ["board", "TEXT NOT NULL DEFAULT ''"],
+    // the coding project (sandbox) a task works in; its file and shell tools run there
+    ["project", "TEXT NOT NULL DEFAULT ''"],
   ] as const) {
     if (!have.has(col)) db.exec(`ALTER TABLE threads ADD COLUMN ${col} ${ddl}`);
   }

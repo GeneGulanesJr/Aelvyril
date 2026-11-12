@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { IconBack, IconLeave } from "./icons.tsx";
-import { api, type CustomProvider, type ExtensionRow, type LoginEvent, type ModelRow, type ProviderRow, type ProvidersState } from "./api.ts";
+import { applyDesign } from "./design.ts";
+import { api, type CustomProvider, type ExtensionRow, type LoginEvent, type ModelRow, type ProviderRow, type ProvidersState, type GitHubStatus } from "./api.ts";
 
 // Plain-language names and "where do I get a key" links for the providers most people use.
 const POPULAR: Record<string, { title: string; blurb: string; keyUrl?: string }> = {
@@ -16,7 +17,7 @@ const POPULAR: Record<string, { title: string; blurb: string; keyUrl?: string }>
   groq: { title: "Groq", blurb: "Very fast open models", keyUrl: "https://console.groq.com/keys" },
 };
 
-export function Settings({ initialTab = "models", onBack, onSignOut }: { initialTab?: "models" | "extensions"; onBack(): void; onSignOut(): void }) {
+export function Settings({ initialTab = "models", onBack, onSignOut }: { initialTab?: "models" | "extensions" | "github" | "assistant"; onBack(): void; onSignOut(): void }) {
   const [tab, setTab] = useState(initialTab);
   const back = useRef<HTMLButtonElement>(null);
   useEffect(() => back.current?.focus({ preventScroll: true }), []);
@@ -31,9 +32,127 @@ export function Settings({ initialTab = "models", onBack, onSignOut }: { initial
       <div class="tabs" role="tablist">
         <button role="tab" aria-selected={tab === "models"} class={tab === "models" ? "on" : ""} onClick={() => setTab("models")}>AI models</button>
         <button role="tab" aria-selected={tab === "extensions"} class={tab === "extensions" ? "on" : ""} onClick={() => setTab("extensions")}>Extensions</button>
+        <button role="tab" aria-selected={tab === "github"} class={tab === "github" ? "on" : ""} onClick={() => setTab("github")}>GitHub</button>
+        <button role="tab" aria-selected={tab === "assistant"} class={tab === "assistant" ? "on" : ""} onClick={() => setTab("assistant")}>Your assistant</button>
       </div>
-      {tab === "models" ? <ModelsTab /> : <ExtensionsTab />}
+      {tab === "models" ? <ModelsTab /> : tab === "extensions" ? <ExtensionsTab /> : tab === "github" ? <GitHubTab /> : <AssistantTab />}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- GitHub
+/** Connect GitHub through the GitHub App, and see the repos Aelvyril can work on. */
+function GitHubTab() {
+  const [st, setSt] = useState<GitHubStatus | null>(null);
+  const [error, setError] = useState(() => {
+    const r = new URLSearchParams(location.search).get("github");
+    return r && r !== "connected" ? r : "";
+  });
+  const load = () => api.github().then(setSt).catch((e) => setError(e.message));
+  useEffect(() => {
+    load();
+    if (new URLSearchParams(location.search).has("github")) history.replaceState(null, "", location.pathname + location.hash);
+  }, []);
+  const connect = () => api.githubConnect().then((r) => location.assign(r.url), (e) => setError(e.message));
+  return (
+    <section class="card">
+      <h3>GitHub</h3>
+      <p class="muted small">Connect your GitHub account so Aelvyril can work on your repos. Its coding tasks work on a branch and open a pull request for you to review; your GitHub login stays with Aelvyril itself, never inside a task's sandbox.</p>
+      {error && <p class="notice error">{error}</p>}
+      {!st ? (
+        <p class="muted">Loading…</p>
+      ) : !st.configured ? (
+        <p class="muted">GitHub isn't set up on this Aelvyril yet (it needs the GitHub App's ID and secret).</p>
+      ) : !st.connected ? (
+        <>
+          <button class="btn primary" onClick={connect}>Connect GitHub</button>
+          <p class="muted small">If GitHub says "the redirect_uri is not associated with this application", this address isn't in the GitHub App's callback URLs yet: add <code>{location.origin}/api/github/callback</code> under Callback URL in the app's settings on github.com, then try again.</p>
+        </>
+      ) : (
+        <>
+          <ProviderLine title={st.login ?? "GitHub"} note="Connected">
+            <Confirm label="Disconnect" confirm="Disconnect?" onYes={async () => { await api.githubDisconnect().catch((e) => setError(e.message)); load(); }} />
+          </ProviderLine>
+          {st.error && <p class="notice error">{st.error}</p>}
+          <h4>Repos it can work on</h4>
+          {st.repos?.length ? (
+            <ul class="gh-repos">
+              {st.repos.map((r) => <li key={r.full_name}><a href={r.html_url} target="_blank" rel="noreferrer">{r.full_name}</a>{r.private && <span class="muted small"> · private</span>}</li>)}
+            </ul>
+          ) : (
+            <p class="muted small">None yet: the app is signed in but not installed. On github.com open <a href="https://github.com/settings/apps" target="_blank" rel="noreferrer">your GitHub Apps</a>, pick this app, choose <strong>Install App</strong> and select the repos, then come back here.</p>
+          )}
+          <p class="row">
+            {st.installUrl && <a class="btn" href={st.installUrl} target="_blank" rel="noreferrer">Add repos or accounts</a>}
+            {st.manageUrls?.map((m) => <a key={m.url} class="link" href={m.url} target="_blank" rel="noreferrer">Change repos for {m.account}</a>)}
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------- your assistant
+function AssistantTab() {
+  const [name, setName] = useState("");
+  const [you, setYou] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [saved, setSaved] = useState("");
+  const [error, setError] = useState("");
+  const [lookReset, setLookReset] = useState(false);
+  useEffect(() => {
+    api.profile().then((p) => (setName(p.assistantName), setYou(p.yourName), setLoaded(true))).catch((e) => setError((e as Error).message));
+  }, []);
+  const save = async (e: Event) => {
+    e.preventDefault();
+    setError("");
+    setSaved("");
+    try {
+      const p = await api.setProfile({ assistantName: name, yourName: you });
+      setName(p.assistantName);
+      setYou(p.yourName);
+      setSaved("Saved. It uses the new names from its next answer.");
+    } catch (x) {
+      setError((x as Error).message);
+    }
+  };
+  return (
+    <form class="stack" onSubmit={save}>
+      <section class="card">
+        <h3>Names</h3>
+        <label class="field">
+          <span>What should your assistant be called?</span>
+          <input value={name} maxLength={40} placeholder="Aelvyril" disabled={!loaded} onInput={(e) => setName(e.currentTarget.value)} />
+        </label>
+        <label class="field">
+          <span>What should it call you?</span>
+          <input value={you} maxLength={40} placeholder="Your name (optional)" autocomplete="off" disabled={!loaded} onInput={(e) => setYou(e.currentTarget.value)} />
+          <span class="muted small">Only your assistant sees these. They stay on this computer.</span>
+        </label>
+        {error && <div class="notice error">{error}</div>}
+        {saved && <p class="tone-success">{saved}</p>}
+        <div class="row"><button class="btn primary" type="submit" disabled={!loaded}>Save</button></div>
+      </section>
+      <section class="card">
+        <h3>How it looks</h3>
+        <p class="muted small">Ask your assistant in the chat to change the colours, for example "make it green". You can put the original look back here.</p>
+        <div class="row">
+          <button
+            class="btn"
+            type="button"
+            onClick={() =>
+              api.setDesign({ reset: true }).then(
+                () => (applyDesign({}), dispatchEvent(new Event("aelvyril-design")), setLookReset(true)),
+                (x) => setError((x as Error).message),
+              )
+            }
+          >
+            Back to the original look
+          </button>
+          {lookReset && <span class="tone-success">The original look is back.</span>}
+        </div>
+      </section>
+    </form>
   );
 }
 
@@ -396,6 +515,20 @@ function ExtensionsTab() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [updateMsg, setUpdateMsg] = useState<{ good: boolean; text: string } | null>(null);
+  const checkUpdates = async () => {
+    setChecking(true);
+    setUpdateMsg(null);
+    try {
+      const r = await api.updateExtensions();
+      setUpdateMsg(!r.ok ? { good: false, text: "Couldn't check for updates. Are you online?" } : r.changed ? { good: true, text: "Updated. Your assistant uses the new versions from its next answer." } : { good: true, text: "Everything is up to date." });
+    } catch (e) {
+      setUpdateMsg({ good: false, text: (e as Error).message });
+    } finally {
+      setChecking(false);
+    }
+  };
   const load = () => api.extensions().then(setList).catch((e) => setError(e.message));
   useEffect(() => void load(), []);
 
@@ -425,10 +558,23 @@ function ExtensionsTab() {
         {list?.length === 0 && <p class="muted">Nothing installed yet.</p>}
         {list?.map((x) => (
           <ProviderLine key={x.source} title={x.name} note={x.builtin ? "Included with Aelvyril" : x.source}>
-            <Confirm label="Remove" confirm="Remove?" onYes={async () => { await api.removeExtension(x.source).catch((e) => setError(e.message)); load(); }} />
+            {x.builtin ? (
+              <button class="btn" disabled title="Part of how Aelvyril works">Remove</button>
+            ) : (
+              <Confirm label="Remove" confirm="Remove?" onYes={async () => { await api.removeExtension(x.source).catch((e) => setError(e.message)); load(); }} />
+            )}
           </ProviderLine>
         ))}
       </section>
+      <section class="card">
+        <h3>Updates</h3>
+        <p class="muted small">Your extensions update by themselves once a day. You can also check now.</p>
+        <div class="row">
+          <button class="btn" type="button" disabled={checking} onClick={checkUpdates}>{checking ? "Checking…" : "Check for updates"}</button>
+          {updateMsg && <span class={updateMsg.good ? "tone-success" : "tone-error"}>{updateMsg.text}</span>}
+        </div>
+      </section>
+
       <section class="card">
         <h3>Add an extension</h3>
         <form class="stack" onSubmit={add}>

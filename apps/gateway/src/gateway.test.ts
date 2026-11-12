@@ -316,6 +316,21 @@ test("a job runs on its own and its result flows back to the main conversation",
   assert.equal(gw.sup.getThread(main.id)?.title, "Stream", "the main conversation is never renamed");
 });
 
+test("tasks go on boards: related ones share one whatever the letters, a missing board is General, and a task can be moved", async () => {
+  const main = gw.sup.main();
+  const a = gw.sup.createJob(main.id, "Fetch the weather", "fetch", "Weather");
+  const b = gw.sup.createJob(main.id, "Make a weather card", "card", "  weather ");
+  const c = gw.sup.createJob(main.id, "Something else", "else");
+  assert.equal(a.board, "Weather");
+  assert.equal(b.board, "Weather", "the same board, not a second one in other letters");
+  assert.equal(c.board, "General");
+  assert.deepEqual(gw.sup.boards().sort(), ["General", "Weather"]);
+  const moved = await call(`/api/threads/${c.id}`, { method: "PATCH", json: { board: "Trips" } });
+  assert.deepEqual(await moved.json(), { ok: true, board: "Trips" });
+  assert.equal((await (await call("/api/threads")).json()).find((t: any) => t.id === c.id).board, "Trips", "the list says which board");
+  for (const j of [a, b, c]) await until(() => gw.sup.getThread(j.id)?.state !== "working");
+});
+
 test("a job that waits for a yes shows as needs-you on its card, then goes back to working", async () => {
   const main = gw.sup.main();
   const job = gw.sup.createJob(main.id, "Rename photos", "/ask");

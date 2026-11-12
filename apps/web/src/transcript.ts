@@ -21,6 +21,8 @@ export type Item =
   | { kind: "user"; key: string; text: string; at?: number }
   | { kind: "assistant"; key: string; text: string; at?: number }
   | { kind: "tool"; key: string; name: string; args: unknown; output: string; isError: boolean; done: boolean }
+  /** Not shown: marks where the gateway handed a finished task's result to the main conversation, so the reply that follows can be filed under that task. */
+  | { kind: "handoff"; key: string; title: string }
   | { kind: "job"; key: string; jobId: string; title: string; state: JobState; preview: string }
   | { kind: "panel"; key: string; panel: Panel }
   | { kind: "notice"; key: string; text: string; level: "info" | "warning" | "error" }
@@ -66,6 +68,9 @@ export function buildTranscript(events: Ev[]): Transcript {
       case "agent_settled":
         running = false;
         break;
+      case "aelvyril_cleared":
+        items.push({ kind: "notice", key, text: "Fresh start: the assistant saved what matters to memory and cleared this conversation.", level: "info" });
+        break;
       case "message_end": {
         const m = e.message ?? {};
         // When it was said, for day separators (only set when the message carries a time).
@@ -73,7 +78,8 @@ export function buildTranscript(events: Ev[]): Transcript {
         if (m.role === "user") {
           const t = text(m.content);
           if (t.startsWith(RETRY_MARKER)) items.push({ kind: "notice", key, text: "Trying again.", level: "info" });
-          else if (!t.startsWith(JOB_MARKER)) items.push({ kind: "user", key, text: t, ...at });
+          else if (t.startsWith(JOB_MARKER)) items.push({ kind: "handoff", key, title: /The task "(.*?)" /.exec(t)?.[1] ?? "" });
+          else items.push({ kind: "user", key, text: t, ...at });
         }
         else if (m.role === "assistant") {
           const t = text(m.content);
@@ -138,7 +144,12 @@ export function buildTranscript(events: Ev[]): Transcript {
         if (e.method === "notify" && /^Ponytail loaded/i.test(String(e.message ?? ""))) {
           // an extension's startup confirmation: useful to a developer, noise for everyone else
         } else if (e.method === "notify") items.push({ kind: "notice", key, text: String(e.message ?? ""), level: e.notifyType === "error" ? "error" : e.notifyType === "warning" ? "warning" : "info" });
-        else if (e.method === "setStatus") e.statusText ? (status[e.statusKey] = e.statusText) : delete status[e.statusKey];
+        else if (e.method === "setStatus") {
+          // Terminal colour codes mean nothing here, and Ponytail's own badge is Aelvyril's business, not the person's.
+          const text = String(e.statusText ?? "").replace(/\x1B\[[0-9;]*m/g, "").trim();
+          if (text && !/ponytail/i.test(`${e.statusKey} ${text}`)) status[e.statusKey] = text;
+          else delete status[e.statusKey];
+        }
         else if (e.method === "setWidget") e.widgetLines?.length ? (widgets[e.widgetKey] = e.widgetLines) : delete widgets[e.widgetKey];
         else if (["select", "confirm", "input", "editor"].includes(e.method)) {
           const d = { kind: "dialog" as const, key, id: e.id, method: e.method, title: e.title ?? "", message: e.message, options: e.options, placeholder: e.placeholder, state: "pending" as DialogState };

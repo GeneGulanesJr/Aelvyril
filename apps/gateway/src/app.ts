@@ -366,6 +366,13 @@ export function createApp(deps: { cfg: Config; auth: Auth; sup: Supervisor; prov
     providers.setDefaultModel(b.provider, b.modelId);
     return c.json({ ok: true });
   });
+  // The AI tasks use; empty provider and model = the same as chats.
+  app.put("/api/task-model", async (c) => {
+    const b = await body(c);
+    if (typeof b.provider !== "string" || typeof b.modelId !== "string") return c.json({ error: "bad request" }, 400);
+    providers.setTaskModel(b.provider, b.modelId);
+    return c.json({ ok: true });
+  });
 
   app.post("/api/providers/:id/logout", async (c) => {
     try {

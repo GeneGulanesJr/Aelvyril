@@ -222,6 +222,8 @@ export class Supervisor {
   /** Starts a background job for the main conversation. Returns at once; the job runs on its own. */
   /** Set by the gateway: whether a coding project exists (a task can only be sent into a real one). */
   projectExists: (id: string) => boolean = () => false;
+  /** Set by the gateway: the AI tasks use, or null for the same as chats. */
+  taskModel: () => { provider: string; modelId: string } | null = () => null;
 
   createJob(parentId: string, title: string, task: string, board = "", project = ""): Thread {
     const parent = this.getThread(parentId);
@@ -405,12 +407,15 @@ export class Supervisor {
     const isMain = row?.kind === "main";
     const isJob = row?.kind === "job";
     const project = isJob ? row?.project ?? "" : "";
+    // a start flag, so it holds before the first prompt and wins over the model a resumed session remembers
+    const tm = isJob ? this.taskModel() : null;
     // ponytail stays on for sandboxed tasks too (it's the one installed package they keep)
     const ponytail = join(this.cfg.piHome, "git/github.com/DietrichGebert/ponytail/pi-extension/index.js");
     const host: PiHost = this.spawn(
       join(this.cfg.workspacesDir, threadId),
       [
         ...session,
+        ...(tm ? ["--provider", tm.provider, "--model", tm.modelId] : []),
         // Every thread knows its name and what the app is (survives pi updates: it uses pi's extension hook, not its prompt text).
         "-e", this.cfg.identityExtension,
         // The main conversation talks and delegates: it gets start_job and no file/shell tools.

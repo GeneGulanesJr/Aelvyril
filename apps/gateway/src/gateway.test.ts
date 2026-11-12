@@ -536,3 +536,22 @@ test("send-back: a failed, stopped, waiting or working task is refused", async (
   assert.match((await (await sendBack(busy.id, main.id)).json()).error, /still working/);
   await gw.sup.abort(busy.id);
 });
+
+test("the AI for tasks: a task's pi starts with it, chats keep the default, and unset means the same as chats", async () => {
+  const main = gw.sup.main();
+  const modelOf = async (id: string) => (await gw.sup.ensureHost(id).call({ type: "get_state" })).data.model;
+  assert.equal((await (await call("/api/providers")).json()).taskModel, null);
+  assert.equal((await call("/api/task-model", { method: "PUT", json: { provider: "anthropic" } })).status, 400);
+  assert.equal((await call("/api/task-model", { method: "PUT", json: { provider: "openrouter", modelId: "vendor/big-1" } })).status, 200);
+  assert.deepEqual((await (await call("/api/providers")).json()).taskModel, { provider: "openrouter", modelId: "vendor/big-1" });
+  const job = gw.sup.createJob(main.id, "Uses the task AI", "/outcome-done ok");
+  await until(() => stateOf(job.id).state === "done");
+  assert.deepEqual(await modelOf(job.id), { provider: "openrouter", id: "vendor/big-1" }, "given at start, before the first prompt");
+  assert.equal(await modelOf(gw.sup.createThread().id), null, "a chat keeps the default");
+  assert.equal((await call("/api/task-model", { method: "PUT", json: { provider: "", modelId: "" } })).status, 200);
+  assert.equal((await (await call("/api/providers")).json()).taskModel, null);
+  assert.deepEqual((await (await call("/api/providers")).json()).defaultModel, { provider: "anthropic", modelId: "claude-x" }, "the default is untouched");
+  const plain = gw.sup.createJob(main.id, "Same as chats", "/outcome-done ok");
+  await until(() => stateOf(plain.id).state === "done");
+  assert.equal(await modelOf(plain.id), null, "unset: the task uses the default like chats");
+});

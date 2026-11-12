@@ -31,7 +31,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   const reply = (data) => out({ id: m.id, type: "response", command: m.type, success: true, data });
   switch (m.type) {
     case "get_state":
-      return reply({ sessionFile: null, sessionId: "fake", messageCount: said });
+      return reply({ sessionFile: null, sessionId: "fake", messageCount: said, model: process.argv.includes("--model") ? { provider: process.argv[process.argv.indexOf("--provider") + 1], id: process.argv[process.argv.indexOf("--model") + 1] } : null });
     case "new_session":
       said = 0;
       return reply({ cancelled: false });

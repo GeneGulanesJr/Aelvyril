@@ -4,31 +4,19 @@ import type { ThreadRow } from "./api.ts";
 import { buildTranscript, type Ev } from "./transcript.ts";
 import {
   announcements,
+  arrange,
+  settle,
   cardStatus,
-  clip,
   dayLabel,
-  defaultOrder,
   dragOffset,
-  dropTarget,
-  gesture,
   groupTasks,
   isUnlocked,
   isView,
-  mergeOrder,
-  moveBy,
-  movedMessage,
-  moveTo,
-  needsYouFirst,
   neighbour,
-  pruneCollapsed,
-  readBoardPrefs,
-  sameOrder,
-  skippedLabel,
-  STREAM_TILE,
-  toggleCollapsed,
-  validPanels,
   VIEWS,
   plainPreview,
+  projects,
+  stepWords,
   swipeAxis,
   swipeResult,
   waitingOnYou,
@@ -130,9 +118,7 @@ test("swipe: decide the axis, then whether it moves a view", () => {
 
   assert.equal(neighbour("stream", 1), "inbox");
   assert.equal(neighbour("stream", -1), null);
-  assert.equal(neighbour("quick", 1), "board", "Board sits after Quick");
-  assert.equal(neighbour("board", -1), "quick");
-  assert.equal(neighbour("board", 1), null, "nothing after the Board");
+  assert.equal(neighbour("inbox", 1), null, "nothing after Tasks (Quick is the pop-up, not a screen)");
 });
 
 test("status: the newer list wins over the card; announcements are polite one-liners", () => {
@@ -147,114 +133,52 @@ test("status: the newer list wins over the card; announcements are polite one-li
   assert.deepEqual(announcements(b, [row({ id: "1", title: "Rename photos", status: "failed" })]), ["Rename photos couldn't finish"]);
 });
 
-// ---------------------------------------------------------------- board
-type T = { id: string; status: ThreadRow["status"]; updated_at: number };
-const task = (id: string, status: T["status"], updated_at: number): T => ({ id, status, updated_at });
-
-test("views: Stream | Inbox | Quick | Board, in that order", () => {
-  assert.deepEqual(VIEWS.map((v) => v.label), ["Stream", "Inbox", "Quick", "Board"]);
-  assert.equal(isView("board"), true);
-  assert.equal(isView("pinboard"), false);
+test("views: Stream | Tasks; the old Board and the Quick screen are gone", () => {
+  assert.deepEqual(VIEWS.map((v) => v.label), ["Stream", "Tasks"]);
+  assert.equal(isView("quick"), false, "a remembered Quick screen falls back to the Stream");
+  assert.equal(isView("inbox"), true, "Tasks keeps the Inbox id, so a remembered view still opens");
+  assert.equal(isView("board"), false, "a remembered Board falls back to the Stream");
 });
 
-test("board order: the Stream first, needs-you next (longest wait first), then newest", () => {
-  const tasks = [task("a", "done", 5), task("b", "needs_you", 9), task("c", "working", 7), task("d", "needs_you", 2), task("e", "failed", 1)];
-  assert.deepEqual(needsYouFirst(tasks).map((t) => t.id), ["d", "b", "c", "a", "e"]);
-  assert.deepEqual(defaultOrder(tasks), [STREAM_TILE, "d", "b", "c", "a", "e"]);
-  assert.deepEqual(mergeOrder(null, tasks, false), defaultOrder(tasks), "nothing shown before: the default order");
-  assert.deepEqual(mergeOrder(null, [], false), [STREAM_TILE], "no tasks: only the Stream card");
+test("steps in plain words: what was done, and the one detail that says which", () => {
+  assert.deepEqual(stepWords("bash", { command: "ls -la /tmp\necho hi" }), { what: "Ran a command", detail: "ls -la /tmp" });
+  assert.deepEqual(stepWords("write", { path: "/data/pi/extensions/weather.ts", content: "x" }), { what: "Wrote weather.ts", detail: "/data/pi/extensions/weather.ts" });
+  assert.deepEqual(stepWords("edit", {}), { what: "Edited a file", detail: "" });
+  assert.equal(stepWords("memory-save-classified", { title: "Panels" }).what, "Used its memory");
+  assert.deepEqual(stepWords("make_chart", { kind: "bar" }), { what: "make chart", detail: "bar" }, "unknown tools keep their name, readable");
+  assert.deepEqual(stepWords("bash", null), { what: "Ran a command", detail: "" }, "odd arguments never break it");
 });
 
-test("board order, not arranged: cards keep their place, new ones come in front, needs-you stays ahead", () => {
-  const shown = [STREAM_TILE, "a", "b"];
-  // a task updating does not make it jump
-  assert.deepEqual(mergeOrder(shown, [task("a", "working", 1), task("b", "done", 99)], false), [STREAM_TILE, "a", "b"]);
-  // a new task comes in at the front of the tasks
-  assert.deepEqual(mergeOrder(shown, [task("a", "working", 1), task("b", "done", 2), task("n", "working", 3)], false), [STREAM_TILE, "n", "a", "b"]);
-  // a task that starts needing you moves ahead of the rest
-  assert.deepEqual(mergeOrder(shown, [task("a", "working", 1), task("b", "needs_you", 2)], false), [STREAM_TILE, "b", "a"]);
-  // a removed task disappears
-  assert.deepEqual(mergeOrder(shown, [task("b", "done", 2)], false), [STREAM_TILE, "b"]);
-});
-
-test("board order, arranged: the person's order holds; removed go, new needs-you in front, other new at the end", () => {
-  const saved = ["a", STREAM_TILE, "b", "gone", "c"];
-  const tasks = [task("a", "done", 1), task("b", "needs_you", 2), task("c", "working", 3)];
-  assert.deepEqual(mergeOrder(saved, tasks, true), ["a", STREAM_TILE, "b", "c"], "needs-you is not pulled forward once arranged; removed tasks drop out");
-  const more = [...tasks, task("n1", "working", 9), task("n2", "needs_you", 8)];
-  assert.deepEqual(mergeOrder(["a", STREAM_TILE, "b", "c"], more, true), ["n2", "a", STREAM_TILE, "b", "c", "n1"]);
-  assert.deepEqual(mergeOrder([STREAM_TILE, "a"], [task("a", "done", 1), task("n", "needs_you", 2)], true), [STREAM_TILE, "n", "a"], "front means in front of the first task card");
-  assert.deepEqual(mergeOrder(["a", "a", "b"], [task("a", "done", 1), task("b", "done", 2)], true), [STREAM_TILE, "a", "b"], "duplicates and a lost Stream card are repaired");
-});
-
-test("moving cards: by keyboard steps, by drag to a place, and the announcement", () => {
-  const order = [STREAM_TILE, "a", "b", "c"];
-  assert.deepEqual(moveBy(order, "b", -1), [STREAM_TILE, "b", "a", "c"]);
-  assert.deepEqual(moveBy(order, "b", 1), [STREAM_TILE, "a", "c", "b"]);
-  assert.equal(moveBy(order, STREAM_TILE, -1), order, "can't move before the first place: same order back");
-  assert.equal(moveBy(order, "c", 1), order, "can't move past the last place");
-  assert.equal(moveBy(order, "zz", 1), order);
-  assert.deepEqual(moveTo(order, STREAM_TILE, 2), ["a", "b", STREAM_TILE, "c"], "dropped on a later card: takes its place");
-  assert.deepEqual(moveTo(order, "c", 1), [STREAM_TILE, "c", "a", "b"], "dropped on an earlier card: takes its place");
-  assert.equal(moveTo(order, "a", 1), order);
-  assert.equal(movedMessage("Plan my week", 1, 4), "Plan my week moved to position 2 of 4");
-  assert.equal(sameOrder(order, [...order]), true);
-  assert.equal(sameOrder(order, moveBy(order, "a", 1)), false);
-  assert.equal(sameOrder(null, order), false);
-});
-
-test("drop target: the card under the pointer, else the nearest", () => {
-  const boxes = [
-    { id: "a", left: 0, top: 0, width: 100, height: 100 },
-    { id: "b", left: 120, top: 0, width: 100, height: 300 },
-    { id: "c", left: 0, top: 120, width: 100, height: 50 },
-  ];
-  assert.equal(dropTarget(boxes, 50, 50), "a");
-  assert.equal(dropTarget(boxes, 150, 250), "b");
-  assert.equal(dropTarget(boxes, 40, 200), "c", "below the shortest column: the nearest card");
-  assert.equal(dropTarget([], 0, 0), null);
-});
-
-test("gestures: the handle drags in any direction; elsewhere a sideways touch swipes, never drags", () => {
-  assert.equal(gesture(true, true, 2, 1), "pending", "a tap on the handle is not a drag");
-  assert.equal(gesture(true, true, 30, 2), "drag", "sideways from the handle moves the card, not the view");
-  assert.equal(gesture(true, false, 0, 12), "drag");
-  assert.equal(gesture(false, true, 30, 4), "swipe");
-  assert.equal(gesture(false, true, 4, 30), "scroll");
-  assert.equal(gesture(false, true, 3, 3), "pending");
-  assert.equal(gesture(false, false, 40, 0), "none", "a mouse outside the handle does nothing special");
-});
-
-test("folding and saved preferences survive junk", () => {
-  assert.deepEqual(toggleCollapsed([], "a"), ["a"]);
-  assert.deepEqual(toggleCollapsed(["a", "b"], "a"), ["b"]);
-  assert.deepEqual(pruneCollapsed(["a", STREAM_TILE, "gone"], [STREAM_TILE, "a"]), ["a", STREAM_TILE]);
-  assert.deepEqual(readBoardPrefs(null), { order: null, collapsed: [] });
-  assert.deepEqual(readBoardPrefs("not json"), { order: null, collapsed: [] });
-  assert.deepEqual(readBoardPrefs('{"order":["a",3,"b"],"collapsed":"x"}'), { order: ["a", "b"], collapsed: [] });
-  assert.deepEqual(readBoardPrefs('{"collapsed":["a"]}'), { order: null, collapsed: ["a"] }, "folded but never arranged");
-});
-
-test("results: checked before drawing; invalid ones are counted, at most 3 shown", () => {
-  const ok = (id: string) => ({ v: 1, id, kind: "markdown", body: `result ${id}` });
-  const r = validPanels([ok("1"), { v: 1, id: "bad", kind: "table", columns: ["a"] }, ok("2"), "junk", ok("3"), ok("4")]);
-  assert.deepEqual(r.panels.map((p) => p.id), ["1", "2", "3"], "newest first, as given");
-  assert.equal(r.skipped, 2);
-  const seeded = validPanels([
-    { v: 1, id: "t", kind: "table", columns: ["Day", "Plan"], rows: [["Mon", "Gym"], ["Tue", null]] },
-    { v: 1, id: "s", kind: "status", text: "Week planned", tone: "success" },
-    { v: 1, id: "x", kind: "actions", actions: [{ label: "Redo", command: "/redo" }] },
+test("projects: tasks grouped by board, in the column of their most urgent task", () => {
+  const t = (id: string, board: string | undefined, status: ThreadRow["status"], updated_at: number, kind: ThreadRow["kind"] = "job") => row({ id, board, status, updated_at, kind });
+  const list = projects([
+    t("s", undefined, "working", 99, "main"),
+    t("w1", "Weather", "done", 5),
+    t("w2", "Weather", "working", 9),
+    t("w3", "Weather", "failed", 7),
+    t("g1", undefined, "done", 3),
+    t("x1", "Trips", "needs_you", 1),
+    t("c1", undefined, "done", 2, "chat"),
   ]);
-  assert.deepEqual(seeded.panels.map((p) => p.kind), ["table", "status", "actions"]);
-  assert.equal(seeded.skipped, 0);
-  assert.deepEqual(validPanels(undefined as unknown as unknown[]), { panels: [], skipped: 0 });
-  assert.equal(skippedLabel(0), "");
-  assert.equal(skippedLabel(1), "1 result could not be shown");
-  assert.equal(skippedLabel(3), "3 results could not be shown");
+  assert.deepEqual(list.map((p) => [p.name, p.column, p.tasks.map((x) => x.id)]), [
+    ["Trips", "needs", ["x1"]],
+    ["Weather", "working", ["w2", "w3", "w1"]],
+    ["General", "done", ["g1"]],
+    ["Older chats", "done", ["c1"]],
+  ], "needs-you projects first, then working, then done (newest first); the Stream is never a project");
+  assert.deepEqual(projects([]), []);
 });
 
-test("clip: short text stays, long text ends at a word with an ellipsis", () => {
-  assert.equal(clip("  hello  ", 10), "hello");
-  assert.equal(clip("the quick brown fox jumps", 15), "the quick brown\u2026");
-  assert.equal(clip("supercalifragilistic", 5), "super\u2026");
+test("home board: the moved tile keeps its spot, what it would cover moves down, everything stays in the grid, new tiles fill the first free place", () => {
+  const a = { id: "a", x: 0, y: 0, w: 6, h: 2 }, b = { id: "b", x: 6, y: 0, w: 6, h: 2 };
+  assert.deepEqual(settle([a, { ...b, x: 3 }], "b"), [{ ...a, y: 2 }, { ...b, x: 3 }]);
+  assert.deepEqual(settle([a, { ...b, x: 3 }], "a"), [a, { ...b, x: 3, y: 2 }], "whichever is moved wins");
+  assert.deepEqual(settle([{ id: "a", x: 20, y: -3, w: 30, h: 2 }]), [{ id: "a", x: 0, y: 0, w: 12, h: 2 }]);
+  const laid = arrange([{ id: "a", w: 6, h: 2 }, { id: "n", w: 3, h: 2 }, { id: "d", w: 4, h: 2, x: 0, y: 0 }], { a: { x: 0, y: 0, w: 6, h: 2 }, gone: { x: 0, y: 0, w: 1, h: 1 } });
+  assert.deepEqual(laid.map((t) => [t.id, t.x, t.y]), [["a", 0, 0], ["n", 6, 0], ["d", 0, 2]], "d's default spot is taken, so the first free place");
+  const all = [...laid];
+  for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
+    const [p, q] = [all[i], all[j]];
+    assert.ok(!(p.x < q.x + q.w && q.x < p.x + p.w && p.y < q.y + q.h && q.y < p.y + p.h), `${p.id} and ${q.id} overlap`);
+  }
 });

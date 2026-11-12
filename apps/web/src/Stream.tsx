@@ -3,7 +3,7 @@ import type { Ref } from "preact";
 import { useState } from "preact/hooks";
 import { api, type ThreadRow } from "./api.ts";
 import type { Transcript } from "./transcript.ts";
-import { Composer, useStickToBottom, Weave } from "./Thread.tsx";
+import { Composer, TaskChips, useStickToBottom, Weave } from "./Thread.tsx";
 import { greeting, SUGGESTIONS } from "./model.ts";
 
 export function Stream({
@@ -17,6 +17,7 @@ export function Stream({
   setDraft,
   inputRef,
   anyWorking,
+  assistantName,
   onOpenTask,
   onOpenSettings,
   onChanged,
@@ -31,6 +32,7 @@ export function Stream({
   setDraft(v: string): void;
   inputRef: Ref<HTMLTextAreaElement>;
   anyWorking: boolean;
+  assistantName: string;
   onOpenTask(id: string): void;
   onOpenSettings(): void;
   onChanged(): void;
@@ -59,8 +61,16 @@ export function Stream({
     }
   };
 
+  // what's working right now, so a task card never has to be scrolled to (needs-you has its own strip above)
+  const busy = [...rows.values()].filter((r) => r.kind === "job" && r.status === "working");
   return (
     <div class="stream">
+      {busy.length > 0 && (
+        <div class="stream-bar">
+          <span class="stream-bar-label">{busy.length === 1 ? "1 task working" : `${busy.length} tasks working`}</span>
+          <TaskChips list={busy} label="Tasks working now" onOpen={onOpenTask} max={2} />
+        </div>
+      )}
       <div class="scroll transcript" ref={scroller}>
         {empty && hasAI === false ? (
           <div class="hello">
@@ -79,12 +89,9 @@ export function Stream({
             </div>
           </div>
         ) : (
-          <Weave t={t} live={live} threadId={mainId ?? ""} label="Stream" rows={rows} onCommand={send} onOpenTask={onOpenTask} working={t.running || anyWorking} />
+          <Weave t={t} live={live} threadId={mainId ?? ""} label="Stream" rows={rows} assistant={assistantName} working={t.running || anyWorking} log onCommand={send} onOpenTask={onOpenTask} />
         )}
       </div>
-      {Object.keys(t.status).length > 0 && (
-        <div class="statusline">{Object.values(t.status).map((s) => <span class="chip">{s}</span>)}</div>
-      )}
       {error && <div class="notice error bar-notice">{error} <button class="link" onClick={() => setError("")}>dismiss</button></div>}
       <Composer
         label="Message"

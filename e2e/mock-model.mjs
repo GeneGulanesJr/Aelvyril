@@ -6,6 +6,8 @@
 //   "... do-job:<scenario> ..."        -> calls start_job with the task "scenario:<scenario>" (default "done")
 //   after the tool result              -> "Started it, ask me anything else."
 //   a finished-task hand-off message   -> "Your job finished: job-ok."
+//   "... do-screen ..."                -> calls get_screen
+//   "... do-design ..."                -> calls change_design (colours and layout)
 //   anything else                      -> "Hello from mock"
 // A background task (it has the finish_task tool); the scenario is read from "scenario:<name>" in the conversation:
 //   done      -> finish_task(done, verified), then "job-ok"
@@ -19,7 +21,7 @@
 //   hang      -> never answers (the gateway's stall watchdog must step in)
 import http from "node:http";
 
-const stats = { requests: 0, byScenario: {}, finishTaskCalls: {}, nudgesSeen: {}, ponytail: [] };
+const stats = { lastToolResult: "", mainSystem: "", requests: 0, byScenario: {}, finishTaskCalls: {}, nudgesSeen: {}, ponytail: [] };
 const send = (res, chunks) => {
   res.writeHead(200, { "content-type": "text/event-stream" });
   for (const c of chunks) res.write(`data: ${JSON.stringify({ id: "x", object: "chat.completion.chunk", model: "spike-1", ...c })}\n\n`);
@@ -52,6 +54,8 @@ http
       // does ponytail's instruction block reach the model, and at which level? (checked by the Docker test)
       const pony = (msgs.filter((m) => m.role === "system").map(flat).join("\n").match(/PONYTAIL MODE ACTIVE[^\n]{0,60}/i) || [])[0];
       if (pony && !stats.ponytail.includes(pony)) stats.ponytail.push(pony);
+      // what the main conversation (the one with start_job) was told, for the identity checks
+      if (tools.includes("start_job")) stats.mainSystem = msgs.filter((m) => m.role === "system").map(flat).join("\n");
 
       if (tools.includes("finish_task")) {
         const scenario = (all.match(/scenario:(\w+)/) || [])[1] || "done";
@@ -99,7 +103,12 @@ http
         const scenario = (lastText.match(/do-job:(\w+)/) || [])[1] || "done";
         return send(res, call("start_job", { title: "Test job", task: `scenario:${scenario} say job-ok` }));
       }
-      if (last.role === "tool") return send(res, text("Started it, ask me anything else."));
+      if (tools.includes("get_screen") && last.role === "user" && lastText.includes("do-screen")) return send(res, call("get_screen", {}));
+      if (tools.includes("change_design") && last.role === "user" && lastText.includes("do-design")) return send(res, call("change_design", { accent: "#1f8a5b", orb: "#ff8800", home: "grid", mascot: "large", width: "wide", scale: 110 }));
+      if (last.role === "tool") {
+        stats.lastToolResult = lastText; // what the last tool told the model, for the get_screen check
+        return send(res, text("Started it, ask me anything else."));
+      }
       if (lastText.includes("[aelvyril:job-result]")) return send(res, text("Your job finished: job-ok."));
       if (lastText.includes("say job-ok")) return send(res, text("job-ok"));
       return send(res, text("Hello from mock"));

@@ -1,5 +1,4 @@
-// Pure decisions behind the Stream / Inbox / Quick / Board shell. No DOM, so node:test can import it.
-import { parsePanel, type Panel } from "@aelvyril/ui-schema";
+// Pure decisions behind the Stream / Tasks shell (Quick is the Ctrl/Cmd+K pop-up). No DOM, so node:test can import it.
 import type { ThreadRow } from "./api.ts";
 import type { Item, JobState } from "./transcript.ts";
 
@@ -7,9 +6,7 @@ import type { Item, JobState } from "./transcript.ts";
 /** The switcher, the swipe and the view panels all read this list: a further view is one more entry. */
 export const VIEWS = [
   { id: "stream", label: "Stream" },
-  { id: "inbox", label: "Inbox" },
-  { id: "quick", label: "Quick" },
-  { id: "board", label: "Board" },
+  { id: "inbox", label: "Tasks" },
 ] as const;
 export type ViewId = (typeof VIEWS)[number]["id"];
 
@@ -55,6 +52,41 @@ export function groupTasks(threads: ThreadRow[], doneLimit = 20): Groups {
   }
   g.done = g.done.slice(0, doneLimit);
   return g;
+}
+
+// ---------------------------------------------------------------- projects (the Tasks kanban)
+export const COLUMNS = [
+  { key: "needs", title: "Needs you" },
+  { key: "working", title: "Working" },
+  { key: "done", title: "Done" },
+] as const;
+export type Column = (typeof COLUMNS)[number]["key"];
+
+/** The kanban column for a status: needs you, working, or done (finished, failed and stopped alike). */
+export const columnOf = (s: ThreadRow["status"]): Column => (s === "needs_you" ? "needs" : s === "working" ? "working" : "done");
+
+export interface Project {
+  name: string;
+  /** Newest first. */
+  tasks: ThreadRow[];
+  /** The column of its most urgent task. */
+  column: Column;
+}
+
+/** Tasks grouped by their board, as projects: most urgent first, then the most recently busy. Older chats are one project of their own. */
+export function projects(threads: ThreadRow[]): Project[] {
+  const by = new Map<string, ThreadRow[]>();
+  for (const t of [...threads].sort((a, b) => b.updated_at - a.updated_at)) {
+    if (t.kind === "main") continue;
+    const name = t.kind === "chat" ? "Older chats" : t.board?.trim() || "General";
+    by.set(name, [...(by.get(name) ?? []), t]);
+  }
+  const rank = { needs: 0, working: 1, done: 2 } as const;
+  return [...by].map(([name, tasks]) => {
+    const cols = tasks.map((t) => columnOf(t.status));
+    const column: Column = cols.includes("needs") ? "needs" : cols.includes("working") ? "working" : "done";
+    return { name, tasks, column };
+  }).sort((a, b) => rank[a.column] - rank[b.column] || b.tasks[0].updated_at - a.tasks[0].updated_at);
 }
 
 /** Tasks and chats waiting on the person, oldest first so the longest wait is named first. */
@@ -178,149 +210,22 @@ export function swipeResult(dx: number, width: number, ms: number, canPrev: bool
 /** Drag offset shown under the finger; pulls with resistance at an end so it can't be dragged away. */
 export const dragOffset = (dx: number, canPrev: boolean, canNext: boolean) => ((dx > 0 && !canPrev) || (dx < 0 && !canNext) ? dx / 4 : dx);
 
-export type Gesture = "pending" | "drag" | "swipe" | "scroll" | "none";
-
-/**
- * Who owns a pointer on the Board. A card's drag handle always moves the card, in any direction
- * (4px of travel first, so a tap stays a tap). Anywhere else a touch that goes sideways swipes
- * between views and one that goes down scrolls; a mouse outside the handle does neither.
- * The two never mix: the handle is marked so the view swipe never starts there.
- */
-export function gesture(fromHandle: boolean, touch: boolean, dx: number, dy: number): Gesture {
-  if (fromHandle) return Math.hypot(dx, dy) < 4 ? "pending" : "drag";
-  if (!touch) return "none";
-  const axis = swipeAxis(dx, dy);
-  return axis === "pending" ? "pending" : axis === "x" ? "swipe" : "scroll";
-}
-
-// ---------------------------------------------------------------- board
-/** The Stream's own card on the Board. Task cards use the task id. */
-export const STREAM_TILE = "stream";
-
-export type BoardTask = { id: string; status: Status; updated_at: number };
-
-/** Needs-you first (longest wait first), then everything else newest first. */
-export function needsYouFirst<T extends BoardTask>(tasks: T[]): T[] {
-  const needs = tasks.filter((t) => t.status === "needs_you").sort((a, b) => a.updated_at - b.updated_at);
-  const rest = tasks.filter((t) => t.status !== "needs_you").sort((a, b) => b.updated_at - a.updated_at);
-  return [...needs, ...rest];
-}
-
-/** The order before anyone arranged anything: the Stream, then needs-you, then newest. */
-export const defaultOrder = (tasks: BoardTask[]) => [STREAM_TILE, ...needsYouFirst(tasks).map((t) => t.id)];
-
-/** Puts ids in front of the first task card (the Stream card keeps its place). */
-function atTaskFront(order: string[], ids: string[]): string[] {
-  if (!ids.length) return order;
-  const i = order.findIndex((id) => id !== STREAM_TILE);
-  const at = i < 0 ? order.length : i;
-  return [...order.slice(0, at), ...ids, ...order.slice(at)];
-}
-
-/**
- * The order to show, given the order shown before (or saved) and the tasks there are now.
- * Removed tasks drop out; the Stream card is always there.
- * Not arranged yet: new tasks come in at the front, and needs-you cards stay ahead of the rest.
- * Arranged by the person: their order holds. New needs-you tasks still come in at the front,
- * other new tasks go to the end, so nothing they placed moves under them.
- */
-export function mergeOrder(prev: string[] | null, tasks: BoardTask[], arranged: boolean): string[] {
-  if (!prev) return defaultOrder(tasks);
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  const kept = prev.filter((id, i) => (id === STREAM_TILE || byId.has(id)) && prev.indexOf(id) === i);
-  if (!kept.includes(STREAM_TILE)) kept.unshift(STREAM_TILE);
-  const known = new Set(kept);
-  const fresh = needsYouFirst(tasks.filter((t) => !known.has(t.id)));
-  if (arranged) {
-    const front = fresh.filter((t) => t.status === "needs_you").map((t) => t.id);
-    const back = fresh.filter((t) => t.status !== "needs_you").map((t) => t.id);
-    return [...atTaskFront(kept, front), ...back];
-  }
-  const order = atTaskFront(kept, fresh.map((t) => t.id));
-  const needs = order.filter((id) => byId.get(id)?.status === "needs_you");
-  const rest = order.filter((id) => id !== STREAM_TILE && byId.get(id)?.status !== "needs_you");
-  return [STREAM_TILE, ...needs, ...rest];
-}
-
-/** Moves one card by `delta` places (keyboard buttons). Same array back when it can't move. */
-export function moveBy(order: string[], id: string, delta: number): string[] {
-  const i = order.indexOf(id);
-  if (i < 0) return order;
-  return moveTo(order, id, Math.max(0, Math.min(order.length - 1, i + delta)));
-}
-
-/** Moves one card to `index`; the card it lands on shifts over (drag and drop). */
-export function moveTo(order: string[], id: string, index: number): string[] {
-  const i = order.indexOf(id);
-  if (i < 0 || i === index || index < 0 || index >= order.length) return order;
-  const next = order.filter((x) => x !== id);
-  next.splice(index, 0, id);
-  return next;
-}
-
-/** What the screen reader hears after a move. */
-export const movedMessage = (name: string, index: number, total: number) => `${name} moved to position ${index + 1} of ${total}`;
-
-export const sameOrder = (a: string[] | null, b: string[] | null) => !!a && !!b && a.length === b.length && a.every((x, i) => x === b[i]);
-
-/** A card's place on screen, for drag and drop. */
-export type Box = { id: string; left: number; top: number; width: number; height: number };
-
-/** The card a dragged card would land on: the one under the pointer, else the nearest one. */
-export function dropTarget(boxes: Box[], x: number, y: number): string | null {
-  let best: string | null = null;
-  let bestD = Infinity;
-  for (const b of boxes) {
-    const cx = Math.max(b.left, Math.min(x, b.left + b.width));
-    const cy = Math.max(b.top, Math.min(y, b.top + b.height));
-    const d = Math.hypot(x - cx, y - cy);
-    if (d < bestD) (bestD = d), (best = b.id);
-  }
-  return best;
-}
-
-export type BoardPrefs = { order: string[] | null; collapsed: string[] };
-
-/** Reads what was saved in this browser; anything odd counts as nothing saved. */
-export function readBoardPrefs(raw: string | null): BoardPrefs {
-  const none: BoardPrefs = { order: null, collapsed: [] };
-  if (!raw) return none;
-  try {
-    const v = JSON.parse(raw) as Partial<BoardPrefs>;
-    const strings = (a: unknown) => (Array.isArray(a) ? a.filter((x): x is string => typeof x === "string") : null);
-    return { order: strings(v?.order), collapsed: strings(v?.collapsed) ?? [] };
-  } catch {
-    return none;
-  }
-}
-
-/** Folds a card to its title bar, or opens it again. */
-export const toggleCollapsed = (collapsed: string[], id: string) => (collapsed.includes(id) ? collapsed.filter((x) => x !== id) : [...collapsed, id]);
-
-/** Forgets folded cards whose task is gone. */
-export const pruneCollapsed = (collapsed: string[], ids: string[]) => collapsed.filter((id) => ids.includes(id));
-
-/** The results a task produced, checked before drawing. Invalid ones are counted, not shown. */
-export function validPanels(raw: unknown[], max = 3): { panels: Panel[]; skipped: number } {
-  const panels: Panel[] = [];
-  let skipped = 0;
-  for (const p of Array.isArray(raw) ? raw : []) {
-    const r = parsePanel(p);
-    if (r.ok) panels.push(r.panel);
-    else skipped++;
-  }
-  return { panels: panels.slice(0, max), skipped };
-}
-
-export const skippedLabel = (n: number) => (n <= 0 ? "" : n === 1 ? "1 result could not be shown" : `${n} results could not be shown`);
-
-/** Shortens text at a word, with an ellipsis. */
-export function clip(text: string, max: number): string {
-  const s = text.trim();
-  if (s.length <= max) return s;
-  const cut = s.slice(0, max);
-  const at = cut.lastIndexOf(" ");
-  return `${(at > max * 0.6 ? cut.slice(0, at) : cut).replace(/[\s,.;:!?-]+$/, "")}…`;
+// ---------------------------------------------------------------- steps
+/** A step in plain words ("Ran a command", "Wrote weather.ts") and the one detail that says which. */
+export function stepWords(name: string, args: unknown): { what: string; detail: string } {
+  const a = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const file = str(a.path) || str(a.file_path) || str(a.file);
+  const base = file.split("/").filter(Boolean).pop() ?? "";
+  const n = name.toLowerCase();
+  if (n === "bash" || n === "shell") return { what: "Ran a command", detail: str(a.command).split("\n")[0] };
+  if (n === "write") return { what: base ? `Wrote ${base}` : "Wrote a file", detail: file };
+  if (n === "edit") return { what: base ? `Edited ${base}` : "Edited a file", detail: file };
+  if (n === "read") return { what: base ? `Read ${base}` : "Read a file", detail: file };
+  if (n === "grep" || n === "find" || n === "ls" || n === "glob") return { what: "Looked through files", detail: str(a.pattern) || str(a.path) };
+  if (n.includes("fetch") || n.includes("web") || n.includes("search")) return { what: "Looked something up", detail: str(a.url) || str(a.query) };
+  if (n.startsWith("memory")) return { what: "Used its memory", detail: str(a.title) || str(a.query) };
+  return { what: name.replace(/[-_]/g, " "), detail: Object.values(a).map((v) => (typeof v === "string" ? v : "")).find(Boolean) ?? "" };
 }
 
 // ---------------------------------------------------------------- greeting
@@ -332,3 +237,40 @@ export function greeting(hour: number): string {
 }
 
 export const SUGGESTIONS = ["Summarize something for me", "Help me plan my week", "Draft an email", "Explain something simply"];
+
+// ---------------------------------------------------------------- the home board: tiles on a 12-column grid
+export const GRID_COLS = 12;
+export interface Tile { id: string; x: number; y: number; w: number; h: number }
+export type Layout = Record<string, Omit<Tile, "id">>;
+const overlaps = (a: Tile, b: Tile) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+const fit = (t: Tile): Tile => {
+  const w = Math.min(GRID_COLS, Math.max(1, Math.round(t.w)));
+  return { id: t.id, w, h: Math.max(1, Math.round(t.h)), x: Math.min(GRID_COLS - w, Math.max(0, Math.round(t.x))), y: Math.max(0, Math.round(t.y)) };
+};
+
+/** Lays tiles out so none overlap, inside the grid. `first` (the one being moved) keeps its spot; the others keep theirs
+    where they can and move down where they can't. Same order out as in. */
+export function settle(tiles: Tile[], first?: string): Tile[] {
+  const order = tiles.map(fit).sort((a, b) => (a.id === first ? -1 : b.id === first ? 1 : a.y - b.y || a.x - b.x));
+  const placed: Tile[] = [];
+  for (let t of order) {
+    while (placed.some((p) => overlaps(p, t))) t = { ...t, y: t.y + 1 };
+    placed.push(t);
+  }
+  return tiles.map((t) => placed.find((p) => p.id === t.id)!);
+}
+
+/** Where every item goes: its saved spot, else its default spot if free, else the first free place (top to bottom, left to right). */
+export function arrange(items: { id: string; w: number; h: number; x?: number; y?: number }[], saved: Layout): Tile[] {
+  const out = settle(items.filter((i) => saved[i.id]).map((i) => ({ id: i.id, ...saved[i.id] })));
+  const free = (c: Tile) => !out.some((p) => overlaps(p, c));
+  for (const i of items) {
+    if (saved[i.id]) continue;
+    const w = Math.min(GRID_COLS, i.w);
+    let spot: Tile | undefined = i.x !== undefined && i.y !== undefined ? fit({ id: i.id, x: i.x, y: i.y, w, h: i.h }) : undefined;
+    if (spot && !free(spot)) spot = undefined;
+    for (let y = 0; !spot; y++) for (let x = 0; x + w <= GRID_COLS && !spot; x++) if (free({ id: i.id, x, y, w, h: i.h })) spot = { id: i.id, x, y, w, h: i.h };
+    out.push(spot);
+  }
+  return items.map((i) => out.find((t) => t.id === i.id)!);
+}

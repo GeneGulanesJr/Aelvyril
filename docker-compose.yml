@@ -9,8 +9,44 @@ services:
     volumes:
       - aelvyril-data:/data # your chats, accounts and settings
     environment:
-      AELVYRIL_OPEN_SETUP: "1" # no setup code: safe because the port above is local-only
+      AELVYRIL_ORIGINS: https://app.aelvyril.com # the tunnel hands the app plain http, so trust the public https origin
+      AELVYRIL_SETUP_CODE: ${AELVYRIL_SETUP_CODE:?set it in .env} # first sign-up needs this code (the app is public via the tunnel)
+      AELVYRIL_GITHUB_CLIENT_ID: ${AELVYRIL_GITHUB_CLIENT_ID:-} # the GitHub App (shared with Aurex); empty = no GitHub
+      AELVYRIL_GITHUB_CLIENT_SECRET: ${AELVYRIL_GITHUB_CLIENT_SECRET:-}
+      AELVYRIL_SANDBOXD_URL: http://sandboxd:7400 # coding projects run in their own containers, made by sandboxd
+      AELVYRIL_SANDBOXD_TOKEN: ${SANDBOXD_TOKEN:-}
     extra_hosts:
       - "host.docker.internal:host-gateway" # lets Aelvyril reach LM Studio / Ollama on this computer
+  # The only service with the Docker socket: one locked-down container per coding project (2 CPUs, 2 GB, no privileges,
+  # no host folders, internet but not this computer). Aelvyril itself never gets the socket.
+  sandboxd:
+    build: { context: ., dockerfile: docker/sandboxd.Dockerfile }
+    image: aelvyril-sandboxd
+    restart: unless-stopped
+    environment:
+      SANDBOXD_TOKEN: ${SANDBOXD_TOKEN:?set it in .env}
+      SANDBOX_IMAGE: aelvyril-sandbox
+      SANDBOX_NETWORK: aelvyril-sandbox
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [default, sandbox]
+  # The image every project sandbox starts from: docker compose --profile build build sandbox-image
+  sandbox-image:
+    build: { context: ., dockerfile: docker/sandbox.Dockerfile }
+    image: aelvyril-sandbox
+    profiles: [build]
+  # Public https://app.aelvyril.com -> http://aelvyril:3000, behind Cloudflare Access (owner email only).
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set it in .env}
+    depends_on:
+      - aelvyril
 volumes:
   aelvyril-data:
+networks:
+  # where project sandboxes live: they can reach the internet and sandboxd's preview, nothing of Aelvyril's
+  sandbox:
+    name: aelvyril-sandbox

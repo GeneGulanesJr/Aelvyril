@@ -8,10 +8,10 @@ if [ ! -f "$home/settings.json" ]; then
   echo '{ "defaultTools": ["+codemode", "+tool_search"] }' > "$home/settings.json"
 fi
 
-# Ponytail's default level is "full"; write that down once, in the data volume, so the person can change it later.
+# Ponytail always runs at "full" and is hidden from the Extensions list, so nothing in the UI can change it: write it on every start.
 cfg="${XDG_CONFIG_HOME:-/data/config}/ponytail"
 mkdir -p "$cfg"
-[ -f "$cfg/config.json" ] || echo '{ "defaultMode": "full" }' > "$cfg/config.json"
+echo '{ "defaultMode": "full" }' > "$cfg/config.json"
 
 : "${AELVYRIL_EXTENSIONS:=git:github.com/GeneGulanesJr/LaPis git:github.com/GeneGulanesJr/PiSubagent git:github.com/DietrichGebert/ponytail}"
 for pkg in $AELVYRIL_EXTENSIONS; do

@@ -1,3 +1,17 @@
+import type { Design } from "./design.ts";
+import type { ScreenReport } from "./screen.ts";
+import type { Panel } from "@aelvyril/ui-schema";
+
+/** A card on the home screen the assistant set up (GET /api/widgets). `every`: minutes between reads, when it reads an address. */
+export interface WidgetRow {
+  id: string;
+  title: string;
+  panel: Panel;
+  updated_at: number;
+  error?: string;
+  every?: number;
+}
+
 export interface ThreadRow {
   id: string;
   title: string;
@@ -11,6 +25,8 @@ export interface ThreadRow {
   status: "needs_you" | "working" | "done" | "failed" | "stopped";
   /** One line from the latest answer. */
   preview: string;
+  /** Tasks only: the project (board) it belongs to. */
+  board?: string;
 }
 export interface ModelRow {
   provider: string;
@@ -32,11 +48,6 @@ export interface CustomProvider {
   api: string;
   models: { id: string; name?: string }[];
   hasKey: boolean;
-}
-/** What GET /api/board returns: the Stream's latest exchange, and every task with its newest results (raw panel payloads, newest first, at most 3; validate with parsePanel from @aelvyril/ui-schema before drawing). */
-export interface BoardState {
-  main: { id: string; lastUser: string; lastAssistant: string };
-  tasks: { id: string; title: string; status: ThreadRow["status"]; preview: string; updated_at: number; running: boolean; panels: unknown[] }[];
 }
 export interface ProvidersState {
   providers: ProviderRow[];
@@ -82,10 +93,10 @@ export const api = {
   signIn: (email: string, password: string) => req("POST", "/api/auth/sign-in/email", { email, password }),
   signOut: () => req("POST", "/api/auth/sign-out", {}),
   main: () => req<ThreadRow>("GET", "/api/main"),
-  board: () => req<BoardState>("GET", "/api/board"),
   threads: () => req<ThreadRow[]>("GET", "/api/threads"),
   createThread: () => req<ThreadRow>("POST", "/api/threads", {}),
   deleteThread: (id: string) => req("DELETE", `/api/threads/${id}`),
+  moveTask: (id: string, board: string) => req<{ board: string }>("PATCH", `/api/threads/${id}`, { board }),
   prompt: (id: string, message: string) => req("POST", `/api/threads/${id}/prompt`, { message }),
   retry: (id: string) => req("POST", `/api/threads/${id}/retry`, {}),
   abort: (id: string) => req("POST", `/api/threads/${id}/abort`, {}),
@@ -102,7 +113,46 @@ export const api = {
   saveCustom: (id: string, body: { baseUrl: string; apiKey?: string; models: { id: string; name?: string }[] }) => req("PUT", `/api/custom-providers/${id}`, body),
   deleteCustom: (id: string) => req("DELETE", `/api/custom-providers/${id}`),
   setDefaultModel: (provider: string, modelId: string) => req("PUT", "/api/default-model", { provider, modelId }),
+  design: () => req<Design>("GET", "/api/design"),
+  widgets: () => req<WidgetRow[]>("GET", "/api/widgets"),
+  github: () => req<GitHubStatus>("GET", "/api/github"),
+  projects: () => req<{ enabled: boolean; projects: ProjectRow[] }>("GET", "/api/projects"),
+  projectAction: (id: string, action: string) => req("POST", `/api/projects/${encodeURIComponent(id)}/${action}`),
+  projectLog: (id: string) => req<{ log: string }>("GET", `/api/projects/${encodeURIComponent(id)}/log`),
+  deleteProject: (id: string) => req("DELETE", `/api/projects/${encodeURIComponent(id)}`),
+  githubConnect: () => req<{ url: string }>("GET", `/api/github/connect?origin=${encodeURIComponent(location.origin)}`),
+  githubDisconnect: () => req("DELETE", "/api/github"),
+  removeWidget: (id: string) => req("DELETE", `/api/widgets/${encodeURIComponent(id)}`),
+  setDesign: (d: Design & { reset?: boolean }) => req<Design>("PUT", "/api/design", d),
+  reportScreen: (r: ScreenReport) => req("PUT", "/api/screen", r),
+  profile: () => req<{ assistantName: string; yourName: string }>("GET", "/api/profile"),
+  setProfile: (p: { assistantName?: string; yourName?: string }) => req<{ assistantName: string; yourName: string }>("PUT", "/api/profile", p),
   extensions: () => req<ExtensionRow[]>("GET", "/api/extensions"),
   addExtension: (source: string) => req<{ ok: true; source: string }>("POST", "/api/extensions", { source }),
+  updateExtensions: () => req<{ ok: boolean; changed: boolean; output: string }>("POST", "/api/extensions/update", {}),
   removeExtension: (source: string) => req("POST", "/api/extensions/remove", { source }),
 };
+
+export interface GitHubStatus {
+  configured: boolean;
+  connected: boolean;
+  login?: string;
+  avatar_url?: string;
+  repos?: { full_name: string; private: boolean; default_branch: string; html_url: string }[];
+  installUrl?: string;
+  manageUrls?: { account: string; url: string }[];
+  error?: string;
+}
+
+export interface ProjectRow {
+  id: string;
+  name: string;
+  repo?: string;
+  branch: string;
+  run?: { command: string; port: number };
+  push?: { title: string; body: string; at: number };
+  pr?: string;
+  /** The preview's address, when it has an app. */
+  preview?: string;
+  status: { state: "running" | "stopped" | "missing" | "unknown"; cpu?: number; cpus?: number; memUsed?: number; memLimit?: number; disk?: number | null; app?: boolean; error?: string };
+}

@@ -44,6 +44,15 @@ export const panelSchema = z.discriminatedUnion("kind", [
   }),
   z.object({ ...base, kind: z.literal("diff"), patch: z.string() }),
   z.object({ ...base, kind: z.literal("actions"), actions: z.array(action) }),
+  /** One big number or word at a glance ("28°C"), with a short label and an optional line under it. */
+  z.object({
+    ...base,
+    kind: z.literal("stat"),
+    value: z.string(),
+    label: z.string().optional(),
+    detail: z.string().optional(),
+    tone: z.enum(["info", "success", "warning", "error"]).optional(),
+  }),
   z.object({
     ...base,
     kind: z.literal("status"),

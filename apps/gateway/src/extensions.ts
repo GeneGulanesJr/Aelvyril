@@ -8,7 +8,7 @@ export interface ExtensionRow {
   source: string;
   /** A readable name taken from the source. */
   name: string;
-  /** Shipped with Aelvyril by default. */
+  /** Part of how Aelvyril works: shown, but it can't be removed. */
   builtin: boolean;
 }
 
@@ -17,7 +17,7 @@ export type Run = (args: string[]) => Promise<{ ok: boolean; output: string }>;
 const BUILTIN: Record<string, string> = {
   "git:github.com/GeneGulanesJr/LaPis": "Memory (LaPis)",
   "git:github.com/GeneGulanesJr/PiSubagent": "Helpers that split big tasks (PiSubagent)",
-  "git:github.com/DietrichGebert/ponytail": "Ponytail (small, simple changes)",
+  "git:github.com/DietrichGebert/ponytail": "Keeps answers short and changes small (ponytail, always at full)",
 };
 
 /**
@@ -67,7 +67,7 @@ export class Extensions {
     return pkgs
       .map((p) => (typeof p === "string" ? p : (p as { source?: string })?.source))
       .filter((s): s is string => !!s)
-      .map((source) => ({ source, name: nameOf(source), builtin: source in BUILTIN }));
+      .map((source) => ({ source, name: BUILTIN[source] ?? nameOf(source), builtin: source in BUILTIN }));
   }
 
   /** One install/remove at a time: pi edits settings.json and the package folder. */
@@ -85,9 +85,23 @@ export class Extensions {
     });
   }
 
+  /**
+   * Updates every installed extension (pi update --extensions). The assistant's processes restart only when something
+   * actually changed. pi says "Packages are already up to date" when nothing did.
+   */
+  update() {
+    return this.serial(async () => {
+      const r = await this.run(["update", "--extensions"]);
+      const changed = r.ok && !/already up to date/i.test(r.output);
+      if (changed) this.onChange();
+      return { ...r, changed };
+    });
+  }
+
   remove(source: string) {
     return this.serial(async () => {
       if (!this.list().some((e) => e.source === source)) return { ok: false, output: "That extension is not installed." };
+      if (source in BUILTIN) return { ok: false, output: "That extension is part of how Aelvyril works and can't be removed." };
       const r = await this.run(["remove", source]);
       if (r.ok) this.onChange();
       return r;

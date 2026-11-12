@@ -1,10 +1,10 @@
 // Shared pieces of every conversation: the event stream, the woven transcript, task cards, the box.
-import type { Ref } from "preact";
+import { Fragment, type Ref } from "preact";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api, type ModelRow, type ThreadRow } from "./api.ts";
 import { buildTranscript, type Ev, type Item, type Transcript } from "./transcript.ts";
 import { Markdown, PanelView } from "./Panel.tsx";
-import { cardStatus, plainPreview, STATUS_WORD, withDays, type Day, type Status } from "./model.ts";
+import { cardStatus, plainPreview, STATUS_WORD, stepWords, withDays, type Day, type Status } from "./model.ts";
 import { IconArrow } from "./icons.tsx";
 
 /** Live events of one thread. `tail` loads only the newest stored events (the Stream is endless). */
@@ -84,35 +84,113 @@ export interface WeaveProps {
   onCommand(c: string): void;
   onOpenTask(id: string): void;
   working?: boolean;
+  /** The Stream's look: a log with a small speaker label on each entry, and tool calls folded into one "Worked" line. */
+  log?: boolean;
+  /** What to call the assistant in the log's labels. */
+  assistant?: string;
 }
 
-/** The woven transcript: day picks, your bands, answers, task cards, tool stitches, requests. */
-export function Weave({ t, live, threadId, label, rows, onCommand, onOpenTask, working }: WeaveProps) {
-  const items = useMemo(() => withDays<Item>(t.items, Date.now()), [t.items]);
+/** The woven transcript: day picks, your bands, answers, task cards, tool stitches, requests.
+    In log mode (the Stream) a run of tool calls folds into one "Worked" line and thinking never shows. */
+export function Weave({ t, live, threadId, label, rows, onCommand, onOpenTask, working, log, assistant = "Aelvyril" }: WeaveProps) {
+  const items = useMemo(() => {
+    const days = withDays<Item>(t.items, Date.now());
+    if (!log) return days;
+    const out: (typeof days[number] | { kind: "worked"; key: string; tools: Extract<Item, { kind: "tool" }>[] })[] = [];
+    for (const it of days) {
+      const last = out[out.length - 1];
+      if (it.kind !== "tool") out.push(it);
+      else if (last?.kind === "worked") last.tools.push(it);
+      else out.push({ kind: "worked", key: `w${it.key}`, tools: [it] });
+    }
+    return out;
+  }, [t.items, log]);
+  // In the log, the speaker's label shows once per run of their messages, and a thin rule starts each of your new exchanges.
+  let prev = "";
+  const shown = items.map((it) => {
+    if (it.kind === "day") return (prev = ""), <DayPick key={it.key} day={it} />;
+    if (it.kind === "worked") return <Worked key={it.key} tools={it.tools} />;
+    const who = it.kind === "user" ? "you" : it.kind === "assistant" ? "ai" : "";
+    const label = !!log && !!who && who !== prev;
+    const rule = !!log && it.kind === "user" && prev !== "" && prev !== "you";
+    if (who) prev = who;
+    return (
+      <Fragment key={it.key}>
+        {rule && <hr class="turn-rule" aria-hidden="true" />}
+        <ItemView item={it} threadId={threadId} rows={rows} log={label} assistant={assistant} onCommand={onCommand} onOpenTask={onOpenTask} />
+      </Fragment>
+    );
+  });
   return (
-    <section class={`weave ${working ? "working" : ""}`} aria-label={label}>
-      {items.map((it) => (it.kind === "day" ? <DayPick key={it.key} day={it} /> : <ItemView key={it.key} item={it} threadId={threadId} rows={rows} onCommand={onCommand} onOpenTask={onOpenTask} />))}
-      {live && <div class="msg assistant live" aria-hidden="true"><Markdown text={live} /></div>}
+    <section class={`weave ${working ? "working" : ""} ${log ? "log" : ""}`} aria-label={label}>
+      {shown}
+      {live && <div class="msg assistant live" aria-hidden="true">{log && prev !== "ai" && <Who name={assistant} />}<Markdown text={live} /></div>}
       {Object.entries(t.widgets).map(([k, lines]) => <pre key={k} class="widget">{lines.join("\n")}</pre>)}
     </section>
   );
 }
 
+/** Who is speaking, as a small label on top of an entry in the log. */
+const Who = ({ name }: { name: string }) => <span class="who">{name}</span>;
+
+/** A run of tool calls, folded: "Worked · 3 steps". The details are one click away, never in the way. */
+function Worked({ tools }: { tools: Extract<Item, { kind: "tool" }>[] }) {
+  const busy = tools.some((x) => !x.done);
+  const failed = tools.filter((x) => x.isError).length;
+  const steps = `${tools.length} ${tools.length === 1 ? "step" : "steps"}`;
+  return (
+    <details class={`worked ${busy ? "busy" : ""} ${failed ? "failed" : ""}`}>
+      <summary>{busy ? "Working" : "Worked"} · {steps}{failed ? ` · ${failed} didn't work` : ""}</summary>
+      <div class="worked-list">{tools.map((x) => <ToolRow key={x.key} item={x} />)}</div>
+    </details>
+  );
+}
+
 const DayPick = ({ day }: { day: Day }) => <h2 class="day"><span>{day.label}</span></h2>;
 
-function ItemView({ item, threadId, rows, onCommand, onOpenTask }: { item: Item; threadId: string; rows: Map<string, ThreadRow>; onCommand(c: string): void; onOpenTask(id: string): void }) {
+function ToolRow({ item }: { item: Extract<Item, { kind: "tool" }> }) {
+  const { what, detail } = stepWords(item.name, item.args);
+  return (
+    <details class={`tool ${item.isError ? "err" : item.done ? "done" : ""}`}>
+      <summary>
+        <span class="tool-state" aria-label={item.isError ? "Didn't work" : item.done ? "Done" : "Running"}>{item.isError ? "✕" : item.done ? "✓" : "…"}</span>
+        <span class="tool-name">{what}</span>
+        {detail && <span class="muted tool-args">{detail.slice(0, 120)}</span>}
+      </summary>
+      <pre class="tool-input">{item.name} {JSON.stringify(item.args, null, 2).slice(0, 4000)}</pre>
+      {item.output && <pre>{item.output.slice(0, 4000)}</pre>}
+    </details>
+  );
+}
+
+/** What's going on, as small chips: one per task, needs-you first. One tap opens the task. */
+export function TaskChips({ list, label, onOpen, onMore, max = 3 }: { list: ThreadRow[]; label: string; onOpen(id: string): void; onMore?(): void; max?: number }) {
+  if (!list.length) return null;
+  const shown = list.slice(0, max);
+  return (
+    <div class="home-tasks" role="group" aria-label={label}>
+      {shown.map((t) => (
+        <button key={t.id} class={`htask s-${t.status}`} onClick={() => onOpen(t.id)} aria-label={`${t.title}, ${STATUS_WORD[t.status]}. Open task`}>
+          <Knot status={t.status} />
+          <span class="htask-title">{t.title}</span>
+          <span class="htask-state">{t.status === "needs_you" ? "Needs you" : STATUS_WORD[t.status]}</span>
+        </button>
+      ))}
+      {list.length > shown.length && onMore && <button class="link htask-more" onClick={onMore}>+{list.length - shown.length} more</button>}
+    </div>
+  );
+}
+
+function ItemView({ item, threadId, rows, log, assistant, onCommand, onOpenTask }: { item: Item; threadId: string; rows: Map<string, ThreadRow>; log?: boolean; assistant: string; onCommand(c: string): void; onOpenTask(id: string): void }) {
   switch (item.kind) {
     case "user":
-      return <div class="msg user">{item.text}</div>;
+      return <div class="msg user">{log && <Who name="You" />}{item.text}</div>;
     case "assistant":
-      return <div class="msg assistant"><Markdown text={item.text} /></div>;
+      return <div class="msg assistant">{log && <Who name={assistant} />}<Markdown text={item.text} /></div>;
+    case "handoff":
+      return null; // only there so the reply that follows can be filed under its task
     case "tool":
-      return (
-        <details class={`tool ${item.isError ? "err" : item.done ? "done" : ""}`}>
-          <summary><span class="tool-state">{item.done ? "✓" : "…"}</span> <span class="tool-name">{item.name}</span> <span class="muted tool-args">{JSON.stringify(item.args).slice(0, 80)}</span></summary>
-          {item.output && <pre>{item.output.slice(0, 4000)}</pre>}
-        </details>
-      );
+      return <ToolRow item={item} />;
     case "job":
       return <TaskCard item={item} row={rows.get(item.jobId)} onOpen={onOpenTask} />;
     case "panel":

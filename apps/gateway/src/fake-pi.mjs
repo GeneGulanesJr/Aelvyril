@@ -18,6 +18,7 @@ if (["install", "remove"].includes(process.argv[2])) {
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 let waitingAsk = null;
 let slowCalls = 0;
+let said = 0; // messages in the current session
 let busy = false; // "/slow" keeps the agent working for a moment, like a real turn
 
 createInterface({ input: process.stdin }).on("line", (line) => {
@@ -30,7 +31,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   const reply = (data) => out({ id: m.id, type: "response", command: m.type, success: true, data });
   switch (m.type) {
     case "get_state":
-      return reply({ sessionFile: null, sessionId: "fake" });
+      return reply({ sessionFile: null, sessionId: "fake", messageCount: said });
+    case "new_session":
+      said = 0;
+      return reply({ cancelled: false });
     case "get_available_models":
       // FAKE_HANG_MARK: the very first process to be asked never answers (like a helper hung by a restart); its replacement does.
       if (process.env.FAKE_HANG_MARK && !existsSync(process.env.FAKE_HANG_MARK)) {
@@ -39,6 +43,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       }
       // FAKE_MODELS_SLOW: like real pi right after start, the first two answers are empty.
       return reply({ models: process.env.FAKE_MODELS_SLOW && ++slowCalls <= 2 ? [] : [{ provider: "fake", id: "fake-1" }] });
+    case "compact":
+      out({ type: "compaction_start", reason: "manual" });
+      out({ type: "compaction_end", reason: "manual", aborted: false });
+      return reply({ summary: "fake summary", tokensBefore: 1 });
     case "set_model":
     case "abort":
       return reply({});
@@ -47,6 +55,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       if (busy && !m.streamingBehavior) return out({ id: m.id, type: "response", command: m.type, success: false, error: "Agent is already processing." });
       reply({ disposition: "queued" });
       if (busy) return;
+      said++;
       if (m.message === "/slow") {
         busy = true;
         setTimeout(() => {

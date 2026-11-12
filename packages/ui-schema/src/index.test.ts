@@ -23,3 +23,8 @@ test("emitPanel validates then appends", () => {
   assert.equal((seen[0] as unknown[])[0], PANEL_TYPE);
   assert.throws(() => emitPanel({ appendEntry() {} }, { v: 1, id: "p", kind: "markdown" }));
 });
+
+test("a stat card: a value, optionally a label and a line under it", () => {
+  assert.equal(parsePanel({ v: 1, id: "w", kind: "stat", value: "28°C", label: "Angeles City", detail: "Mainly clear" }).ok, true);
+  assert.equal(parsePanel({ v: 1, id: "w", kind: "stat", value: 28 }).ok, false, "the value is text, so units and words fit");
+});

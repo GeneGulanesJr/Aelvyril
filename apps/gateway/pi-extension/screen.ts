@@ -6,7 +6,7 @@ import { Type } from "typebox";
 /** What the layout does at each size: the assistant needs these facts to choose well. Keep in step with the web app's styles. */
 const FACTS = [
   "How the app lays itself out:",
-  "- The home screen is the orb, the chat box and a row of buttons (Stream, Tasks, Quick, Settings) along the bottom; windows under 1180px wide get a smaller orb (the 'home: grid' setting forces that on wide screens too).",
+  "- The home screen is the orb, the chat box and a row of buttons (Stream, Tasks, Settings) along the bottom (Quick is not a button: it opens with Ctrl or Cmd + K); windows under 1180px wide get a smaller orb (the 'home: grid' setting forces that on wide screens too).",
   "- At 720px wide or less it is a compact phone layout, and Tasks shows the list and the chosen task one at a time.",
   "- 'scale' (90 to 120) makes everything smaller or larger; on a phone, leave it alone unless asked. 'width' only matters on wide windows.",
   "- On a small or touch screen keep the orb at 'medium' or 'small' so the chat box stays on screen.",

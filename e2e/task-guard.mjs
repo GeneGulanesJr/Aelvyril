@@ -67,6 +67,18 @@ try {
   const s1 = await stats();
   assert.equal(s1.finishTaskCalls.done, 1, "accepted at once: it said what it checked");
 
+  console.log("• guides: the Stream's and the task's model are both offered the aelvyril guides; the Stream can open one and check its setup");
+  for (const [who, sys] of [["the Stream", s1.mainSystem], ["a task", s1.taskSystem]])
+    for (const g of ["aelvyril-app", "aelvyril-tasks", "aelvyril-coding", "aelvyril-look", "aelvyril-limits"]) assert.ok(sys.includes(`<name>${g}</name>`), `${who} is offered ${g}`);
+  const say = async (message, what) => {
+    const n = (await stats()).requests;
+    assert.equal((await api(`/api/threads/${main.id}/prompt`, { method: "POST", body: JSON.stringify({ message }) })).status, 200);
+    await until(async () => { const s = await stats(); return s.requests >= n + 2 && !(await api("/api/threads")).json.find((t) => t.id === main.id).running ? s : null; }, what);
+    return (await stats()).lastToolResult;
+  };
+  assert.match(await say("do-guide", "the Stream reading a guide"), /# What you cannot do/, "the Stream's read reaches the guide on disk");
+  assert.match(await say("do-abilities", "get_abilities"), /AI for chats: spike-1 \(spikeai\)\nAI for tasks: the same as chats/);
+
   console.log("• silent: never declares an outcome, so the guard nudges 3 times, then it is reported as NOT finished");
   t = await start("silent");
   t = await settled(t.id, "failed", "silent task failing");

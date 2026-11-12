@@ -418,6 +418,9 @@ export class Supervisor {
         ...(tm ? ["--provider", tm.provider, "--model", tm.modelId] : []),
         // Every thread knows its name and what the app is (survives pi updates: it uses pi's extension hook, not its prompt text).
         "-e", this.cfg.identityExtension,
+        // The guides: what the app is and what the assistant can and cannot do. Not for a coding task: its read tool
+        // runs inside the sandbox, which can't see this machine's files.
+        ...(project ? [] : ["--skill", this.cfg.guidesDir]),
         // The main conversation talks and delegates: it gets start_job and no file/shell tools.
         ...(isMain ? ["-e", this.cfg.jobsExtension, "-e", this.cfg.projectsExtension, "-e", this.cfg.designExtension, "-e", this.cfg.screenExtension, "-e", this.cfg.widgetsExtension, "--append-system-prompt", MAIN_PROMPT, "--exclude-tools", MAIN_EXCLUDED_TOOLS] : []),
         // A task gets the finish contract: finish_task, a self-check, and nudges until it declares an outcome.

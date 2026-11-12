@@ -85,6 +85,25 @@ export function createApp(deps: { cfg: Config; auth: Auth; sup: Supervisor; prov
   });
   app.delete("/internal/widgets/:id", (c) => (!fromPi(c) ? c.json({ error: "forbidden" }, 403) : widgets.remove(c.req.param("id")) ? c.json({ ok: true }) : c.json({ error: "no widget with that id" }, 404)));
 
+  // The get_abilities tool: what is set up, as plain text the assistant can relay. Names only, never keys or tokens.
+  app.get("/internal/abilities", async (c) => {
+    if (!fromPi(c)) return c.json({ error: "forbidden" }, 403);
+    const p = await providers.list().catch(() => null);
+    const connected = p?.providers.filter((x) => x.configured).map((x) => x.name) ?? [];
+    const model = (m: { provider: string; modelId: string } | null | undefined) => (m ? `${m.modelId} (${m.provider})` : "");
+    const ext = extensions.list();
+    const account = github?.account();
+    const lines = [
+      `AI: ${!p ? "could not check" : connected.length ? `connected (${connected.join(", ")})` : "none connected yet; the person connects one in Settings, AI models"}`,
+      `AI for chats: ${model(p?.defaultModel) || "not chosen"}`,
+      `AI for tasks: ${model(p?.taskModel) || "the same as chats"}`,
+      `Extensions: ${ext.length ? ext.map((e) => e.name).join("; ") : "none"}`,
+      `Coding projects: ${projects?.enabled() ? `available (${projects.list().length} so far)` : "not set up on this computer"}`,
+      `GitHub: ${account ? `connected as ${account}` : github?.configured() ? "not connected" : "not set up on this Aelvyril"}`,
+    ];
+    return c.json({ text: lines.join("\n") });
+  });
+
   // The get_screen tool: what screens the person has been using.
   app.get("/internal/screen", (c) => (fromPi(c) ? c.json({ devices: screens.list() }) : c.json({ error: "forbidden" }, 403)));
 

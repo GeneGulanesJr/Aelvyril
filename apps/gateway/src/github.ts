@@ -90,6 +90,11 @@ export class GitHub {
     this.save({ ...t, login: me.login, avatar_url: me.avatar_url });
   }
 
+  /** The connected account's name, or null when not connected. No network call. */
+  account() {
+    return this.saved ? this.saved.login : null;
+  }
+
   disconnect() {
     this.saved = null;
     writeFileSync(this.file, "{}", { mode: 0o600 });

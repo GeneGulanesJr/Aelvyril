@@ -477,3 +477,62 @@ test("retry: a failed or stopped task can be tried again, and says why it is try
   assert.equal((await call(`/api/threads/nope/retry`, { method: "POST" })).status, 400);
   assert.equal((await gw.app.request(`/api/threads/${job.id}/retry`, { method: "POST" })).status, 401);
 });
+
+const handoffs = (mainId: string, jobId: string) => gw.sup.eventsAfter(mainId).filter((e) => e.type === "message_end" && e.data.message.role === "user" && String(e.data.message.content).startsWith(JOB_MARKER) && String(e.data.message.content).includes(jobId)).map((e) => String(e.data.message.content));
+const sendBack = (jobId: string, caller: string, instruction = "the March photos", token = gw.sup.internalToken) =>
+  gw.app.request(`/internal/jobs/${jobId}/continue`, { method: "POST", headers: { "content-type": "application/json", "x-aelvyril-token": token, "x-aelvyril-thread": caller }, body: JSON.stringify({ instruction }) });
+
+test("send-back: the result message carries the task id and the request; the Stream can send a done task back, at most twice", async () => {
+  const main = gw.sup.main();
+  const job = gw.sup.createJob(main.id, "Sort photos", "/outcome-done Sorted the January photos");
+  await until(() => handoffs(main.id, job.id).length === 1);
+  assert.match(handoffs(main.id, job.id)[0], new RegExp(`Task id: ${job.id}\\n\\nWhat was asked:\\n/outcome-done Sorted the January photos`));
+
+  const ok = await sendBack(job.id, main.id, "the February and\n March photos");
+  assert.equal(ok.status, 200, await ok.clone().text());
+  await until(() => handoffs(main.id, job.id).length === 2);
+  const sent = gw.sup.eventsAfter(job.id).find((e) => e.type === "message_end" && e.data.message.role === "user" && String(e.data.message.content).startsWith("[aelvyril:send-back]"));
+  assert.ok(String(sent?.data.message.content).includes("What is missing: the February and March photos"));
+  assert.equal(stateOf(job.id).state, "done");
+  assert.equal(stateOf(job.id).preview, "added the February and March photos");
+  assert.ok(handoffs(main.id, job.id)[1].includes("added the February and March photos"), "the new outcome is reported again");
+  const states = cardStates(main.id, job.id);
+  assert.ok(states.includes("working") && states.at(-1) === "done", states.join(","));
+
+  assert.equal((await sendBack(job.id, main.id)).status, 200);
+  await until(() => handoffs(main.id, job.id).length === 3);
+  const third = await sendBack(job.id, main.id);
+  assert.equal(third.status, 400);
+  assert.match((await third.json()).error, /tell the person/);
+  assert.equal(stateOf(job.id).state, "done");
+});
+
+test("send-back: only the Stream that started a done task may send it back", async () => {
+  const main = gw.sup.main();
+  const job = gw.sup.createJob(main.id, "Done task", "/outcome-done ok");
+  await until(() => stateOf(job.id).state === "done");
+  const other = gw.sup.createJob(main.id, "Another", "/outcome-done ok");
+  await until(() => stateOf(other.id).state === "done");
+  assert.equal((await sendBack(job.id, main.id, "x", "wrong")).status, 403, "not from our own pi");
+  assert.equal((await sendBack(job.id, other.id)).status, 403, "a task cannot send a task back");
+  assert.equal((await sendBack(job.id, gw.sup.createThread().id)).status, 403, "a plain chat cannot");
+  // a different parent: a task whose parent is not the caller
+  (gw.sup as any).db.prepare("UPDATE threads SET parent_id='someone-else' WHERE id=?").run(other.id);
+  assert.equal((await sendBack(other.id, main.id)).status, 403, "not the Stream's own task");
+  assert.equal((await sendBack("nope", main.id)).status, 403);
+  assert.equal(stateOf(job.id).state, "done");
+});
+
+test("send-back: a failed, stopped, waiting or working task is refused", async () => {
+  const main = gw.sup.main();
+  const failed = gw.sup.createJob(main.id, "Fails", "/outcome-cannot no network");
+  const asks = gw.sup.createJob(main.id, "Asks", "/outcome-need Which folder?");
+  await until(() => stateOf(failed.id).state === "failed" && stateOf(asks.id).state === "needs_input");
+  assert.match((await (await sendBack(failed.id, main.id)).json()).error, /Try again/);
+  assert.match((await (await sendBack(asks.id, main.id)).json()).error, /question/);
+  (gw.sup as any).db.prepare("UPDATE threads SET state='stopped' WHERE id=?").run(failed.id);
+  assert.equal((await sendBack(failed.id, main.id)).status, 400);
+  const busy = gw.sup.createJob(main.id, "Busy", "/stall");
+  assert.match((await (await sendBack(busy.id, main.id)).json()).error, /still working/);
+  await gw.sup.abort(busy.id);
+});

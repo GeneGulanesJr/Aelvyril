@@ -85,6 +85,14 @@ test("a retry shows as a short notice, and how a finished task checked its work 
   assert.deepEqual(t.items.map((i) => (i.kind === "notice" ? i.text : i.kind)), ["Trying again.", "How it was checked: listed the folder: 40 files, all renamed"]);
 });
 
+test("a send-back shows as 'Sent back: …', and the continue_job call is not a tool line", () => {
+  const t = buildTranscript([
+    ev(1, { type: "tool_execution_start", toolCallId: "c", toolName: "continue_job", args: { id: "j1", missing: "the March photos" } }),
+    ev(2, { type: "message_end", message: { role: "user", content: "[aelvyril:send-back]\nYour result was checked against what was asked, and something is missing.\nWhat is missing: the March photos\nDo that now." } }),
+  ]);
+  assert.deepEqual(t.items.map((i) => (i.kind === "notice" ? i.text : i.kind)), ["Sent back: the March photos"]);
+});
+
 test("an extension's startup confirmation is not shown, other notifications are", () => {
   const t = buildTranscript([
     ev(1, { type: "extension_ui_request", id: "a", method: "notify", message: "Ponytail loaded: full", notifyType: "info" }),

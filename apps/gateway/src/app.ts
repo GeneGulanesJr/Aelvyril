@@ -50,6 +50,17 @@ export function createApp(deps: { cfg: Config; auth: Auth; sup: Supervisor; prov
       return c.json({ error: String((e as Error).message) }, 400);
     }
   });
+  // The continue_job tool: only the Stream, only for a task it started.
+  app.post("/internal/jobs/:id/continue", async (c) => {
+    const caller = sup.getThread(c.req.header("x-aelvyril-thread") ?? "");
+    if (!fromPi(c) || caller?.kind !== "main" || sup.getThread(c.req.param("id"))?.parent_id !== caller.id) return c.json({ error: "forbidden" }, 403);
+    try {
+      await sup.sendBack(c.req.param("id"), String(((await c.req.json().catch(() => ({}))) as Record<string, any>).instruction ?? ""));
+      return c.json({ ok: true });
+    } catch (e) {
+      return c.json({ error: String((e as Error).message) }, 400);
+    }
+  });
 
   // The change_design tool: colours only, validated, never code.
   app.get("/internal/design", (c) => (fromPi(c) ? c.json(design.get()) : c.json({ error: "forbidden" }, 403)));

@@ -5,7 +5,7 @@
 // Main conversation (it has the start_job tool):
 //   "... do-job:<scenario> ..."        -> calls start_job with the task "scenario:<scenario>" (default "done")
 //   after the tool result              -> "Started it, ask me anything else."
-//   a finished-task hand-off message   -> "Your job finished: job-ok."
+//   a finished-task hand-off message   -> "Your job finished: job-ok."; if its result is "job-partial", calls continue_job first
 //   "... do-screen ..."                -> calls get_screen
 //   "... do-design ..."                -> calls change_design (colours and layout)
 //   anything else                      -> "Hello from mock"
@@ -19,9 +19,10 @@
 //   need      -> finish_task(need_input, "Which folder?"); after a person's answer, finish_task(done)
 //   cannot    -> finish_task(cannot_finish, "there is no network")
 //   hang      -> never answers (the gateway's stall watchdog must step in)
+//   sendback  -> finish_task(done, "job-partial"); once sent back by the main conversation, finish_task(done, "job-full")
 import http from "node:http";
 
-const stats = { lastToolResult: "", mainSystem: "", requests: 0, byScenario: {}, finishTaskCalls: {}, nudgesSeen: {}, ponytail: [] };
+const stats = { lastToolResult: "", mainSystem: "", requests: 0, byScenario: {}, finishTaskCalls: {}, nudgesSeen: {}, ponytail: [], continueJobCalls: 0 };
 const send = (res, chunks) => {
   res.writeHead(200, { "content-type": "text/event-stream" });
   for (const c of chunks) res.write(`data: ${JSON.stringify({ id: "x", object: "chat.completion.chunk", model: "spike-1", ...c })}\n\n`);
@@ -94,6 +95,7 @@ http
           if (toolResult) return send(res, text(answered ? "job-ok" : "Which folder?"));
           return send(res, answered ? finish("done", "job-ok", "looked at the result: job-ok") : finish("need_input", "Which folder?"));
         }
+        if (scenario === "sendback") return send(res, toolResult ? text("job-ok") : finish("done", all.includes("[aelvyril:send-back]") ? "job-full" : "job-partial", "looked at the result"));
         // done
         if (toolResult) return send(res, text("job-ok"));
         return send(res, finish("done", "job-ok", "looked at the result: job-ok"));
@@ -108,6 +110,10 @@ http
       if (last.role === "tool") {
         stats.lastToolResult = lastText; // what the last tool told the model, for the get_screen check
         return send(res, text("Started it, ask me anything else."));
+      }
+      if (tools.includes("continue_job") && lastText.includes("[aelvyril:job-result]") && lastText.includes("job-partial")) {
+        stats.continueJobCalls++;
+        return send(res, call("continue_job", { id: (lastText.match(/Task id: (\S+)/) || [])[1], missing: "the full answer" }));
       }
       if (lastText.includes("[aelvyril:job-result]")) return send(res, text("Your job finished: job-ok."));
       if (lastText.includes("say job-ok")) return send(res, text("job-ok"));

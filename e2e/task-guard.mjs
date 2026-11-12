@@ -1,5 +1,5 @@
 // Drives the REAL gateway with REAL pi (the user's `pi` on PATH or PI_COMMAND) against the scripted mock model,
-// to prove the finish contract end to end: the task-guard extension, finish_task, nudges, need_input, the stall watchdog.
+// to prove the finish contract end to end: the task-guard extension, finish_task, nudges, need_input, send-back, the stall watchdog.
 //   node e2e/task-guard.mjs
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
@@ -112,6 +112,12 @@ try {
   assert.equal(t.preview, "Which folder?");
   assert.equal((await api(`/api/threads/${t.id}/prompt`, { method: "POST", body: JSON.stringify({ message: "the photos folder" }) })).status, 200);
   t = await settled(t.id, "done", "need task finishing after the answer");
+
+  console.log("• send-back: a partial result goes back to the task once, and its full result comes back");
+  t = await start("sendback");
+  t = await until(async () => { const x = await task(t.id); return x.status === "done" && !x.running && x.preview === "job-full" ? x : null; }, "sent-back task finishing again");
+  assert.equal((await stats()).finishTaskCalls.sendback, 2, "done, sent back, done again");
+  assert.equal((await stats()).continueJobCalls, 1, "sent back once, not again for the full result");
 
   console.log("• hang: the model never answers; the watchdog stops the task instead of waiting forever");
   t = await start("hang");

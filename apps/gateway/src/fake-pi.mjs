@@ -72,6 +72,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         out({ type: "agent_settled", aborted: false });
         return;
       }
+      if (m.message.startsWith("[aelvyril:send-back]")) {
+        out({ type: "agent_start" });
+        out({ type: "message_end", message: { role: "user", content: m.message } });
+        out({ type: "entry_appended", entry: { type: "custom", customType: "aelvyril.task_outcome", data: { outcome: "done", summary: `added ${/What is missing: (.*)/.exec(m.message)?.[1]}` } } });
+        out({ type: "agent_settled", aborted: false });
+        return;
+      }
       if (m.message === "/die") {
         out({ type: "agent_start" });
         process.exit(1);

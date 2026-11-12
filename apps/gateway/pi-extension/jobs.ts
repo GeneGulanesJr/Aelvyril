@@ -43,4 +43,33 @@ export default function (pi: any) {
       }
     },
   });
+
+  pi.registerTool({
+    name: "continue_job",
+    label: "Send a task back",
+    description:
+      "Send a finished task back to work because something that was asked for is clearly missing from its result. " +
+      "Use the task id from the finished-task message. At most twice per task; after that, tell the user what is missing instead.",
+    promptSnippet: "Send a finished task back when its result is missing something that was asked for",
+    parameters: Type.Object({
+      id: Type.String({ description: "The task id, from the message that said the task finished" }),
+      missing: Type.String({ description: "What was asked for but is missing from the result, said plainly" }),
+    }),
+    async execute(_id: string, params: { id: string; missing: string }) {
+      const url = process.env.AELVYRIL_INTERNAL_URL;
+      if (!url) return { content: [{ type: "text", text: "Jobs are not available in this session." }], details: {}, isError: true };
+      try {
+        const res = await fetch(`${url}/internal/jobs/${encodeURIComponent(params.id)}/continue`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-aelvyril-token": process.env.AELVYRIL_INTERNAL_TOKEN ?? "", "x-aelvyril-thread": process.env.AELVYRIL_THREAD_ID ?? "" },
+          body: JSON.stringify({ instruction: params.missing }),
+        });
+        const data: any = await res.json().catch(() => ({}));
+        if (!res.ok) return { content: [{ type: "text", text: `Could not send the task back: ${data.error ?? res.status}` }], details: {}, isError: true };
+        return { content: [{ type: "text", text: "Sent back. The task is working again; its new result will come back here." }], details: { jobId: params.id } };
+      } catch (e) {
+        return { content: [{ type: "text", text: `Could not send the task back: ${(e as Error).message}` }], details: {}, isError: true };
+      }
+    },
+  });
 }

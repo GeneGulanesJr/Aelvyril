@@ -36,6 +36,9 @@ export function openDb(cfg: Config): Db {
     ["board", "TEXT NOT NULL DEFAULT ''"],
     // the coding project (sandbox) a task works in; its file and shell tools run there
     ["project", "TEXT NOT NULL DEFAULT ''"],
+    // what the Stream asked the task to do (it may have forgotten by the time the result comes back), and how often it sent the task back
+    ["task", "TEXT NOT NULL DEFAULT ''"],
+    ["sendbacks", "INTEGER NOT NULL DEFAULT 0"],
   ] as const) {
     if (!have.has(col)) db.exec(`ALTER TABLE threads ADD COLUMN ${col} ${ddl}`);
   }

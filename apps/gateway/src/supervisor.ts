@@ -52,7 +52,9 @@ const MAIN_PROMPT =
   "When a request needs that, or needs several steps or research, call the start_job tool with a clear, self-contained task, " +
   "then say in one sentence that you started it and are ready for the next question. " +
   "Answer quick questions yourself without it. People see these as tasks: say \"task\", never \"job\". " +
-  "When you receive a message starting with " + JOB_MARKER + ", a task has finished: tell the user the outcome in a short, friendly message.";
+  "When you receive a message starting with " + JOB_MARKER + ", a task has finished: compare its result with what was asked (the message says both). " +
+  "If something that was asked for is clearly missing, call continue_job once with the task id and what is missing, and tell the user in one sentence that you sent the task back to finish it. " +
+  "Otherwise, or if continue_job refuses, tell the user the outcome in a short, friendly message.";
 /** What every background task is told (the task-guard extension enforces it). */
 const JOB_PROMPT =
   "You are completing a background task for someone who is not technical. Do the whole task, check your own work, " +
@@ -79,6 +81,9 @@ const RESUME_MESSAGE =
 const MAX_RESUMES = 2;
 /** A message the gateway writes into a task's conversation; the web app shows it as a short notice, not as the person's words. */
 export const RETRY_MARKER = "[aelvyril:retry]";
+/** Starts the message the gateway writes into a task the Stream sent back; the web app shows it as "Sent back: …". */
+export const SEND_BACK_MARKER = "[aelvyril:send-back]";
+const MAX_SENDBACKS = 2;
 /** The main conversation only talks and delegates; jobs do the work. */
 const MAIN_EXCLUDED_TOOLS = "bash,edit,write,powershell,codemode,subagent";
 
@@ -226,7 +231,7 @@ export class Supervisor {
     if (project && !this.projectExists(project)) throw new Error(`there is no coding project "${project}"`);
     const now = Date.now();
     const id = randomUUID();
-    this.db.prepare("INSERT INTO threads (id,title,created_at,updated_at,kind,parent_id,state,board,project) VALUES (?,?,?,?, 'job', ?, 'working', ?, ?)").run(id, name, now, now, parentId, this.boardName(board || project), project);
+    this.db.prepare("INSERT INTO threads (id,title,created_at,updated_at,kind,parent_id,state,board,project,task) VALUES (?,?,?,?, 'job', ?, 'working', ?, ?, ?)").run(id, name, now, now, parentId, this.boardName(board || project), project, task);
     this.append(parentId, { type: "aelvyril_job_started", jobId: id, title: name });
     this.startedAt.set(id, now);
     this.lastActivity.set(id, now);
@@ -271,7 +276,10 @@ export class Supervisor {
       this.reported.add(jobId);
       const body = (final === "done" ? (summary || this.lastAssistantText(jobId) || text) : text) + (final === "done" && verified ? `\n\nHow it was checked: ${verified}` : "");
       const what = final === "done" ? "has finished. Its result" : final === "needs_input" ? "needs an answer from the user before it can continue. Its question" : "could not be finished. What happened";
-      this.prompt(parent, `${JOB_MARKER}\nThe task "${job.title}" ${what}:\n\n${body.slice(0, 6000)}`).catch(() => {});
+      // the Stream may have been cleared since it started the task: say what was asked, so it can judge the result
+      const asked = (this.db.prepare("SELECT task FROM threads WHERE id=?").get(jobId) as { task: string }).task;
+      const request = asked ? `\n\nWhat was asked:\n${asked.length > 3000 ? asked.slice(0, 3000) + "…" : asked}` : "";
+      this.prompt(parent, `${JOB_MARKER}\nThe task "${job.title}" ${what}:\n\n${body.slice(0, 6000)}\n\nTask id: ${jobId}${request}`).catch(() => {});
     }
   }
 
@@ -282,6 +290,23 @@ export class Supervisor {
     const why = t.preview;
     await this.prompt(jobId, `${RETRY_MARKER}\nThe person asked you to try again. Last time: ${why}\nTry again. Take a different approach if the first one did not work, check your work, and finish by calling finish_task.`);
     this.db.prepare("UPDATE threads SET preview=? WHERE id=?").run("Trying again…", jobId);
+    this.tellParent(jobId, "working");
+  }
+
+  /** The Stream sends a finished task back because something asked for is missing (at most MAX_SENDBACKS times per task). */
+  async sendBack(jobId: string, instruction: string) {
+    const t = this.getThread(jobId);
+    if (!t || t.kind !== "job") throw new Error("there is no such task");
+    if (t.state === "needs_input") throw new Error("this task is waiting for an answer from the person: ask them its question instead");
+    if (t.state === "failed" || t.state === "stopped") throw new Error("this task did not finish: tell the person, they can tap Try again");
+    if (t.state !== "done") throw new Error("this task is still working");
+    const { sendbacks } = this.db.prepare("SELECT sendbacks FROM threads WHERE id=?").get(jobId) as { sendbacks: number };
+    if (sendbacks >= MAX_SENDBACKS) throw new Error(`this task was already sent back ${MAX_SENDBACKS} times: do not send it back again, tell the person what is still missing`);
+    const missing = instruction.replace(/\s+/g, " ").trim().slice(0, 2000);
+    if (!missing) throw new Error("say what is missing");
+    this.db.prepare("UPDATE threads SET sendbacks=sendbacks+1 WHERE id=?").run(jobId);
+    await this.prompt(jobId, `${SEND_BACK_MARKER}\nYour result was checked against what was asked, and something is missing.\nWhat is missing: ${missing}\nDo that now, check your work, and finish again by calling finish_task.`);
+    this.db.prepare("UPDATE threads SET preview=? WHERE id=?").run(`Sent back: ${missing}`.slice(0, 160), jobId);
     this.tellParent(jobId, "working");
   }
 
